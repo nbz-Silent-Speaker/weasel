@@ -119,6 +119,9 @@ constexpr wchar_t kPlacementDiagHeight[] = L"WeaselDiagHeight";
 constexpr wchar_t kPlacementDiagWorkBottom[] = L"WeaselDiagWorkBottom";
 constexpr wchar_t kPlacementDiagResultX[] = L"WeaselDiagResultX";
 constexpr wchar_t kPlacementDiagResultY[] = L"WeaselDiagResultY";
+constexpr wchar_t kPlacementDiagAnchorPending[] = L"WeaselDiagAnchorPending";
+constexpr wchar_t kPlacementDiagAnchorResolved[] = L"WeaselDiagAnchorResolved";
+constexpr wchar_t kPlacementDiagAnchorFallback[] = L"WeaselDiagAnchorFallback";
 
 enum class PlacementDiagEvent : LONG_PTR {
   Create = 1,
@@ -126,6 +129,9 @@ enum class PlacementDiagEvent : LONG_PTR {
   MoveToEnter = 3,
   RepositionBlocked = 4,
   RepositionCommit = 5,
+  ProvisionalAnchor = 6,
+  StableAnchor = 7,
+  ProvisionalFallback = 8,
 };
 
 enum class PlacementDiagCaller : LONG_PTR {
@@ -156,6 +162,8 @@ void CommitPlacementDiagEvent(HWND hwnd, PlacementDiagEvent event) {
 }
 
 constexpr UINT_PTR kLocalAcrylicGeometrySubclass = 0x57414731;
+constexpr UINT_PTR kCandidateAnchorStabilizationTimer = 0x57414732;
+constexpr UINT kCandidateAnchorStabilizationMs = 50;
 
 struct LocalAcrylicGeometryState {
   HWND candidate = nullptr;
@@ -165,12 +173,42 @@ struct LocalAcrylicGeometryState {
   bool installed = false;
   bool pending = false;
   bool syncing = false;
+  bool anchorStabilizationEnabled = false;
+  bool anchorGateResolved = false;
+  bool provisionalAnchorPending = false;
+  bool acceptingProvisionalAnchor = false;
+  RECT provisionalAnchor = {};
 };
 
 LocalAcrylicGeometryState* LocalAcrylicGeometry(HWND hwnd) {
   return hwnd ? reinterpret_cast<LocalAcrylicGeometryState*>(
                     ::GetPropW(hwnd, kLocalAcrylicGeometryProperty))
               : nullptr;
+}
+
+void ResetCandidateAnchorGate(LocalAcrylicGeometryState* state) {
+  if (!state)
+    return;
+  if (state->candidate)
+    ::KillTimer(state->candidate, kCandidateAnchorStabilizationTimer);
+  state->anchorGateResolved = false;
+  state->provisionalAnchorPending = false;
+  state->acceptingProvisionalAnchor = false;
+  state->provisionalAnchor = {};
+  if (state->candidate) {
+    SetPlacementDiagValue(state->candidate, kPlacementDiagAnchorPending, 0);
+    SetPlacementDiagValue(state->candidate, kPlacementDiagAnchorResolved, 0);
+    SetPlacementDiagValue(state->candidate, kPlacementDiagAnchorFallback, 0);
+  }
+}
+
+void ParkCandidateForProvisionalAnchor(HWND hwnd) {
+  if (!hwnd)
+    return;
+  constexpr int kParkCoordinate = -32000;
+  ::SetWindowPos(hwnd, nullptr, kParkCoordinate, kParkCoordinate, 0, 0,
+                 SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOREDRAW |
+                     SWP_NOOWNERZORDER);
 }
 
 void ReleaseLocalAcrylicGeometry(LocalAcrylicGeometryState* state) {
@@ -253,6 +291,7 @@ void DetachLocalAcrylicGeometry(LocalAcrylicGeometryState* state,
                                 bool destroying = false) {
   if (!state)
     return;
+  ResetCandidateAnchorGate(state);
   state->panel = nullptr;
   state->pending = false;
   if (LocalAcrylicGeometry(state->candidate) == state) {
@@ -290,6 +329,23 @@ LRESULT CALLBACK LocalAcrylicGeometryProc(HWND hwnd,
     return ::DefSubclassProc(hwnd, message, wParam, lParam);
   }
 
+  if (message == WM_TIMER && wParam == kCandidateAnchorStabilizationTimer) {
+    ::KillTimer(hwnd, kCandidateAnchorStabilizationTimer);
+    if (state && state->panel && state->provisionalAnchorPending) {
+      const RECT anchor = state->provisionalAnchor;
+      state->provisionalAnchorPending = false;
+      state->anchorGateResolved = true;
+      state->acceptingProvisionalAnchor = true;
+      SetPlacementDiagValue(hwnd, kPlacementDiagAnchorPending, 0);
+      SetPlacementDiagValue(hwnd, kPlacementDiagAnchorResolved, 1);
+      SetPlacementDiagValue(hwnd, kPlacementDiagAnchorFallback, 1);
+      CommitPlacementDiagEvent(hwnd, PlacementDiagEvent::ProvisionalFallback);
+      state->panel->MoveTo(anchor);
+      state->acceptingProvisionalAnchor = false;
+    }
+    return 0;
+  }
+
   bool hidingCandidate = message == WM_SHOWWINDOW && wParam == FALSE;
   if ((message == WM_WINDOWPOSCHANGING || message == WM_WINDOWPOSCHANGED) &&
       lParam) {
@@ -308,6 +364,7 @@ LRESULT CALLBACK LocalAcrylicGeometryProc(HWND hwnd,
     // MoveTo() caret rectangle.
     ::SetPropW(hwnd, kCandidatePlacementSessionEndedProperty,
                reinterpret_cast<HANDLE>(static_cast<INT_PTR>(1)));
+    ResetCandidateAnchorGate(state);
     if (state && state->panel)
       state->panel->HideAcrylicBackdrop();
   }
@@ -322,7 +379,9 @@ LRESULT CALLBACK LocalAcrylicGeometryProc(HWND hwnd,
   return result;
 }
 
-bool InstallLocalAcrylicGeometry(HWND hwnd, WeaselPanel* panel) {
+bool InstallLocalAcrylicGeometry(HWND hwnd,
+                                 WeaselPanel* panel,
+                                 bool stabilizeInitialAnchor) {
   if (!hwnd || !panel)
     return false;
   if (LocalAcrylicGeometry(hwnd))
@@ -332,6 +391,7 @@ bool InstallLocalAcrylicGeometry(HWND hwnd, WeaselPanel* panel) {
     return false;
   state->candidate = hwnd;
   state->panel = panel;
+  state->anchorStabilizationEnabled = stabilizeInitialAnchor;
   if (!::SetPropW(hwnd, kLocalAcrylicGeometryProperty,
                   reinterpret_cast<HANDLE>(state))) {
     ReleaseLocalAcrylicGeometry(state);
@@ -2343,6 +2403,9 @@ void WeaselPanel::_UpdateAcrylicBackdropTheme() {
 bool WeaselPanel::_ShouldShowAcrylicBackdrop() const {
   if (!m_acrylicBackdrop || !m_layout || hide_candidates)
     return false;
+  const auto localState = LocalAcrylicGeometry(m_hWnd);
+  if (localState && localState->provisionalAnchorPending)
+    return false;
   if (!m_acrylicBackdropEnabled &&
       (m_in_server || !IsExternalCompatibleClient()))
     return false;
@@ -3506,7 +3569,9 @@ LRESULT WeaselPanel::OnCreate(UINT uMsg,
   if (m_acrylicBackdropEnabled ||
       (m_acrylicBackdrop && !m_in_server && IsExternalCompatibleClient() &&
        CurrentExternalKind() != ExternalClientKind::Settings))
-    InstallLocalAcrylicGeometry(m_hWnd, this);
+    InstallLocalAcrylicGeometry(
+        m_hWnd, this,
+        !m_in_server && CurrentExternalKind() == ExternalClientKind::None);
   Refresh();
   return TRUE;
 }
@@ -3542,6 +3607,51 @@ void WeaselPanel::MoveTo(RECT const& rc) {
   CommitPlacementDiagEvent(m_hWnd, PlacementDiagEvent::MoveToEnter);
   if (!m_layout)
     return;  // avoid handling nullptr in _RepositionWindow
+
+  auto localState = LocalAcrylicGeometry(m_hWnd);
+  if (localState && localState->anchorStabilizationEnabled &&
+      !localState->anchorGateResolved &&
+      !localState->acceptingProvisionalAnchor) {
+    if (rc.bottom <= rc.top) {
+      localState->provisionalAnchor = rc;
+      if (!localState->provisionalAnchorPending) {
+        localState->provisionalAnchorPending = true;
+        SetPlacementDiagValue(m_hWnd, kPlacementDiagAnchorPending, 1);
+        SetPlacementDiagValue(m_hWnd, kPlacementDiagAnchorResolved, 0);
+        SetPlacementDiagValue(m_hWnd, kPlacementDiagAnchorFallback, 0);
+        CommitPlacementDiagEvent(m_hWnd, PlacementDiagEvent::ProvisionalAnchor);
+        HideAcrylicBackdrop();
+        ParkCandidateForProvisionalAnchor(m_hWnd);
+        if (!::SetTimer(m_hWnd, kCandidateAnchorStabilizationTimer,
+                        kCandidateAnchorStabilizationMs, nullptr)) {
+          // Timer setup failure must preserve historical behavior rather than
+          // suppressing a legitimate point-like caret indefinitely.
+          localState->provisionalAnchorPending = false;
+          localState->anchorGateResolved = true;
+          SetPlacementDiagValue(m_hWnd, kPlacementDiagAnchorPending, 0);
+          SetPlacementDiagValue(m_hWnd, kPlacementDiagAnchorResolved, 1);
+          SetPlacementDiagValue(m_hWnd, kPlacementDiagAnchorFallback, 1);
+          CommitPlacementDiagEvent(m_hWnd,
+                                   PlacementDiagEvent::ProvisionalFallback);
+        } else {
+          return;
+        }
+      } else {
+        SetPlacementDiagValue(m_hWnd, kPlacementDiagAnchorPending, 1);
+        CommitPlacementDiagEvent(m_hWnd, PlacementDiagEvent::ProvisionalAnchor);
+        return;
+      }
+    } else {
+      if (localState->provisionalAnchorPending)
+        ::KillTimer(m_hWnd, kCandidateAnchorStabilizationTimer);
+      localState->provisionalAnchorPending = false;
+      localState->anchorGateResolved = true;
+      SetPlacementDiagValue(m_hWnd, kPlacementDiagAnchorPending, 0);
+      SetPlacementDiagValue(m_hWnd, kPlacementDiagAnchorResolved, 1);
+      SetPlacementDiagValue(m_hWnd, kPlacementDiagAnchorFallback, 0);
+      CommitPlacementDiagEvent(m_hWnd, PlacementDiagEvent::StableAnchor);
+    }
+  }
 
   // The candidate HWND may have been hidden between two host input sessions
   // without Refresh() observing candidateCount > 0 -> 0. A fresh MoveTo()
@@ -3627,6 +3737,21 @@ void WeaselPanel::_RepositionWindow(const bool& adj) {
     SetPlacementDiagValue(m_hWnd, kPlacementDiagInputTop, m_inputPos.top);
     SetPlacementDiagValue(m_hWnd, kPlacementDiagInputRight, m_inputPos.right);
     SetPlacementDiagValue(m_hWnd, kPlacementDiagInputBottom, m_inputPos.bottom);
+    CommitPlacementDiagEvent(m_hWnd, PlacementDiagEvent::RepositionBlocked);
+    return;
+  }
+
+  const auto localState = LocalAcrylicGeometry(m_hWnd);
+  if (localState && localState->provisionalAnchorPending) {
+    IncrementPlacementDiag(m_hWnd, kPlacementDiagRepositionCount);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagSessionEnded, 0);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagAdj, adj ? 1 : 0);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagStickyBefore, m_sticky ? 1 : 0);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagInputLeft, m_inputPos.left);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagInputTop, m_inputPos.top);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagInputRight, m_inputPos.right);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagInputBottom, m_inputPos.bottom);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagAnchorPending, 1);
     CommitPlacementDiagEvent(m_hWnd, PlacementDiagEvent::RepositionBlocked);
     return;
   }
