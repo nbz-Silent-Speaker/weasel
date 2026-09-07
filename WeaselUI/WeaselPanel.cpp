@@ -45,6 +45,7 @@ constexpr DWORD kDwmaBorderColor = 34;
 constexpr DWORD kDwmaSystemBackdropType = 38;
 constexpr DWORD kDwmaRedirectionBitmapAlpha = 39;
 
+constexpr int kDwmwcpDoNotRound = 1;       // DWMWCP_DONOTROUND
 constexpr int kDwmwcpRound = 2;            // DWMWCP_ROUND
 constexpr int kDwmsbtTransientWindow = 3;  // DWMSBT_TRANSIENTWINDOW
 constexpr COLORREF kDwmColorNone = 0xFFFFFFFEu;
@@ -360,6 +361,8 @@ constexpr wchar_t kWeaselAcrylicAppSdkActiveProperty[] =
     L"WeaselAcrylicAppSdkActive";
 constexpr wchar_t kWeaselAcrylicSystemCompositionActiveProperty[] =
     L"WeaselAcrylicSystemCompositionActive";
+constexpr wchar_t kWeaselAcrylicSystemCompositionCornerRadiusProperty[] =
+    L"WeaselAcrylicSystemCompositionCornerRadius";
 constexpr wchar_t kAcrylicStageProperty[] = L"WeaselAcrylicAppSdkStage";
 constexpr wchar_t kAcrylicHrProperty[] = L"WeaselAcrylicAppSdkHresult";
 constexpr wchar_t kAcrylicPolicyProperty[] = L"WeaselAcrylicAppSdkPolicy";
@@ -2074,13 +2077,19 @@ bool WeaselPanel::_CreateAcrylicBackdrop() {
   const BOOL useDarkMode = IsDarkColor(m_style.back_color) ? TRUE : FALSE;
   const bool searchLocal = !m_in_server && SearchUsesLocalNativeDwmFallback();
 
-  // Search's successful R9 Composition path returns before the legacy
-  // backdrop setup below. Apply the same DWM corner/border policy up front so
-  // its non-layered host is clipped like the rounded candidate foreground.
+  // Search's system Composition path clips its blur visual with the same
+  // skin radius used by the layered foreground. Publish that pixel radius
+  // before helper Attach; the helper refreshes its clip after each resize.
   if (searchLocal) {
-    int corner = kDwmwcpRound;
-    ::DwmSetWindowAttribute(m_acrylicBackdrop, kDwmaWindowCornerPreference,
-                            &corner, sizeof(corner));
+    const int radius = DPI_SCALE(m_style.round_corner_ex);
+    if (radius > 0) {
+      ::SetPropW(m_acrylicBackdrop,
+                 kWeaselAcrylicSystemCompositionCornerRadiusProperty,
+                 reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(radius)));
+    } else {
+      ::RemovePropW(m_acrylicBackdrop,
+                    kWeaselAcrylicSystemCompositionCornerRadiusProperty);
+    }
     COLORREF borderColor = kDwmColorNone;
     ::DwmSetWindowAttribute(m_acrylicBackdrop, kDwmaBorderColor, &borderColor,
                             sizeof(borderColor));
@@ -2100,6 +2109,9 @@ bool WeaselPanel::_CreateAcrylicBackdrop() {
     const bool systemComposition =
         ::GetPropW(m_acrylicBackdrop,
                    kWeaselAcrylicSystemCompositionActiveProperty) != nullptr;
+    int corner = systemComposition ? kDwmwcpDoNotRound : kDwmwcpRound;
+    ::DwmSetWindowAttribute(m_acrylicBackdrop, kDwmaWindowCornerPreference,
+                            &corner, sizeof(corner));
     SetAcrylicCreationDiagnostic(m_hWnd, systemComposition ? 180 : 100, S_OK);
     return true;
   }
@@ -2191,6 +2203,8 @@ void WeaselPanel::_DestroyAcrylicBackdrop() {
   m_acrylicBackdropEnabled = false;
   if (m_acrylicBackdrop) {
     ::RemovePropW(m_acrylicBackdrop, kWeaselAcrylicAppSdkActiveProperty);
+    ::RemovePropW(m_acrylicBackdrop,
+                  kWeaselAcrylicSystemCompositionCornerRadiusProperty);
     ::RemovePropW(m_acrylicBackdrop, kAcrylicNativeDwmProperty);
     ::ShowWindow(m_acrylicBackdrop, SW_HIDE);
     // Detach this HWND only. Neither unload the DLL nor stop the UI queue.
@@ -2206,6 +2220,22 @@ void WeaselPanel::_UpdateAcrylicBackdropTheme() {
   BOOL useDarkMode = IsDarkColor(m_style.back_color) ? TRUE : FALSE;
   DwmSetWindowAttribute(m_acrylicBackdrop, kDwmaUseImmersiveDarkMode,
                         &useDarkMode, sizeof(useDarkMode));
+
+  if (::GetPropW(m_acrylicBackdrop,
+                 kWeaselAcrylicSystemCompositionActiveProperty)) {
+    const int radius = DPI_SCALE(m_style.round_corner_ex);
+    if (radius > 0) {
+      ::SetPropW(m_acrylicBackdrop,
+                 kWeaselAcrylicSystemCompositionCornerRadiusProperty,
+                 reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(radius)));
+    } else {
+      ::RemovePropW(m_acrylicBackdrop,
+                    kWeaselAcrylicSystemCompositionCornerRadiusProperty);
+    }
+    int corner = kDwmwcpDoNotRound;
+    ::DwmSetWindowAttribute(m_acrylicBackdrop, kDwmaWindowCornerPreference,
+                            &corner, sizeof(corner));
+  }
 
   g_acrylicAppSdkBridge.SetDarkMode(m_acrylicBackdrop, useDarkMode);
 }
@@ -2270,6 +2300,12 @@ void WeaselPanel::_SyncAcrylicBackdrop() {
   // Weasel candidate panel.
   ::SetWindowPos(m_acrylicBackdrop, m_hWnd, x, y, width, height,
                  SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER);
+
+  // The system Composition clip uses the real client size. Refresh once more
+  // after SetWindowPos so first-show and resize geometry match immediately.
+  if (::GetPropW(m_acrylicBackdrop,
+                 kWeaselAcrylicSystemCompositionActiveProperty))
+    _UpdateAcrylicBackdropTheme();
 }
 
 void WeaselPanel::ShowAcrylicBackdrop() {

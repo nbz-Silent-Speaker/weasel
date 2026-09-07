@@ -43,6 +43,8 @@ constexpr wchar_t kSystemCompositionHresult[] =
     L"WeaselAcrylicSystemCompositionHresult";
 constexpr wchar_t kSystemCompositionHostBrushHr[] =
     L"WeaselAcrylicSystemCompositionHostBrushHresult";
+constexpr wchar_t kSystemCompositionCornerRadius[] =
+    L"WeaselAcrylicSystemCompositionCornerRadius";
 constexpr wchar_t kAppSdkFailureStage[] = L"WeaselAcrylicAppSdkFailureStage";
 constexpr wchar_t kAppSdkFailureHresult[] =
     L"WeaselAcrylicAppSdkFailureHresult";
@@ -177,13 +179,18 @@ struct Target {
       nullptr};
   winrt::Windows::UI::Composition::CompositionEffectBrush blurBrush{nullptr};
   winrt::Windows::UI::Composition::SpriteVisual blurVisual{nullptr};
+  winrt::Windows::UI::Composition::CompositionRoundedRectangleGeometry
+      clipGeometry{nullptr};
+  winrt::Windows::UI::Composition::CompositionGeometricClip roundedClip{
+      nullptr};
 
   BOOL dark = FALSE;
   bool pendingDetach = false;
 
   bool IsActive() const noexcept {
     if (mode == TargetMode::SystemComposition)
-      return desktop && root && blurVisual && blurBrush && hostBackdrop;
+      return desktop && root && blurVisual && blurBrush && hostBackdrop &&
+             clipGeometry && roundedClip;
     if (!acrylic)
       return false;
     try {
@@ -218,10 +225,13 @@ struct Target {
     }
     if (blurVisual) {
       try {
+        blurVisual.Clip(nullptr);
         blurVisual.Brush(nullptr);
       } catch (...) {
       }
     }
+    roundedClip = nullptr;
+    clipGeometry = nullptr;
     blurVisual = nullptr;
     blurBrush = nullptr;
     blurFactory = nullptr;
@@ -240,6 +250,35 @@ struct Target {
 
   ~Target() { Reset(); }
 };
+
+void UpdateSystemCompositionClip(Target& target) {
+  if (target.mode != TargetMode::SystemComposition || !target.hwnd ||
+      !target.clipGeometry)
+    return;
+
+  RECT client{};
+  if (!::GetClientRect(target.hwnd, &client))
+    winrt::throw_hresult(LastWin32Error());
+
+  float width = static_cast<float>(client.right - client.left);
+  float height = static_cast<float>(client.bottom - client.top);
+  if (width < 0.0f)
+    width = 0.0f;
+  if (height < 0.0f)
+    height = 0.0f;
+
+  float radius = static_cast<float>(reinterpret_cast<ULONG_PTR>(
+      ::GetPropW(target.hwnd, kSystemCompositionCornerRadius)));
+  const float radiusLimit = (width < height ? width : height) * 0.5f;
+  if (radius < 0.0f)
+    radius = 0.0f;
+  if (radius > radiusLimit)
+    radius = radiusLimit;
+
+  target.clipGeometry.Size({width, height});
+  target.clipGeometry.CornerRadius({radius, radius});
+}
+
 struct ThreadState {
   DWORD threadId = ::GetCurrentThreadId();
   bool roOwned = false;
@@ -418,6 +457,11 @@ BOOL TryAttachSystemComposition(ThreadState& state,
     target->blurVisual = target->compositor.CreateSpriteVisual();
     target->blurVisual.RelativeSizeAdjustment({1.0f, 1.0f});
     target->blurVisual.Brush(target->blurBrush);
+    target->clipGeometry = target->compositor.CreateRoundedRectangleGeometry();
+    target->roundedClip =
+        target->compositor.CreateGeometricClip(target->clipGeometry);
+    target->blurVisual.Clip(target->roundedClip);
+    UpdateSystemCompositionClip(*target);
     target->root.Children().InsertAtTop(target->blurVisual);
 
     winrt::check_hresult(ValidateWindow(hwnd));
@@ -799,12 +843,21 @@ WeaselAcrylicAppSdkSetWindowTheme(HWND hwnd, BOOL darkMode) {
     return;
   BusyScope guard(*t_state);
   auto it = t_state->targets.find(hwnd);
-  if (it == t_state->targets.end() || it->second->dark == darkMode)
+  if (it == t_state->targets.end())
     return;
   if (it->second->mode == TargetMode::SystemComposition) {
-    it->second->dark = darkMode;
+    try {
+      UpdateSystemCompositionClip(*it->second);
+      it->second->dark = darkMode;
+    } catch (winrt::hresult_error const& error) {
+      Diagnose(75, error.code(), error.message().c_str());
+    } catch (...) {
+      Diagnose(75, E_UNEXPECTED);
+    }
     return;
   }
+  if (it->second->dark == darkMode)
+    return;
   try {
     using namespace winrt::Microsoft::UI::Composition::SystemBackdrops;
     it->second->configuration.IsInputActive(true);
