@@ -59,6 +59,8 @@ constexpr wchar_t kSearchLocalFailureStage[] =
     L"WeaselAcrylicLocalFailureStage";
 constexpr wchar_t kSearchLocalFailureHr[] = L"WeaselAcrylicLocalFailureHresult";
 constexpr wchar_t kSearchNativeAttempted[] = L"WeaselAcrylicNativeDwmAttempted";
+constexpr wchar_t kSearchNativeFrameHr[] =
+    L"WeaselAcrylicNativeDwmFrameHresult";
 constexpr wchar_t kSearchNativeSetHr[] = L"WeaselAcrylicNativeDwmSetHresult";
 constexpr wchar_t kSearchNativeGetHr[] = L"WeaselAcrylicNativeDwmGetHresult";
 constexpr wchar_t kSearchNativeApplied[] = L"WeaselAcrylicNativeDwmAppliedType";
@@ -1786,8 +1788,8 @@ void ResetSearchLocalDiagnostics(HWND candidate) {
     return;
   const wchar_t* properties[] = {
       kSearchDiagnosticHost,  kSearchLocalFailureStage, kSearchLocalFailureHr,
-      kSearchNativeAttempted, kSearchNativeSetHr,       kSearchNativeGetHr,
-      kSearchNativeApplied,
+      kSearchNativeAttempted, kSearchNativeFrameHr,     kSearchNativeSetHr,
+      kSearchNativeGetHr,     kSearchNativeApplied,
   };
   for (const auto property : properties)
     SetSearchDiagnosticProperty(candidate, property, 0);
@@ -1819,10 +1821,18 @@ bool TrySearchNativeDwm(HWND candidate, HWND backdrop, BOOL darkMode) {
                               reinterpret_cast<ULONG_PTR>(backdrop));
   SetSearchDiagnosticProperty(candidate, kSearchNativeAttempted, 1);
 
-  // DWMSBT_TRANSIENTWINDOW is itself the documented Windows 11 Desktop
-  // Acrylic request for the whole window bounds. Try it before the older
-  // host-backdrop/frame preparation path, which can fail in SearchHost's
-  // restricted AppContainer before the native material is even requested.
+  // Type 3 can be accepted and read back while the Win32 client area is still
+  // composited as an opaque surface. Extend DWM glass across the whole local
+  // host first, then accept the native Desktop Acrylic result.
+  const MARGINS fullGlass = {-1, -1, -1, -1};
+  const HRESULT frameHr = ::DwmExtendFrameIntoClientArea(backdrop, &fullGlass);
+  SetSearchDiagnosticProperty(candidate, kSearchNativeFrameHr,
+                              static_cast<DWORD>(frameHr));
+  if (FAILED(frameHr)) {
+    SetSearchLocalFailure(candidate, -111, frameHr);
+    return false;
+  }
+
   int corner = kDwmwcpRound;
   ::DwmSetWindowAttribute(backdrop, kDwmaWindowCornerPreference, &corner,
                           sizeof(corner));
@@ -1860,6 +1870,9 @@ bool TrySearchNativeDwm(HWND candidate, HWND backdrop, BOOL darkMode) {
 
   ::SetPropW(backdrop, kAcrylicNativeDwmProperty,
              reinterpret_cast<HANDLE>(static_cast<INT_PTR>(1)));
+  ::SetWindowPos(backdrop, nullptr, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
+                     SWP_FRAMECHANGED);
   return true;
 }
 
