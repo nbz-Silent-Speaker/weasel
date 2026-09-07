@@ -19,8 +19,11 @@
 #include <winrt/Microsoft.UI.Interop.h>
 #include <winrt/Windows.System.h>
 #include <winrt/Windows.Foundation.Numerics.h>
+#include <winrt/Windows.Graphics.Effects.h>
 #include <winrt/Windows.UI.Composition.h>
 #include <winrt/Windows.UI.Composition.Desktop.h>
+
+#include "WeaselGaussianBlurEffect.h"
 
 #pragma comment(lib, "Dwmapi.lib")
 #pragma comment(lib, "CoreMessaging.lib")
@@ -32,6 +35,17 @@ namespace {
 // Policy v3: process-wide explicit bootstrap, thread-owned queues, HWND-owned
 // targets. No WinRT object has a static/TLS destructor that runs in DllMain.
 constexpr DWORD kDwmaUseHostBackdropBrush = 17;
+constexpr wchar_t kSystemCompositionActive[] =
+    L"WeaselAcrylicSystemCompositionActive";
+constexpr wchar_t kSystemCompositionStage[] =
+    L"WeaselAcrylicSystemCompositionStage";
+constexpr wchar_t kSystemCompositionHresult[] =
+    L"WeaselAcrylicSystemCompositionHresult";
+constexpr wchar_t kSystemCompositionHostBrushHr[] =
+    L"WeaselAcrylicSystemCompositionHostBrushHresult";
+constexpr wchar_t kAppSdkFailureStage[] = L"WeaselAcrylicAppSdkFailureStage";
+constexpr wchar_t kAppSdkFailureHresult[] =
+    L"WeaselAcrylicAppSdkFailureHresult";
 constexpr wchar_t kLifetimeWindowClass[] = L"WeaselAcrylicThreadLifetimeV3";
 constexpr UINT_PTR kShutdownTimer = 1;
 thread_local LONG t_lastStage = 0;
@@ -137,19 +151,56 @@ BOOL CALLBACK InitializeBootstrapOnce(PINIT_ONCE, PVOID, PVOID*) noexcept {
   return TRUE;
 }
 
+enum class TargetMode {
+  AppSdkAcrylic,
+  SystemComposition,
+};
+
 struct Target {
+  HWND hwnd = nullptr;
+  TargetMode mode = TargetMode::AppSdkAcrylic;
   winrt::Windows::UI::Composition::Compositor compositor{nullptr};
   winrt::Windows::UI::Composition::Desktop::DesktopWindowTarget desktop{
       nullptr};
   winrt::Windows::UI::Composition::ContainerVisual root{nullptr};
+
+  // Windows App SDK path.
   winrt::Microsoft::UI::Composition::SystemBackdrops::
       SystemBackdropConfiguration configuration{nullptr};
   winrt::Microsoft::UI::Composition::SystemBackdrops::DesktopAcrylicController
       acrylic{nullptr};
+
+  // System Windows.UI.Composition fallback used only by SearchHost.
+  winrt::Windows::UI::Composition::CompositionBackdropBrush hostBackdrop{
+      nullptr};
+  winrt::Windows::UI::Composition::CompositionEffectFactory blurFactory{
+      nullptr};
+  winrt::Windows::UI::Composition::CompositionEffectBrush blurBrush{nullptr};
+  winrt::Windows::UI::Composition::SpriteVisual blurVisual{nullptr};
+
   BOOL dark = FALSE;
   bool pendingDetach = false;
 
+  bool IsActive() const noexcept {
+    if (mode == TargetMode::SystemComposition)
+      return desktop && root && blurVisual && blurBrush && hostBackdrop;
+    if (!acrylic)
+      return false;
+    try {
+      return !acrylic.IsClosed();
+    } catch (...) {
+      return false;
+    }
+  }
+
   void Reset() noexcept {
+    if (hwnd) {
+      ::RemovePropW(hwnd, kSystemCompositionActive);
+      ::RemovePropW(hwnd, kSystemCompositionStage);
+      ::RemovePropW(hwnd, kSystemCompositionHresult);
+      ::RemovePropW(hwnd, kSystemCompositionHostBrushHr);
+    }
+
     if (acrylic) {
       try {
         acrylic.Close();
@@ -158,23 +209,37 @@ struct Target {
     }
     acrylic = nullptr;
     configuration = nullptr;
+
     if (desktop) {
       try {
         desktop.Root(nullptr);
       } catch (...) {
       }
+    }
+    if (blurVisual) {
+      try {
+        blurVisual.Brush(nullptr);
+      } catch (...) {
+      }
+    }
+    blurVisual = nullptr;
+    blurBrush = nullptr;
+    blurFactory = nullptr;
+    hostBackdrop = nullptr;
+    root = nullptr;
+
+    if (desktop) {
       try {
         desktop.Close();
       } catch (...) {
       }
     }
-    root = nullptr;
     desktop = nullptr;
     compositor = nullptr;
   }
+
   ~Target() { Reset(); }
 };
-
 struct ThreadState {
   DWORD threadId = ::GetCurrentThreadId();
   bool roOwned = false;
@@ -244,6 +309,137 @@ HRESULT EnsureLifetimeWindow(ThreadState& state) noexcept {
       ::CreateWindowExW(0, kLifetimeWindowClass, L"", 0, 0, 0, 0, 0,
                         HWND_MESSAGE, nullptr, g_helperModule, &state);
   return state.lifetimeWindow ? S_OK : LastWin32Error();
+}
+
+bool IsSearchHostProcess() noexcept {
+  wchar_t family[256] = {};
+  UINT32 familyLength = _countof(family);
+  if (::GetCurrentPackageFamilyName(&familyLength, family) != ERROR_SUCCESS ||
+      wcscmp(family, L"MicrosoftWindows.Client.CBS_cw5n1h2txyewy") != 0) {
+    return false;
+  }
+
+  wchar_t image[32768] = {};
+  const DWORD length = ::GetModuleFileNameW(nullptr, image, _countof(image));
+  if (!length || length >= _countof(image))
+    return false;
+  const wchar_t* file = image;
+  for (DWORD i = 0; i < length; ++i) {
+    if (image[i] == L'\\' || image[i] == L'/')
+      file = image + i + 1;
+  }
+  return _wcsicmp(file, L"SearchHost.exe") == 0;
+}
+
+HRESULT EnsureSystemCompositionThread(ThreadState& state) noexcept {
+  if (!state.roOwned) {
+    const HRESULT hr = ::RoInitialize(RO_INIT_SINGLETHREADED);
+    if (FAILED(hr))
+      return hr;
+    state.roOwned = true;
+  }
+  if (!::InitOnceExecuteOnce(&g_bootstrapOnce, InitializeBootstrapOnce, nullptr,
+                             nullptr)) {
+    return LastWin32Error();
+  }
+  if (FAILED(g_bootstrapResult))
+    return g_bootstrapResult;
+  return EnsureLifetimeWindow(state);
+}
+
+BOOL TryAttachSystemComposition(ThreadState& state,
+                                HWND hwnd,
+                                BOOL darkMode) noexcept {
+  try {
+    Diagnose(130);
+    const HRESULT prepared = EnsureSystemCompositionThread(state);
+    if (FAILED(prepared))
+      winrt::throw_hresult(prepared);
+
+    Diagnose(135);
+    auto queue = winrt::Windows::System::DispatcherQueue::GetForCurrentThread();
+    if (!queue) {
+      DispatcherQueueOptions options{sizeof(DispatcherQueueOptions),
+                                     DQTYPE_THREAD_CURRENT, DQTAT_COM_STA};
+      winrt::check_hresult(::CreateDispatcherQueueController(
+          options,
+          reinterpret_cast<ABI::Windows::System::IDispatcherQueueController**>(
+              winrt::put_abi(state.ownedQueue))));
+    }
+
+    BOOL hostBrush = TRUE;
+    const HRESULT hostBrushHr = ::DwmSetWindowAttribute(
+        hwnd, kDwmaUseHostBackdropBrush, &hostBrush, sizeof(hostBrush));
+    ::SetPropW(hwnd, kSystemCompositionHostBrushHr,
+               reinterpret_cast<HANDLE>(
+                   static_cast<ULONG_PTR>(static_cast<DWORD>(hostBrushHr))));
+
+    auto target = std::make_unique<Target>();
+    target->hwnd = hwnd;
+    target->mode = TargetMode::SystemComposition;
+    target->dark = darkMode;
+
+    Diagnose(140);
+    target->compositor = winrt::Windows::UI::Composition::Compositor();
+
+    Diagnose(150);
+    namespace abi = ABI::Windows::UI::Composition::Desktop;
+    auto interop = target->compositor.as<abi::ICompositorDesktopInterop>();
+    winrt::check_hresult(interop->CreateDesktopWindowTarget(
+        hwnd, true,
+        reinterpret_cast<abi::IDesktopWindowTarget**>(
+            winrt::put_abi(target->desktop))));
+
+    Diagnose(155);
+    target->root = target->compositor.CreateContainerVisual();
+    target->root.RelativeSizeAdjustment({1.0f, 1.0f});
+    target->desktop.Root(target->root);
+
+    Diagnose(160);
+    auto source =
+        winrt::Windows::UI::Composition::CompositionEffectSourceParameter(
+            L"source");
+    auto blur = winrt::make_self<weasel_acrylic::GaussianBlurEffect>();
+    blur->Source = source;
+    blur->BlurAmount = 18.0f;
+    blur->Optimization = D2D1_GAUSSIANBLUR_OPTIMIZATION_BALANCED;
+    blur->BorderMode = D2D1_BORDER_MODE_HARD;
+
+    target->blurFactory = target->compositor.CreateEffectFactory(*blur);
+    target->blurBrush = target->blurFactory.CreateBrush();
+    target->hostBackdrop = target->compositor.CreateHostBackdropBrush();
+    if (!target->hostBackdrop)
+      winrt::throw_hresult(E_NOINTERFACE);
+    target->blurBrush.SetSourceParameter(L"source", target->hostBackdrop);
+
+    Diagnose(170);
+    target->blurVisual = target->compositor.CreateSpriteVisual();
+    target->blurVisual.RelativeSizeAdjustment({1.0f, 1.0f});
+    target->blurVisual.Brush(target->blurBrush);
+    target->root.Children().InsertAtTop(target->blurVisual);
+
+    winrt::check_hresult(ValidateWindow(hwnd));
+    ::SetPropW(hwnd, kSystemCompositionActive,
+               reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(1)));
+    ::SetPropW(hwnd, kSystemCompositionStage,
+               reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(180)));
+    ::SetPropW(hwnd, kSystemCompositionHresult, nullptr);
+    state.targets.emplace(hwnd, std::move(target));
+    Diagnose(180);
+    return TRUE;
+  } catch (winrt::hresult_error const& error) {
+    Diagnose(t_lastStage, error.code(), error.message().c_str());
+  } catch (...) {
+    Diagnose(t_lastStage, E_UNEXPECTED);
+  }
+
+  ::SetPropW(hwnd, kSystemCompositionStage,
+             reinterpret_cast<HANDLE>(
+                 static_cast<ULONG_PTR>(static_cast<DWORD>(t_lastStage))));
+  ::SetPropW(hwnd, kSystemCompositionHresult,
+             reinterpret_cast<HANDLE>(
+                 static_cast<ULONG_PTR>(static_cast<DWORD>(t_lastHresult))));
+  return FALSE;
 }
 
 // This is called by the host's NORMAL message pump (WM_TIMER). No nested
@@ -486,7 +682,16 @@ WeaselAcrylicAppSdkAttach(HWND hwnd, BOOL darkMode) {
         hwnd, L"WeaselAcrylicRuntimeRoute",
         reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(g_runtimeRoute)));
     if (FAILED(prepared)) {
-      Diagnose(t_lastStage, prepared);
+      const LONG appStage = t_lastStage;
+      Diagnose(appStage, prepared);
+      ::SetPropW(hwnd, kAppSdkFailureStage,
+                 reinterpret_cast<HANDLE>(
+                     static_cast<ULONG_PTR>(static_cast<DWORD>(appStage))));
+      ::SetPropW(hwnd, kAppSdkFailureHresult,
+                 reinterpret_cast<HANDLE>(
+                     static_cast<ULONG_PTR>(static_cast<DWORD>(prepared))));
+      if (g_runtimeRoute == 2 && IsSearchHostProcess())
+        return TryAttachSystemComposition(state, hwnd, darkMode);
       return FALSE;
     }
     using namespace winrt::Microsoft::UI::Composition::SystemBackdrops;
@@ -494,10 +699,8 @@ WeaselAcrylicAppSdkAttach(HWND hwnd, BOOL darkMode) {
     const bool supported = g_runtimeRoute == 2
                                ? hostFactories.support.IsSupported()
                                : DesktopAcrylicController::IsSupported();
-    if (!supported) {
-      Diagnose(10, HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED));
-      return FALSE;
-    }
+    if (!supported)
+      winrt::throw_hresult(HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED));
     Diagnose(20);
     BOOL enabled = TRUE;
     winrt::check_hresult(::DwmSetWindowAttribute(
@@ -514,6 +717,8 @@ WeaselAcrylicAppSdkAttach(HWND hwnd, BOOL darkMode) {
               winrt::put_abi(state.ownedQueue))));
     }
     auto target = std::make_unique<Target>();
+    target->hwnd = hwnd;
+    target->mode = TargetMode::AppSdkAcrylic;
     Diagnose(40);
     target->compositor = winrt::Windows::UI::Composition::Compositor();
     Diagnose(50);
@@ -551,11 +756,8 @@ WeaselAcrylicAppSdkAttach(HWND hwnd, BOOL darkMode) {
     target->acrylic.SetSystemBackdropConfiguration(target->configuration);
     Diagnose(90);
     if (!target->acrylic.SetTarget(
-            winrt::Microsoft::UI::GetWindowIdFromWindow(hwnd),
-            target->desktop)) {
-      Diagnose(90, E_FAIL);
-      return FALSE;
-    }
+            winrt::Microsoft::UI::GetWindowIdFromWindow(hwnd), target->desktop))
+      winrt::throw_hresult(E_FAIL);
     winrt::check_hresult(ValidateWindow(hwnd));
     state.targets.emplace(hwnd, std::move(target));
     Diagnose(100);
@@ -565,6 +767,17 @@ WeaselAcrylicAppSdkAttach(HWND hwnd, BOOL darkMode) {
   } catch (...) {
     Diagnose(t_lastStage, E_UNEXPECTED);
   }
+
+  const LONG appStage = t_lastStage;
+  const HRESULT appHr = t_lastHresult;
+  ::SetPropW(hwnd, kAppSdkFailureStage,
+             reinterpret_cast<HANDLE>(
+                 static_cast<ULONG_PTR>(static_cast<DWORD>(appStage))));
+  ::SetPropW(hwnd, kAppSdkFailureHresult,
+             reinterpret_cast<HANDLE>(
+                 static_cast<ULONG_PTR>(static_cast<DWORD>(appHr))));
+  if (g_runtimeRoute == 2 && IsSearchHostProcess())
+    return TryAttachSystemComposition(state, hwnd, darkMode);
   return FALSE;
 }
 
@@ -575,11 +788,7 @@ WeaselAcrylicAppSdkIsWindowActive(HWND hwnd) {
   auto it = t_state->targets.find(hwnd);
   if (it == t_state->targets.end() || it->second->pendingDetach)
     return FALSE;
-  try {
-    return !it->second->acrylic.IsClosed();
-  } catch (...) {
-    return FALSE;
-  }
+  return it->second->IsActive() ? TRUE : FALSE;
 }
 
 extern "C" __declspec(dllexport) void WINAPI
@@ -590,6 +799,10 @@ WeaselAcrylicAppSdkSetWindowTheme(HWND hwnd, BOOL darkMode) {
   auto it = t_state->targets.find(hwnd);
   if (it == t_state->targets.end() || it->second->dark == darkMode)
     return;
+  if (it->second->mode == TargetMode::SystemComposition) {
+    it->second->dark = darkMode;
+    return;
+  }
   try {
     using namespace winrt::Microsoft::UI::Composition::SystemBackdrops;
     it->second->configuration.IsInputActive(true);

@@ -358,6 +358,8 @@ bool EnsureAcrylicBackdropClass() {
 constexpr wchar_t kWeaselAcrylicAppSdkDll[] = L"WeaselAcrylicAppSdk.dll";
 constexpr wchar_t kWeaselAcrylicAppSdkActiveProperty[] =
     L"WeaselAcrylicAppSdkActive";
+constexpr wchar_t kWeaselAcrylicSystemCompositionActiveProperty[] =
+    L"WeaselAcrylicSystemCompositionActive";
 constexpr wchar_t kAcrylicStageProperty[] = L"WeaselAcrylicAppSdkStage";
 constexpr wchar_t kAcrylicHrProperty[] = L"WeaselAcrylicAppSdkHresult";
 constexpr wchar_t kAcrylicPolicyProperty[] = L"WeaselAcrylicAppSdkPolicy";
@@ -2070,7 +2072,28 @@ bool WeaselPanel::_CreateAcrylicBackdrop() {
                       reinterpret_cast<ULONG_PTR>(m_acrylicBackdrop));
 
   const BOOL useDarkMode = IsDarkColor(m_style.back_color) ? TRUE : FALSE;
-  if (!m_in_server &&
+  const bool searchLocal = !m_in_server && SearchUsesLocalNativeDwmFallback();
+
+  // R9: SearchHost first asks the existing helper for a local composition
+  // target. The helper still prefers Windows App SDK DesktopAcrylic, but when
+  // the packaged Search host cannot activate that factory it can fall back to
+  // the system Windows.UI.Composition visual layer on this same HWND.
+  if (searchLocal && g_acrylicAppSdkBridge.TryInitialize(m_acrylicBackdrop,
+                                                         useDarkMode, false)) {
+    ::SetPropW(m_acrylicBackdrop, kWeaselAcrylicAppSdkActiveProperty,
+               reinterpret_cast<HANDLE>(static_cast<INT_PTR>(1)));
+    m_acrylicBackdropEnabled = true;
+    const bool systemComposition =
+        ::GetPropW(m_acrylicBackdrop,
+                   kWeaselAcrylicSystemCompositionActiveProperty) != nullptr;
+    SetAcrylicCreationDiagnostic(m_hWnd, systemComposition ? 180 : 100, S_OK);
+    return true;
+  }
+
+  // Keep R8's native DWM path as a second local fallback. It is no longer the
+  // preferred Search path because Type 3 + same Band + redirection alpha was
+  // accepted by DWM on the test machine without producing visible blur.
+  if (searchLocal &&
       TrySearchNativeDwm(m_hWnd, m_acrylicBackdrop, useDarkMode)) {
     m_acrylicBackdropEnabled = true;
     SetAcrylicCreationDiagnostic(m_hWnd, 110, S_OK);
@@ -2114,8 +2137,8 @@ bool WeaselPanel::_CreateAcrylicBackdrop() {
   // B.2c: both server and TSF client HWNDs use the installed optional helper.
   // The helper resolves the runtime explicitly and owns targets per UI thread.
   // Failure restores the skin and retains diagnostics on a hidden host.
-  if (g_acrylicAppSdkBridge.TryInitialize(m_acrylicBackdrop, useDarkMode,
-                                          m_in_server)) {
+  if (!searchLocal && g_acrylicAppSdkBridge.TryInitialize(
+                          m_acrylicBackdrop, useDarkMode, m_in_server)) {
     ::SetPropW(m_acrylicBackdrop, kWeaselAcrylicAppSdkActiveProperty,
                reinterpret_cast<HANDLE>(static_cast<INT_PTR>(1)));
     m_acrylicBackdropEnabled = true;
@@ -2129,10 +2152,10 @@ bool WeaselPanel::_CreateAcrylicBackdrop() {
       ExternalProperty(m_acrylicBackdrop, kAcrylicHrProperty)));
   g_acrylicAppSdkBridge.DetachWindow(m_acrylicBackdrop);
 
-  // Search already tried the documented native Desktop Acrylic request
-  // immediately after creating its local visual host. If both that path and
-  // AppSDK fail, retain the native failure diagnostics and fall back to the
-  // existing external coordinator without making the foreground transparent.
+  // Search already tried helper-local composition and the native DWM path
+  // immediately after creating its local visual host. If both fail, retain
+  // the local diagnostics and fall back to the existing external coordinator
+  // without making the foreground transparent.
   if (!m_in_server && SearchUsesLocalNativeDwmFallback()) {
     if (!ExternalProperty(m_hWnd, kSearchLocalFailureStage))
       SetSearchLocalFailure(m_hWnd, -5, appSdkHr);
