@@ -91,6 +91,70 @@ constexpr wchar_t kLocalAcrylicGeometryPolicy[] =
     L"WeaselAcrylicGeometryPolicy";
 constexpr wchar_t kCandidatePlacementSessionEndedProperty[] =
     L"WeaselCandidatePlacementSessionEnded";
+
+// R15 diagnostic-only candidate placement telemetry. These HWND properties are
+// scalar counters/coordinates read by an external observer. They do not alter
+// placement, visibility, Acrylic policy or message ordering.
+constexpr wchar_t kPlacementDiagSequence[] = L"WeaselDiagPlacementSequence";
+constexpr wchar_t kPlacementDiagEvent[] = L"WeaselDiagPlacementEvent";
+constexpr wchar_t kPlacementDiagCaller[] = L"WeaselDiagPlacementCaller";
+constexpr wchar_t kPlacementDiagCreateCount[] = L"WeaselDiagCreateCount";
+constexpr wchar_t kPlacementDiagRefreshCount[] = L"WeaselDiagRefreshCount";
+constexpr wchar_t kPlacementDiagMoveToCount[] = L"WeaselDiagMoveToCount";
+constexpr wchar_t kPlacementDiagRepositionCount[] =
+    L"WeaselDiagRepositionCount";
+constexpr wchar_t kPlacementDiagMoveToLeft[] = L"WeaselDiagMoveToLeft";
+constexpr wchar_t kPlacementDiagMoveToTop[] = L"WeaselDiagMoveToTop";
+constexpr wchar_t kPlacementDiagMoveToRight[] = L"WeaselDiagMoveToRight";
+constexpr wchar_t kPlacementDiagMoveToBottom[] = L"WeaselDiagMoveToBottom";
+constexpr wchar_t kPlacementDiagInputLeft[] = L"WeaselDiagInputLeft";
+constexpr wchar_t kPlacementDiagInputTop[] = L"WeaselDiagInputTop";
+constexpr wchar_t kPlacementDiagInputRight[] = L"WeaselDiagInputRight";
+constexpr wchar_t kPlacementDiagInputBottom[] = L"WeaselDiagInputBottom";
+constexpr wchar_t kPlacementDiagStickyBefore[] = L"WeaselDiagStickyBefore";
+constexpr wchar_t kPlacementDiagStickyAfter[] = L"WeaselDiagStickyAfter";
+constexpr wchar_t kPlacementDiagSessionEnded[] = L"WeaselDiagSessionEnded";
+constexpr wchar_t kPlacementDiagAdj[] = L"WeaselDiagAdj";
+constexpr wchar_t kPlacementDiagHeight[] = L"WeaselDiagHeight";
+constexpr wchar_t kPlacementDiagWorkBottom[] = L"WeaselDiagWorkBottom";
+constexpr wchar_t kPlacementDiagResultX[] = L"WeaselDiagResultX";
+constexpr wchar_t kPlacementDiagResultY[] = L"WeaselDiagResultY";
+
+enum class PlacementDiagEvent : LONG_PTR {
+  Create = 1,
+  RefreshBeforeReposition = 2,
+  MoveToEnter = 3,
+  RepositionBlocked = 4,
+  RepositionCommit = 5,
+};
+
+enum class PlacementDiagCaller : LONG_PTR {
+  None = 0,
+  Refresh = 1,
+  MoveToStickyReset = 2,
+  MoveToAsciiTip = 3,
+  MoveToNormal = 4,
+};
+
+LONG_PTR PlacementDiagValue(HWND hwnd, const wchar_t* name) {
+  return hwnd ? reinterpret_cast<LONG_PTR>(::GetPropW(hwnd, name)) : 0;
+}
+
+void SetPlacementDiagValue(HWND hwnd, const wchar_t* name, LONG_PTR value) {
+  if (hwnd)
+    ::SetPropW(hwnd, name, reinterpret_cast<HANDLE>(value));
+}
+
+void IncrementPlacementDiag(HWND hwnd, const wchar_t* name) {
+  SetPlacementDiagValue(hwnd, name, PlacementDiagValue(hwnd, name) + 1);
+}
+
+void CommitPlacementDiagEvent(HWND hwnd, PlacementDiagEvent event) {
+  SetPlacementDiagValue(hwnd, kPlacementDiagEvent,
+                        static_cast<LONG_PTR>(event));
+  IncrementPlacementDiag(hwnd, kPlacementDiagSequence);
+}
+
 constexpr UINT_PTR kLocalAcrylicGeometrySubclass = 0x57414731;
 
 struct LocalAcrylicGeometryState {
@@ -2397,6 +2461,7 @@ void WeaselPanel::_CreateLayout() {
 // 更新界面
 void WeaselPanel::Refresh() {
   LocalAcrylicGeometryBatch geometry(m_hWnd);
+  IncrementPlacementDiag(m_hWnd, kPlacementDiagRefreshCount);
   bool should_show_icon =
       (m_status.ascii_mode || !m_status.composing || !m_ctx.aux.empty());
   m_candidateCount = min(m_ctx.cinfo.candies.size(), MAX_CANDIDATES_COUNT);
@@ -2436,6 +2501,10 @@ void WeaselPanel::Refresh() {
     m_layout->DoLayout(dc, pDWR);
     ReleaseDC(dc);
     _ResizeWindow();
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagCaller,
+                          static_cast<LONG_PTR>(PlacementDiagCaller::Refresh));
+    CommitPlacementDiagEvent(m_hWnd,
+                             PlacementDiagEvent::RefreshBeforeReposition);
     _RepositionWindow();
     if (m_ctx != m_octx) {
       m_octx = m_ctx;
@@ -3426,6 +3495,11 @@ LRESULT WeaselPanel::OnCreate(UINT uMsg,
                               WPARAM wParam,
                               LPARAM lParam,
                               BOOL& bHandled) {
+  IncrementPlacementDiag(m_hWnd, kPlacementDiagCreateCount);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagCaller,
+                        static_cast<LONG_PTR>(PlacementDiagCaller::None));
+  CommitPlacementDiagEvent(m_hWnd, PlacementDiagEvent::Create);
+
   m_mouse_entry = false;
   m_hoverIndex = -1;
   m_acrylicBackdropEnabled = _CreateAcrylicBackdrop();
@@ -3460,6 +3534,12 @@ LRESULT WeaselPanel::OnDpiChanged(UINT uMsg,
 
 void WeaselPanel::MoveTo(RECT const& rc) {
   LocalAcrylicGeometryBatch geometry(m_hWnd);
+  IncrementPlacementDiag(m_hWnd, kPlacementDiagMoveToCount);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagMoveToLeft, rc.left);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagMoveToTop, rc.top);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagMoveToRight, rc.right);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagMoveToBottom, rc.bottom);
+  CommitPlacementDiagEvent(m_hWnd, PlacementDiagEvent::MoveToEnter);
   if (!m_layout)
     return;  // avoid handling nullptr in _RepositionWindow
 
@@ -3486,6 +3566,9 @@ void WeaselPanel::MoveTo(RECT const& rc) {
     // Force reposition the window
     m_inputPos = rc;
     m_inputPos.OffsetRect(0, 6);
+    SetPlacementDiagValue(
+        m_hWnd, kPlacementDiagCaller,
+        static_cast<LONG_PTR>(PlacementDiagCaller::MoveToStickyReset));
     _RepositionWindow(true);
     RedrawWindow();
     return;
@@ -3498,6 +3581,9 @@ void WeaselPanel::MoveTo(RECT const& rc) {
     ::GetCursorPos(&p);
     RECT irc{p.x - STATUS_ICON_SIZE, p.y - STATUS_ICON_SIZE, p.x, p.y};
     m_inputPos = irc;
+    SetPlacementDiagValue(
+        m_hWnd, kPlacementDiagCaller,
+        static_cast<LONG_PTR>(PlacementDiagCaller::MoveToAsciiTip));
     _RepositionWindow(true);
     RedrawWindow();
   } else if (!(rc.left == m_inputPos.left && rc.bottom != m_inputPos.bottom &&
@@ -3510,6 +3596,9 @@ void WeaselPanel::MoveTo(RECT const& rc) {
     // buffer current m_istorepos status
     bool m_istorepos_buf = m_istorepos;
     // with parameter to avoid vertical flicker
+    SetPlacementDiagValue(
+        m_hWnd, kPlacementDiagCaller,
+        static_cast<LONG_PTR>(PlacementDiagCaller::MoveToNormal));
     _RepositionWindow(true);
     // m_istorepos status changed by _RepositionWindow, or tips to show,
     // redrawing is required
@@ -3529,8 +3618,24 @@ void WeaselPanel::_RepositionWindow(const bool& adj) {
   // previous window's adjusted Y and m_sticky may still describe its
   // above-caret placement. Keep the hidden window where it is until MoveTo()
   // consumes the session marker and installs a fresh anchor.
-  if (::GetPropW(m_hWnd, kCandidatePlacementSessionEndedProperty))
+  if (::GetPropW(m_hWnd, kCandidatePlacementSessionEndedProperty)) {
+    IncrementPlacementDiag(m_hWnd, kPlacementDiagRepositionCount);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagSessionEnded, 1);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagAdj, adj ? 1 : 0);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagStickyBefore, m_sticky ? 1 : 0);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagInputLeft, m_inputPos.left);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagInputTop, m_inputPos.top);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagInputRight, m_inputPos.right);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagInputBottom, m_inputPos.bottom);
+    CommitPlacementDiagEvent(m_hWnd, PlacementDiagEvent::RepositionBlocked);
     return;
+  }
+
+  IncrementPlacementDiag(m_hWnd, kPlacementDiagRepositionCount);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagSessionEnded, 0);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagAdj, adj ? 1 : 0);
+  const bool stickyBefore = m_sticky;
+  const CRect inputBefore = m_inputPos;
 
   RECT rcWorkArea;
   memset(&rcWorkArea, 0, sizeof(rcWorkArea));
@@ -3599,8 +3704,22 @@ void WeaselPanel::_RepositionWindow(const bool& adj) {
     y = rcWorkArea.top;  // over workarea top
   // memorize adjusted position (to avoid window bouncing on height change)
   m_inputPos.bottom = y;
+
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagInputLeft, inputBefore.left);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagInputTop, inputBefore.top);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagInputRight, inputBefore.right);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagInputBottom, inputBefore.bottom);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagStickyBefore,
+                        stickyBefore ? 1 : 0);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagStickyAfter, m_sticky ? 1 : 0);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagHeight, height);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagWorkBottom, rcWorkArea.bottom);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagResultX, x);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagResultY, y);
+
   SetWindowPos(HWND_TOPMOST, x, y, 0, 0,
                SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOREDRAW);
+  CommitPlacementDiagEvent(m_hWnd, PlacementDiagEvent::RepositionCommit);
 }
 
 void WeaselPanel::_TextOut(const CRect& rc,
