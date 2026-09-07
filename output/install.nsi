@@ -21,6 +21,19 @@ Unicode true
 !define WEASEL_ROOT $INSTDIR\weasel-${WEASEL_VERSION}
 !define REG_UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Weasel"
 
+; Optional runtime DLLs can remain loaded in packaged hosts after WeaselServer
+; exits. Extract them under a temporary name and let Windows replace the locked
+; destination on reboot when an immediate replacement is not possible.
+!macro InstallOptionalLockedFile Source Destination
+  !if /FileExists "${Source}"
+    Delete "${Destination}.new"
+    File "/oname=${Destination}.new" "${Source}"
+    SetFileAttributes "${Destination}" NORMAL
+    Delete /REBOOTOK "${Destination}"
+    Rename /REBOOTOK "${Destination}.new" "${Destination}"
+  !endif
+!macroend
+
 ; The name of the installer
 Name "小狼毫 ${WEASEL_VERSION}"
 
@@ -257,12 +270,12 @@ program_files:
       File "WeaselServer.exe"
       File "rime.dll"
       File "WinSparkle.dll"
-      File /nonfatal "WeaselAcrylicAppSdk.dll"
-      File /nonfatal "Microsoft.WindowsAppRuntime.Bootstrap.dll"
+      !insertmacro InstallOptionalLockedFile "WeaselAcrylicAppSdk.dll" "$INSTDIR\WeaselAcrylicAppSdk.dll"
+      !insertmacro InstallOptionalLockedFile "Microsoft.WindowsAppRuntime.Bootstrap.dll" "$INSTDIR\Microsoft.WindowsAppRuntime.Bootstrap.dll"
       ; x86 TSF clients run inside 32-bit apps even on Windows 11 x64.
       SetOutPath "$INSTDIR\acrylic\x86"
-      File /nonfatal "acrylic\x86\WeaselAcrylicAppSdk.dll"
-      File /nonfatal "acrylic\x86\Microsoft.WindowsAppRuntime.Bootstrap.dll"
+      !insertmacro InstallOptionalLockedFile "acrylic\x86\WeaselAcrylicAppSdk.dll" "$INSTDIR\acrylic\x86\WeaselAcrylicAppSdk.dll"
+      !insertmacro InstallOptionalLockedFile "acrylic\x86\Microsoft.WindowsAppRuntime.Bootstrap.dll" "$INSTDIR\acrylic\x86\Microsoft.WindowsAppRuntime.Bootstrap.dll"
       SetOutPath "$INSTDIR"
     ${Else}
       File "Win32\WeaselDeployer.exe"
