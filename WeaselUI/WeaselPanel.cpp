@@ -42,12 +42,15 @@ constexpr DWORD kDwmaUseHostBackdropBrush = 17;
 constexpr DWORD kDwmaUseImmersiveDarkMode = 20;
 constexpr DWORD kDwmaWindowCornerPreference = 33;
 constexpr DWORD kDwmaBorderColor = 34;
+constexpr DWORD kDwmaSystemBackdropType = 38;
 
-constexpr int kDwmwcpRound = 2;  // DWMWCP_ROUND
+constexpr int kDwmwcpRound = 2;            // DWMWCP_ROUND
+constexpr int kDwmsbtTransientWindow = 3;  // DWMSBT_TRANSIENTWINDOW
 constexpr COLORREF kDwmColorNone = 0xFFFFFFFEu;
 constexpr BYTE kAcrylicTintAlpha = 0x18;
 
 constexpr wchar_t kWeaselAcrylicBackdropClass[] = L"WeaselAcrylicBackdropHost";
+constexpr wchar_t kAcrylicNativeDwmProperty[] = L"WeaselAcrylicNativeDwm";
 
 // CI #22: follow the real candidate HWND, including position changes made by
 // the host application rather than MoveTo(). Install only for local Acrylic;
@@ -1746,7 +1749,15 @@ void SetAcrylicCreationDiagnostic(HWND candidate, LONG stage, HRESULT hr) {
 
 bool ExternalCoordinatorOnly() {
   const auto kind = CurrentExternalKind();
-  if (kind != ExternalClientKind::Store && kind != ExternalClientKind::Search)
+  if (kind != ExternalClientKind::Store)
+    return false;
+  bool appContainer = false;
+  return ExternalAppContainer(::GetCurrentProcess(), appContainer) &&
+         appContainer;
+}
+
+bool SearchUsesLocalNativeDwmFallback() {
+  if (CurrentExternalKind() != ExternalClientKind::Search)
     return false;
   bool appContainer = false;
   return ExternalAppContainer(::GetCurrentProcess(), appContainer) &&
@@ -1931,16 +1942,45 @@ bool WeaselPanel::_CreateAcrylicBackdrop() {
     return true;
   }
 
-  // No system-drawn fallback: use the configured skin instead.
-  // Leaving m_acrylicBackdropEnabled false preserves the original
-  // background alpha, border and shadow in DoPaint.
-  // Keep the failed host hidden for Stage/HRESULT inspection; normal
-  // window destruction will release it without changing the UI queue.
-  SetAcrylicCreationDiagnostic(
-      m_hWnd, -5,
-      static_cast<HRESULT>(static_cast<DWORD>(
-          ExternalProperty(m_acrylicBackdrop, kAcrylicHrProperty))));
+  const HRESULT appSdkHr = static_cast<HRESULT>(static_cast<DWORD>(
+      ExternalProperty(m_acrylicBackdrop, kAcrylicHrProperty)));
   g_acrylicAppSdkBridge.DetachWindow(m_acrylicBackdrop);
+
+  // Start menu search runs its candidate in an immersive window band while
+  // WeaselServer lives in the desktop band. A server-owned backdrop therefore
+  // cannot be reliably interleaved behind that candidate. Keep the visual host
+  // inside SearchHost and fall back to the documented Windows 11 transient
+  // system backdrop (Desktop Acrylic) when the AppSDK controller is
+  // unavailable.
+  if (!m_in_server && SearchUsesLocalNativeDwmFallback()) {
+    int backdrop = kDwmsbtTransientWindow;
+    const HRESULT setHr =
+        ::DwmSetWindowAttribute(m_acrylicBackdrop, kDwmaSystemBackdropType,
+                                &backdrop, sizeof(backdrop));
+    int appliedBackdrop = 0;
+    const HRESULT getHr = SUCCEEDED(setHr)
+                              ? ::DwmGetWindowAttribute(
+                                    m_acrylicBackdrop, kDwmaSystemBackdropType,
+                                    &appliedBackdrop, sizeof(appliedBackdrop))
+                              : setHr;
+    if (SUCCEEDED(setHr) && SUCCEEDED(getHr) &&
+        appliedBackdrop == kDwmsbtTransientWindow) {
+      ::SetPropW(m_acrylicBackdrop, kAcrylicNativeDwmProperty,
+                 reinterpret_cast<HANDLE>(static_cast<INT_PTR>(1)));
+      m_acrylicBackdropEnabled = true;
+      SetAcrylicCreationDiagnostic(m_hWnd, 110, S_OK);
+      return true;
+    }
+
+    SetAcrylicCreationDiagnostic(m_hWnd, -110, FAILED(setHr) ? setHr : getHr);
+    _DestroyAcrylicBackdrop();
+    m_acrylicBackdrop = CreateExternalCoordinator(m_hWnd);
+    return false;
+  }
+
+  // Other clients keep the existing fail-safe behavior. Leaving
+  // m_acrylicBackdropEnabled false preserves the configured skin.
+  SetAcrylicCreationDiagnostic(m_hWnd, -5, appSdkHr);
   ::ShowWindow(m_acrylicBackdrop, SW_HIDE);
   return false;
 }
@@ -1951,6 +1991,7 @@ void WeaselPanel::_DestroyAcrylicBackdrop() {
   m_acrylicBackdropEnabled = false;
   if (m_acrylicBackdrop) {
     ::RemovePropW(m_acrylicBackdrop, kWeaselAcrylicAppSdkActiveProperty);
+    ::RemovePropW(m_acrylicBackdrop, kAcrylicNativeDwmProperty);
     ::ShowWindow(m_acrylicBackdrop, SW_HIDE);
     // Detach this HWND only. Neither unload the DLL nor stop the UI queue.
     g_acrylicAppSdkBridge.DetachWindow(m_acrylicBackdrop);
