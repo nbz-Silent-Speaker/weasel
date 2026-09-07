@@ -89,6 +89,8 @@ constexpr wchar_t kLocalAcrylicGeometryProperty[] =
     L"WeaselAcrylicLocalGeometryState";
 constexpr wchar_t kLocalAcrylicGeometryPolicy[] =
     L"WeaselAcrylicGeometryPolicy";
+constexpr wchar_t kCandidatePlacementSessionEndedProperty[] =
+    L"WeaselCandidatePlacementSessionEnded";
 constexpr UINT_PTR kLocalAcrylicGeometrySubclass = 0x57414731;
 
 struct LocalAcrylicGeometryState {
@@ -219,6 +221,7 @@ LRESULT CALLBACK LocalAcrylicGeometryProc(HWND hwnd,
   auto state = reinterpret_cast<LocalAcrylicGeometryState*>(data);
   LocalAcrylicGeometryRef hold(state);
   if (message == WM_NCDESTROY) {
+    ::RemovePropW(hwnd, kCandidatePlacementSessionEndedProperty);
     DetachLocalAcrylicGeometry(state, true);
     return ::DefSubclassProc(hwnd, message, wParam, lParam);
   }
@@ -234,8 +237,16 @@ LRESULT CALLBACK LocalAcrylicGeometryProc(HWND hwnd,
   // separate DWM/Composition surface. Hide the backdrop before the layered
   // candidate starts disappearing so the compositor cannot expose a one-frame
   // Acrylic/text remnant during application-specific state transitions.
-  if (hidingCandidate && state && state->panel)
-    state->panel->HideAcrylicBackdrop();
+  if (hidingCandidate) {
+    // A real HWND hide ends the current placement session. Do not let a later
+    // Refresh() reuse the sticky above-caret choice or the adjusted
+    // m_inputPos.bottom from this session before the host supplies a fresh
+    // MoveTo() caret rectangle.
+    ::SetPropW(hwnd, kCandidatePlacementSessionEndedProperty,
+               reinterpret_cast<HANDLE>(static_cast<INT_PTR>(1)));
+    if (state && state->panel)
+      state->panel->HideAcrylicBackdrop();
+  }
 
   // Let ATL and the application's existing handlers finish first for show,
   // move and resize. Those paths need the final candidate geometry before the
@@ -3451,6 +3462,16 @@ void WeaselPanel::MoveTo(RECT const& rc) {
   LocalAcrylicGeometryBatch geometry(m_hWnd);
   if (!m_layout)
     return;  // avoid handling nullptr in _RepositionWindow
+
+  // The candidate HWND may have been hidden between two host input sessions
+  // without Refresh() observing candidateCount > 0 -> 0. A fresh MoveTo()
+  // is the first reliable new-session caret anchor, so discard the previous
+  // sticky placement only here, before using rc.
+  if (::RemovePropW(m_hWnd, kCandidatePlacementSessionEndedProperty)) {
+    m_sticky = false;
+    m_istorepos = false;
+  }
+
   m_redraw_by_monitor_change = false;
   // The conditions for resetting the sticky state:
   // 1. When the input session ends (ctx.empty() is true)
@@ -3503,6 +3524,14 @@ void WeaselPanel::MoveTo(RECT const& rc) {
 }
 
 void WeaselPanel::_RepositionWindow(const bool& adj) {
+  // Refresh() can arrive before the host publishes the next caret rectangle.
+  // After an actual candidate hide, m_inputPos.bottom may still contain the
+  // previous window's adjusted Y and m_sticky may still describe its
+  // above-caret placement. Keep the hidden window where it is until MoveTo()
+  // consumes the session marker and installs a fresh anchor.
+  if (::GetPropW(m_hWnd, kCandidatePlacementSessionEndedProperty))
+    return;
+
   RECT rcWorkArea;
   memset(&rcWorkArea, 0, sizeof(rcWorkArea));
   HMONITOR hMonitor = MonitorFromRect(m_inputPos, MONITOR_DEFAULTTONEAREST);
