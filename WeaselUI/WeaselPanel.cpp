@@ -51,6 +51,17 @@ constexpr int kDwmsbtTransientWindow = 3;  // DWMSBT_TRANSIENTWINDOW
 constexpr COLORREF kDwmColorNone = 0xFFFFFFFEu;
 constexpr BYTE kAcrylicTintAlpha = 0x18;
 
+bool HasVisibleCandidateSurface(bool inlinePreedit,
+                                bool contextEmpty,
+                                size_t candidateCount,
+                                bool auxiliaryEmpty,
+                                bool preeditEmpty) {
+  if (inlinePreedit)
+    return candidateCount > 0 || !auxiliaryEmpty;
+  return !contextEmpty || candidateCount > 0 || !auxiliaryEmpty ||
+         !preeditEmpty;
+}
+
 constexpr wchar_t kWeaselAcrylicBackdropClass[] = L"WeaselAcrylicBackdropHost";
 constexpr wchar_t kAcrylicNativeDwmProperty[] = L"WeaselAcrylicNativeDwm";
 constexpr wchar_t kAcrylicNativeDwmPaintsProperty[] =
@@ -212,11 +223,26 @@ LRESULT CALLBACK LocalAcrylicGeometryProc(HWND hwnd,
     return ::DefSubclassProc(hwnd, message, wParam, lParam);
   }
 
-  // Let ATL and the application's existing handlers finish first. No layout
-  // or pointer is read until the final HWND state is available. Destruction
-  // during default processing nulls panel while hold keeps this state alive.
+  bool hidingCandidate = message == WM_SHOWWINDOW && wParam == FALSE;
+  if ((message == WM_WINDOWPOSCHANGING || message == WM_WINDOWPOSCHANGED) &&
+      lParam) {
+    const auto* position = reinterpret_cast<const WINDOWPOS*>(lParam);
+    hidingCandidate = hidingCandidate || (position->flags & SWP_HIDEWINDOW);
+  }
+
+  // The foreground is a layered HWND while the local Acrylic backdrop uses a
+  // separate DWM/Composition surface. Hide the backdrop before the layered
+  // candidate starts disappearing so the compositor cannot expose a one-frame
+  // Acrylic/text remnant during application-specific state transitions.
+  if (hidingCandidate && state && state->panel)
+    state->panel->HideAcrylicBackdrop();
+
+  // Let ATL and the application's existing handlers finish first for show,
+  // move and resize. Those paths need the final candidate geometry before the
+  // backdrop follows it.
   const LRESULT result = ::DefSubclassProc(hwnd, message, wParam, lParam);
-  if (message == WM_WINDOWPOSCHANGED || message == WM_SHOWWINDOW)
+  if (!hidingCandidate &&
+      (message == WM_WINDOWPOSCHANGED || message == WM_SHOWWINDOW))
     RequestLocalAcrylicGeometry(state);
   return result;
 }
@@ -2246,8 +2272,9 @@ bool WeaselPanel::_ShouldShowAcrylicBackdrop() const {
       (m_in_server || !IsExternalCompatibleClient()))
     return false;
 
-  return ((!m_ctx.empty() && !m_style.inline_preedit) ||
-          (m_style.inline_preedit && (m_candidateCount || !m_ctx.aux.empty())));
+  return HasVisibleCandidateSurface(m_style.inline_preedit, m_ctx.empty(),
+                                    m_candidateCount, m_ctx.aux.empty(),
+                                    m_ctx.preedit.empty());
 }
 
 void WeaselPanel::_SyncAcrylicBackdrop() {
@@ -3261,9 +3288,15 @@ void WeaselPanel::DoPaint(CDCHandle dc) {
       delete[] rects;
       delete[] btmys;
     }
+    // Keep the whole-panel foreground background and the Acrylic backdrop on
+    // the same content predicate. During some host transitions m_ctx can be
+    // cleared before the cached candidate count is refreshed; treating the
+    // still-drawn candidates as visible avoids a one-frame text-only remnant.
+    const bool hasVisibleCandidateSurface = HasVisibleCandidateSurface(
+        m_style.inline_preedit, m_ctx.empty(), m_candidateCount,
+        m_ctx.aux.empty(), m_ctx.preedit.empty());
     // background and candidates back, hilite back drawing start
-    if ((!m_ctx.empty() && !m_style.inline_preedit) ||
-        (m_style.inline_preedit && (m_candidateCount || !m_ctx.aux.empty()))) {
+    if (hasVisibleCandidateSurface) {
       CRect backrc = m_layout->GetContentRect();
       COLORREF backColor = m_style.back_color;
       COLORREF shadowColor = m_style.shadow_color;
