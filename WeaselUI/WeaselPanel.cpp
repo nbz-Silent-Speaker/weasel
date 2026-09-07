@@ -123,6 +123,26 @@ constexpr wchar_t kPlacementDiagAnchorPending[] = L"WeaselDiagAnchorPending";
 constexpr wchar_t kPlacementDiagAnchorResolved[] = L"WeaselDiagAnchorResolved";
 constexpr wchar_t kPlacementDiagAnchorFallback[] = L"WeaselDiagAnchorFallback";
 
+// R17 diagnostic-only MoveTo sequence capture. The external observer can miss
+// multiple placement events between its 5 ms samples, so preserve the first
+// MoveTo calls for each candidate HWND in immutable scalar properties. This
+// telemetry does not delay, reject, rewrite or reorder any placement call.
+constexpr unsigned kPlacementDiagMoveTraceSlots = 12;
+constexpr wchar_t kPlacementDiagMoveTraceCount[] =
+    L"WeaselDiagR17MoveTraceCount";
+constexpr wchar_t kPlacementDiagCreateTick[] = L"WeaselDiagR17CreateTick";
+
+enum class PlacementDiagMoveDisposition : LONG_PTR {
+  Unknown = 0,
+  ProvisionalBlocked = 1,
+  StableOpenedGate = 2,
+  PostGateAccepted = 3,
+  FallbackReplayAccepted = 4,
+  TimerFailureAccepted = 5,
+  StabilizationDisabled = 6,
+  NoLayout = 7,
+};
+
 enum class PlacementDiagEvent : LONG_PTR {
   Create = 1,
   RefreshBeforeReposition = 2,
@@ -184,6 +204,74 @@ LocalAcrylicGeometryState* LocalAcrylicGeometry(HWND hwnd) {
   return hwnd ? reinterpret_cast<LocalAcrylicGeometryState*>(
                     ::GetPropW(hwnd, kLocalAcrylicGeometryProperty))
               : nullptr;
+}
+
+void SetPlacementMoveTraceValue(HWND hwnd,
+                                unsigned slot,
+                                const wchar_t* field,
+                                LONG_PTR value) {
+  if (!hwnd || !slot || slot > kPlacementDiagMoveTraceSlots || !field)
+    return;
+  wchar_t name[64] = {};
+  if (swprintf_s(name, _countof(name), L"WeaselDiagR17Move%02u%s", slot,
+                 field) < 0)
+    return;
+  SetPlacementDiagValue(hwnd, name, value);
+}
+
+unsigned BeginPlacementMoveTrace(HWND hwnd,
+                                 const RECT& rc,
+                                 const LocalAcrylicGeometryState* state) {
+  if (!hwnd)
+    return 0;
+  const LONG_PTR count =
+      PlacementDiagValue(hwnd, kPlacementDiagMoveTraceCount) + 1;
+  SetPlacementDiagValue(hwnd, kPlacementDiagMoveTraceCount, count);
+  if (count <= 0 || count > kPlacementDiagMoveTraceSlots)
+    return 0;
+  const unsigned slot = static_cast<unsigned>(count);
+  RECT windowRect = {};
+  ::GetWindowRect(hwnd, &windowRect);
+  SetPlacementMoveTraceValue(hwnd, slot, L"Tick", ::GetTickCount());
+  SetPlacementMoveTraceValue(hwnd, slot, L"Left", rc.left);
+  SetPlacementMoveTraceValue(hwnd, slot, L"Top", rc.top);
+  SetPlacementMoveTraceValue(hwnd, slot, L"Right", rc.right);
+  SetPlacementMoveTraceValue(hwnd, slot, L"Bottom", rc.bottom);
+  SetPlacementMoveTraceValue(
+      hwnd, slot, L"Enabled",
+      state && state->anchorStabilizationEnabled ? 1 : 0);
+  SetPlacementMoveTraceValue(hwnd, slot, L"Gate",
+                             state && state->anchorGateResolved ? 1 : 0);
+  SetPlacementMoveTraceValue(hwnd, slot, L"Pending",
+                             state && state->provisionalAnchorPending ? 1 : 0);
+  SetPlacementMoveTraceValue(
+      hwnd, slot, L"Accepting",
+      state && state->acceptingProvisionalAnchor ? 1 : 0);
+  SetPlacementMoveTraceValue(hwnd, slot, L"Visible",
+                             ::IsWindowVisible(hwnd) ? 1 : 0);
+  SetPlacementMoveTraceValue(hwnd, slot, L"WindowTop", windowRect.top);
+  SetPlacementMoveTraceValue(hwnd, slot, L"WindowBottom", windowRect.bottom);
+  SetPlacementMoveTraceValue(
+      hwnd, slot, L"SessionEnded",
+      ::GetPropW(hwnd, kCandidatePlacementSessionEndedProperty) ? 1 : 0);
+  SetPlacementMoveTraceValue(
+      hwnd, slot, L"Refresh",
+      PlacementDiagValue(hwnd, kPlacementDiagRefreshCount));
+  SetPlacementMoveTraceValue(
+      hwnd, slot, L"Reposition",
+      PlacementDiagValue(hwnd, kPlacementDiagRepositionCount));
+  SetPlacementMoveTraceValue(hwnd, slot, L"Seq",
+                             PlacementDiagValue(hwnd, kPlacementDiagSequence));
+  SetPlacementMoveTraceValue(hwnd, slot, L"Disposition", 0);
+  return slot;
+}
+
+void SetPlacementMoveTraceDisposition(
+    HWND hwnd,
+    unsigned slot,
+    PlacementDiagMoveDisposition disposition) {
+  SetPlacementMoveTraceValue(hwnd, slot, L"Disposition",
+                             static_cast<LONG_PTR>(disposition));
 }
 
 void ResetCandidateAnchorGate(LocalAcrylicGeometryState* state) {
@@ -3558,6 +3646,8 @@ LRESULT WeaselPanel::OnCreate(UINT uMsg,
                               WPARAM wParam,
                               LPARAM lParam,
                               BOOL& bHandled) {
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagCreateTick, ::GetTickCount());
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagMoveTraceCount, 0);
   IncrementPlacementDiag(m_hWnd, kPlacementDiagCreateCount);
   SetPlacementDiagValue(m_hWnd, kPlacementDiagCaller,
                         static_cast<LONG_PTR>(PlacementDiagCaller::None));
@@ -3605,10 +3695,17 @@ void WeaselPanel::MoveTo(RECT const& rc) {
   SetPlacementDiagValue(m_hWnd, kPlacementDiagMoveToRight, rc.right);
   SetPlacementDiagValue(m_hWnd, kPlacementDiagMoveToBottom, rc.bottom);
   CommitPlacementDiagEvent(m_hWnd, PlacementDiagEvent::MoveToEnter);
-  if (!m_layout)
-    return;  // avoid handling nullptr in _RepositionWindow
 
   auto localState = LocalAcrylicGeometry(m_hWnd);
+  const unsigned moveTraceSlot =
+      BeginPlacementMoveTrace(m_hWnd, rc, localState);
+  bool moveTraceClassified = false;
+  if (!m_layout) {
+    SetPlacementMoveTraceDisposition(m_hWnd, moveTraceSlot,
+                                     PlacementDiagMoveDisposition::NoLayout);
+    return;  // avoid handling nullptr in _RepositionWindow
+  }
+
   if (localState && localState->anchorStabilizationEnabled &&
       !localState->anchorGateResolved &&
       !localState->acceptingProvisionalAnchor) {
@@ -3620,6 +3717,10 @@ void WeaselPanel::MoveTo(RECT const& rc) {
         SetPlacementDiagValue(m_hWnd, kPlacementDiagAnchorResolved, 0);
         SetPlacementDiagValue(m_hWnd, kPlacementDiagAnchorFallback, 0);
         CommitPlacementDiagEvent(m_hWnd, PlacementDiagEvent::ProvisionalAnchor);
+        SetPlacementMoveTraceDisposition(
+            m_hWnd, moveTraceSlot,
+            PlacementDiagMoveDisposition::ProvisionalBlocked);
+        moveTraceClassified = true;
         HideAcrylicBackdrop();
         ParkCandidateForProvisionalAnchor(m_hWnd);
         if (!::SetTimer(m_hWnd, kCandidateAnchorStabilizationTimer,
@@ -3633,12 +3734,20 @@ void WeaselPanel::MoveTo(RECT const& rc) {
           SetPlacementDiagValue(m_hWnd, kPlacementDiagAnchorFallback, 1);
           CommitPlacementDiagEvent(m_hWnd,
                                    PlacementDiagEvent::ProvisionalFallback);
+          SetPlacementMoveTraceDisposition(
+              m_hWnd, moveTraceSlot,
+              PlacementDiagMoveDisposition::TimerFailureAccepted);
+          moveTraceClassified = true;
         } else {
           return;
         }
       } else {
         SetPlacementDiagValue(m_hWnd, kPlacementDiagAnchorPending, 1);
         CommitPlacementDiagEvent(m_hWnd, PlacementDiagEvent::ProvisionalAnchor);
+        SetPlacementMoveTraceDisposition(
+            m_hWnd, moveTraceSlot,
+            PlacementDiagMoveDisposition::ProvisionalBlocked);
+        moveTraceClassified = true;
         return;
       }
     } else {
@@ -3650,7 +3759,21 @@ void WeaselPanel::MoveTo(RECT const& rc) {
       SetPlacementDiagValue(m_hWnd, kPlacementDiagAnchorResolved, 1);
       SetPlacementDiagValue(m_hWnd, kPlacementDiagAnchorFallback, 0);
       CommitPlacementDiagEvent(m_hWnd, PlacementDiagEvent::StableAnchor);
+      SetPlacementMoveTraceDisposition(
+          m_hWnd, moveTraceSlot,
+          PlacementDiagMoveDisposition::StableOpenedGate);
+      moveTraceClassified = true;
     }
+  }
+
+  if (!moveTraceClassified) {
+    const PlacementDiagMoveDisposition disposition =
+        !localState || !localState->anchorStabilizationEnabled
+            ? PlacementDiagMoveDisposition::StabilizationDisabled
+            : (localState->acceptingProvisionalAnchor
+                   ? PlacementDiagMoveDisposition::FallbackReplayAccepted
+                   : PlacementDiagMoveDisposition::PostGateAccepted);
+    SetPlacementMoveTraceDisposition(m_hWnd, moveTraceSlot, disposition);
   }
 
   // The candidate HWND may have been hidden between two host input sessions
