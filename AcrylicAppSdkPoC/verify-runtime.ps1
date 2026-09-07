@@ -154,13 +154,19 @@ foreach ($arch in @('x64', 'x86')) {
         throw "Stale/wrong-architecture $arch manifest"
     }
     foreach ($name in @($helperName, $bootstrapName)) {
-        $matches = @(Get-ChildItem -LiteralPath $extractRoot -Filter $name -File -Recurse |
+        # R10A embeds the optional Acrylic runtime DLLs under a .new name.
+        # NSIS then replaces the live destination immediately, or schedules
+        # Delete/Rename /REBOOTOK when a packaged host still has the DLL open.
+        $embeddedName = $name + '.new'
+        $matches = @(Get-ChildItem -LiteralPath $extractRoot -Filter $embeddedName -File -Recurse |
             Where-Object {
                 $isX86 = $_.FullName.Replace('/', '\').EndsWith(
-                    ('\acrylic\x86\' + $name), [StringComparison]::OrdinalIgnoreCase)
+                    ('\acrylic\x86\' + $embeddedName), [StringComparison]::OrdinalIgnoreCase)
                 if ($arch -eq 'x86') { $isX86 } else { -not $isX86 }
             })
-        if ($matches.Count -ne 1) { throw "Expected one embedded $arch/$name; got $($matches.Count)" }
+        if ($matches.Count -ne 1) {
+            throw "Expected one embedded lock-safe $arch/$embeddedName; got $($matches.Count)"
+        }
         $embedded = $matches[0].FullName
         $embeddedInfo = Check-File $embedded $machine
         $buildInfo = Check-File (Join-Path $directory $name) $machine
@@ -171,7 +177,7 @@ foreach ($arch in @('x64', 'x86')) {
         }
         if ($name -ceq $helperName) { Assert-Exports $embedded $requiredExports }
         else { Assert-Exports $embedded @('MddBootstrapInitialize2') }
-        Write-Host "PASS embedded $arch/$name | $($embeddedInfo.Machine) | $($embeddedInfo.SHA256)"
+        Write-Host "PASS embedded lock-safe $arch/$embeddedName | $($embeddedInfo.Machine) | $($embeddedInfo.SHA256)"
     }
 }
 Write-Host "PASS: installer carries matching x64 + x86 pairs at their separate destinations."
