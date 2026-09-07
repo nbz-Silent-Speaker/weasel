@@ -2074,6 +2074,20 @@ bool WeaselPanel::_CreateAcrylicBackdrop() {
   const BOOL useDarkMode = IsDarkColor(m_style.back_color) ? TRUE : FALSE;
   const bool searchLocal = !m_in_server && SearchUsesLocalNativeDwmFallback();
 
+  // Search's successful R9 Composition path returns before the legacy
+  // backdrop setup below. Apply the same DWM corner/border policy up front so
+  // its non-layered host is clipped like the rounded candidate foreground.
+  if (searchLocal) {
+    int corner = kDwmwcpRound;
+    ::DwmSetWindowAttribute(m_acrylicBackdrop, kDwmaWindowCornerPreference,
+                            &corner, sizeof(corner));
+    COLORREF borderColor = kDwmColorNone;
+    ::DwmSetWindowAttribute(m_acrylicBackdrop, kDwmaBorderColor, &borderColor,
+                            sizeof(borderColor));
+    ::DwmSetWindowAttribute(m_acrylicBackdrop, kDwmaUseImmersiveDarkMode,
+                            &useDarkMode, sizeof(useDarkMode));
+  }
+
   // R9: SearchHost first asks the existing helper for a local composition
   // target. The helper still prefers Windows App SDK DesktopAcrylic, but when
   // the packaged Search host cannot activate that factory it can fall back to
