@@ -43,6 +43,7 @@ constexpr DWORD kDwmaUseImmersiveDarkMode = 20;
 constexpr DWORD kDwmaWindowCornerPreference = 33;
 constexpr DWORD kDwmaBorderColor = 34;
 constexpr DWORD kDwmaSystemBackdropType = 38;
+constexpr DWORD kDwmaRedirectionBitmapAlpha = 39;
 
 constexpr int kDwmwcpRound = 2;            // DWMWCP_ROUND
 constexpr int kDwmsbtTransientWindow = 3;  // DWMSBT_TRANSIENTWINDOW
@@ -51,6 +52,8 @@ constexpr BYTE kAcrylicTintAlpha = 0x18;
 
 constexpr wchar_t kWeaselAcrylicBackdropClass[] = L"WeaselAcrylicBackdropHost";
 constexpr wchar_t kAcrylicNativeDwmProperty[] = L"WeaselAcrylicNativeDwm";
+constexpr wchar_t kAcrylicNativeDwmPaintsProperty[] =
+    L"WeaselAcrylicNativeDwmPaints";
 constexpr wchar_t kAcrylicUiProbeClass[] = L"WeaselAcrylicUiProbe";
 constexpr wchar_t kSearchDiagnosticCandidate[] =
     L"WeaselAcrylicDiagnosticCandidate";
@@ -61,6 +64,8 @@ constexpr wchar_t kSearchLocalFailureHr[] = L"WeaselAcrylicLocalFailureHresult";
 constexpr wchar_t kSearchNativeAttempted[] = L"WeaselAcrylicNativeDwmAttempted";
 constexpr wchar_t kSearchNativeFrameHr[] =
     L"WeaselAcrylicNativeDwmFrameHresult";
+constexpr wchar_t kSearchNativeAlphaHr[] =
+    L"WeaselAcrylicNativeDwmAlphaHresult";
 constexpr wchar_t kSearchNativeSetHr[] = L"WeaselAcrylicNativeDwmSetHresult";
 constexpr wchar_t kSearchNativeGetHr[] = L"WeaselAcrylicNativeDwmGetHresult";
 constexpr wchar_t kSearchNativeApplied[] = L"WeaselAcrylicNativeDwmAppliedType";
@@ -281,6 +286,14 @@ LRESULT CALLBACK AcrylicBackdropWndProc(HWND hwnd,
     return result;
   switch (message) {
     case WM_ERASEBKGND:
+      if (::GetPropW(hwnd, kAcrylicNativeDwmProperty)) {
+        RECT client = {};
+        if (::GetClientRect(hwnd, &client)) {
+          ::FillRect(reinterpret_cast<HDC>(wParam), &client,
+                     static_cast<HBRUSH>(::GetStockObject(BLACK_BRUSH)));
+        }
+        return 1;
+      }
       return 1;
     case WM_NCHITTEST:
       return HTTRANSPARENT;
@@ -290,7 +303,19 @@ LRESULT CALLBACK AcrylicBackdropWndProc(HWND hwnd,
       return DefWindowProcW(hwnd, WM_NCACTIVATE, TRUE, lParam);
     case WM_PAINT: {
       PAINTSTRUCT ps = {};
-      BeginPaint(hwnd, &ps);
+      HDC dc = BeginPaint(hwnd, &ps);
+      if (::GetPropW(hwnd, kAcrylicNativeDwmProperty)) {
+        RECT client = {};
+        if (::GetClientRect(hwnd, &client)) {
+          ::FillRect(dc, &client,
+                     static_cast<HBRUSH>(::GetStockObject(BLACK_BRUSH)));
+        }
+        const ULONG_PTR paints = reinterpret_cast<ULONG_PTR>(::GetPropW(
+                                     hwnd, kAcrylicNativeDwmPaintsProperty)) +
+                                 1;
+        ::SetPropW(hwnd, kAcrylicNativeDwmPaintsProperty,
+                   reinterpret_cast<HANDLE>(paints));
+      }
       EndPaint(hwnd, &ps);
       return 0;
     }
@@ -1788,8 +1813,8 @@ void ResetSearchLocalDiagnostics(HWND candidate) {
     return;
   const wchar_t* properties[] = {
       kSearchDiagnosticHost,  kSearchLocalFailureStage, kSearchLocalFailureHr,
-      kSearchNativeAttempted, kSearchNativeFrameHr,     kSearchNativeSetHr,
-      kSearchNativeGetHr,     kSearchNativeApplied,
+      kSearchNativeAttempted, kSearchNativeFrameHr,     kSearchNativeAlphaHr,
+      kSearchNativeSetHr,     kSearchNativeGetHr,       kSearchNativeApplied,
   };
   for (const auto property : properties)
     SetSearchDiagnosticProperty(candidate, property, 0);
@@ -1833,6 +1858,21 @@ bool TrySearchNativeDwm(HWND candidate, HWND backdrop, BOOL darkMode) {
     return false;
   }
 
+  // Windows 11 26100+ ignores the alpha channel in a window redirection
+  // bitmap by default. Search needs that alpha for the zero-alpha DWM glass
+  // surface below, otherwise Type 3 can be accepted while the client still
+  // presents as an opaque gray rectangle.
+  BOOL useRedirectionAlpha = TRUE;
+  const HRESULT alphaHr = ::DwmSetWindowAttribute(
+      backdrop, kDwmaRedirectionBitmapAlpha, &useRedirectionAlpha,
+      sizeof(useRedirectionAlpha));
+  SetSearchDiagnosticProperty(candidate, kSearchNativeAlphaHr,
+                              static_cast<DWORD>(alphaHr));
+  if (FAILED(alphaHr)) {
+    SetSearchLocalFailure(candidate, -112, alphaHr);
+    return false;
+  }
+
   int corner = kDwmwcpRound;
   ::DwmSetWindowAttribute(backdrop, kDwmaWindowCornerPreference, &corner,
                           sizeof(corner));
@@ -1870,9 +1910,12 @@ bool TrySearchNativeDwm(HWND candidate, HWND backdrop, BOOL darkMode) {
 
   ::SetPropW(backdrop, kAcrylicNativeDwmProperty,
              reinterpret_cast<HANDLE>(static_cast<INT_PTR>(1)));
+  ::SetPropW(backdrop, kAcrylicNativeDwmPaintsProperty, nullptr);
   ::SetWindowPos(backdrop, nullptr, 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
                      SWP_FRAMECHANGED);
+  ::RedrawWindow(backdrop, nullptr, nullptr,
+                 RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_FRAME);
   return true;
 }
 
