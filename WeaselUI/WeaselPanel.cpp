@@ -662,6 +662,10 @@ constexpr wchar_t kExtPresentationClientStage[] =
     L"WeaselAcrylicPresentationClientStage";
 constexpr wchar_t kExtPresentationClientBlocker[] =
     L"WeaselAcrylicPresentationClientBlocker";
+// R4: candidate-anchored, forward Z-order validation on both UI threads.
+// The asynchronous lease protocol is unchanged; only the presentation policy
+// version changes so a Search client never trusts an older reverse-only gate.
+constexpr DWORD kPresentationPolicyVersion = 2;
 constexpr DWORD kPresentationSettleMs = 100;
 
 bool ExternalPathEquals(const std::wstring& left, const std::wstring& right) {
@@ -1055,7 +1059,7 @@ void PrepareExternalServer(HWND hwnd) {
     return;
   PrepareExternalLowMessages(hwnd);
   SetExternalProperty(hwnd, kExtCompatibility, 1);
-  SetExternalProperty(hwnd, kExtPresentationPolicy, 1);
+  SetExternalProperty(hwnd, kExtPresentationPolicy, kPresentationPolicyVersion);
   if (!SetExternalProperty(hwnd, kExtProtocol, kExternalProtocol) ||
       !SetExternalProperty(hwnd, kExtServer, 1)) {
     ::RemovePropW(hwnd, kExtProtocol);
@@ -1113,15 +1117,49 @@ bool ReadExternalSnapshot(HWND client, DWORD token, ExternalSnapshot& snap) {
          snap.height > 0 && snap.width <= 32768 && snap.height <= 32768;
 }
 
-// Verify the acknowledged rectangle and the currently observable Z-order.
-// Hidden windows and non-overlapping windows do not obstruct the material.
-// In particular, the server's hidden candidate may legitimately be between the
-// foreground and background. IsWindowVisible alone is NOT this check.
+// Keep the trace at the point of validation, in the process doing the check.
+// An external observer's later window walk is not an atomic desktop snapshot.
+struct SearchPresentationTrace {
+  HWND first = nullptr;
+  HWND last = nullptr;
+  DWORD steps = 0;
+};
+
+void RecordSearchPresentationTrace(HWND hwnd,
+                                   bool client,
+                                   const SearchPresentationTrace& trace) {
+  SetExternalProperty(hwnd,
+                      client ? L"WeaselAcrylicPresentationClientFirst"
+                             : L"WeaselAcrylicPresentationFirst",
+                      reinterpret_cast<ULONG_PTR>(trace.first));
+  SetExternalProperty(hwnd,
+                      client ? L"WeaselAcrylicPresentationClientLast"
+                             : L"WeaselAcrylicPresentationLast",
+                      reinterpret_cast<ULONG_PTR>(trace.last));
+  SetExternalProperty(hwnd,
+                      client ? L"WeaselAcrylicPresentationClientSteps"
+                             : L"WeaselAcrylicPresentationSteps",
+                      trace.steps);
+  if (client)
+    SetExternalProperty(hwnd, L"WeaselAcrylicPresentationClientPolicy",
+                        kPresentationPolicyVersion);
+}
+
+// R4: start at the known real candidate and follow GW_HWNDNEXT to the expected
+// backdrop. The R3 control captures contain forward chains that reach the host
+// while a reverse desktop walk skips the Search candidate entirely. Do not
+// assume that a filtered/changing window view forms a reversible linked list.
+// Still reject an actual visible intersection before reaching the host. This
+// is structural validation, not a certificate of blur or pixel visibility.
 DWORD CheckSearchPresentation(HWND host,
                               const ExternalSnapshot& snap,
-                              HWND& blocker) {
+                              HWND& blocker,
+                              SearchPresentationTrace* trace = nullptr) {
   blocker = nullptr;
-  if (!ExternalCandidateVisible(snap.candidate) || !::IsWindowVisible(host))
+  if (trace)
+    *trace = SearchPresentationTrace{};
+  if (host == snap.candidate || !ExternalCandidateVisible(snap.candidate) ||
+      !::IsWindowVisible(host))
     return 10;
   RECT rect = {};
   if (!::GetWindowRect(host, &rect) || rect.left != snap.x ||
@@ -1134,16 +1172,20 @@ DWORD CheckSearchPresentation(HWND host,
                                      sizeof(cloaked))) ||
       cloaked)
     return 30;
-  HWND current = host;
-  // Bound the walk because foreign windows can be destroyed/reordered during
-  // it. This is conservative structural validation, never a blur certificate.
+  HWND current = snap.candidate;
   for (unsigned i = 0; i < 512; ++i) {
-    const HWND previous = ::GetWindow(current, GW_HWNDPREV);
-    if (!previous || previous == current)
+    const HWND next = ::GetWindow(current, GW_HWNDNEXT);
+    if (trace) {
+      if (i == 0)
+        trace->first = next;
+      trace->last = next;
+      trace->steps = i + 1;
+    }
+    if (!next || next == current || next == snap.candidate)
       return 50;
-    if (previous == snap.candidate)
+    if (next == host)
       return 100;
-    current = previous;
+    current = next;
     if (!::IsWindowVisible(current))
       continue;
     DWORD hidden = 0;
@@ -1179,7 +1221,10 @@ void RefreshSearchPresentation(HWND hwnd, ExternalAcrylicState* state) {
   if (!state || !state->server || !state->active || !state->searchPresentation)
     return;
   HWND blocker = nullptr;
-  const DWORD stage = CheckSearchPresentation(hwnd, state->snapshot, blocker);
+  SearchPresentationTrace trace;
+  const DWORD stage =
+      CheckSearchPresentation(hwnd, state->snapshot, blocker, &trace);
+  RecordSearchPresentationTrace(hwnd, false, trace);
   SetExternalProperty(hwnd, kExtPresentationStage, stage);
   SetExternalProperty(hwnd, kExtPresentationBlocker,
                       reinterpret_cast<ULONG_PTR>(blocker));
@@ -1326,12 +1371,17 @@ bool ExternalLeaseReady(HWND client, const ExternalAcrylicState* state) {
   const HWND host = state ? state->peer : nullptr;
   if (state && state->searchPresentation) {
     HWND blocker = nullptr;
+    SearchPresentationTrace trace;
     const DWORD stage =
-        host ? CheckSearchPresentation(host, state->snapshot, blocker) : 0;
+        host ? CheckSearchPresentation(host, state->snapshot, blocker, &trace)
+             : 0;
+    RecordSearchPresentationTrace(client, true, trace);
     SetExternalProperty(client, kExtPresentationClientStage, stage);
     SetExternalProperty(client, kExtPresentationClientBlocker,
                         reinterpret_cast<ULONG_PTR>(blocker));
-    if (!host || ExternalProperty(host, kExtPresentationPolicy) != 1 ||
+    if (!host ||
+        ExternalProperty(host, kExtPresentationPolicy) !=
+            kPresentationPolicyVersion ||
         ExternalProperty(host, kExtPresentationReady) != 1 ||
         ExternalProperty(host, kExtAckSequence) != state->snapshot.sequence ||
         stage != 100)
