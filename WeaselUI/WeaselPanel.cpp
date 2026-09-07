@@ -51,6 +51,17 @@ constexpr BYTE kAcrylicTintAlpha = 0x18;
 
 constexpr wchar_t kWeaselAcrylicBackdropClass[] = L"WeaselAcrylicBackdropHost";
 constexpr wchar_t kAcrylicNativeDwmProperty[] = L"WeaselAcrylicNativeDwm";
+constexpr wchar_t kAcrylicUiProbeClass[] = L"WeaselAcrylicUiProbe";
+constexpr wchar_t kSearchDiagnosticCandidate[] =
+    L"WeaselAcrylicDiagnosticCandidate";
+constexpr wchar_t kSearchDiagnosticHost[] = L"WeaselAcrylicDiagnosticHost";
+constexpr wchar_t kSearchLocalFailureStage[] =
+    L"WeaselAcrylicLocalFailureStage";
+constexpr wchar_t kSearchLocalFailureHr[] = L"WeaselAcrylicLocalFailureHresult";
+constexpr wchar_t kSearchNativeAttempted[] = L"WeaselAcrylicNativeDwmAttempted";
+constexpr wchar_t kSearchNativeSetHr[] = L"WeaselAcrylicNativeDwmSetHresult";
+constexpr wchar_t kSearchNativeGetHr[] = L"WeaselAcrylicNativeDwmGetHresult";
+constexpr wchar_t kSearchNativeApplied[] = L"WeaselAcrylicNativeDwmAppliedType";
 
 // CI #22: follow the real candidate HWND, including position changes made by
 // the host application rather than MoveTo(). Install only for local Acrylic;
@@ -1739,12 +1750,117 @@ bool HandleExternalAcrylicMessage(HWND hwnd,
   return true;
 }
 
+bool SearchUsesLocalNativeDwmFallback();
+
+HWND FindCurrentAcrylicUiProbe() {
+  HWND previous = nullptr;
+  for (unsigned count = 0; count < 64; ++count) {
+    const HWND probe =
+        ::FindWindowExW(HWND_MESSAGE, previous, kAcrylicUiProbeClass, nullptr);
+    if (!probe)
+      return nullptr;
+    previous = probe;
+    DWORD processId = 0;
+    ::GetWindowThreadProcessId(probe, &processId);
+    if (processId == ::GetCurrentProcessId())
+      return probe;
+  }
+  return nullptr;
+}
+
+void SetSearchDiagnosticProperty(HWND candidate,
+                                 const wchar_t* name,
+                                 ULONG_PTR value) {
+  SetExternalProperty(candidate, name, value);
+  if (CurrentExternalKind() != ExternalClientKind::Search)
+    return;
+  if (const HWND probe = FindCurrentAcrylicUiProbe()) {
+    SetExternalProperty(probe, kSearchDiagnosticCandidate,
+                        reinterpret_cast<ULONG_PTR>(candidate));
+    SetExternalProperty(probe, name, value);
+  }
+}
+
+void ResetSearchLocalDiagnostics(HWND candidate) {
+  if (CurrentExternalKind() != ExternalClientKind::Search)
+    return;
+  const wchar_t* properties[] = {
+      kSearchDiagnosticHost,  kSearchLocalFailureStage, kSearchLocalFailureHr,
+      kSearchNativeAttempted, kSearchNativeSetHr,       kSearchNativeGetHr,
+      kSearchNativeApplied,
+  };
+  for (const auto property : properties)
+    SetSearchDiagnosticProperty(candidate, property, 0);
+}
+
+void SetSearchLocalFailure(HWND candidate, LONG stage, HRESULT hr) {
+  SetSearchDiagnosticProperty(candidate, kSearchLocalFailureStage,
+                              static_cast<DWORD>(stage));
+  SetSearchDiagnosticProperty(candidate, kSearchLocalFailureHr,
+                              static_cast<DWORD>(hr));
+}
+
 void SetAcrylicCreationDiagnostic(HWND candidate, LONG stage, HRESULT hr) {
-  SetExternalProperty(candidate, kExtCompatibility, 1);
-  SetExternalProperty(candidate, kExtClientKind,
-                      static_cast<DWORD>(CurrentExternalKind()));
-  SetExternalProperty(candidate, kExtCreateStage, static_cast<DWORD>(stage));
-  SetExternalProperty(candidate, kExtCreateHr, static_cast<DWORD>(hr));
+  if (stage == 1)
+    ResetSearchLocalDiagnostics(candidate);
+  SetSearchDiagnosticProperty(candidate, kExtCompatibility, 1);
+  SetSearchDiagnosticProperty(candidate, kExtClientKind,
+                              static_cast<DWORD>(CurrentExternalKind()));
+  SetSearchDiagnosticProperty(candidate, kExtCreateStage,
+                              static_cast<DWORD>(stage));
+  SetSearchDiagnosticProperty(candidate, kExtCreateHr, static_cast<DWORD>(hr));
+}
+
+bool TrySearchNativeDwm(HWND candidate, HWND backdrop, BOOL darkMode) {
+  if (!candidate || !backdrop || !SearchUsesLocalNativeDwmFallback())
+    return false;
+
+  SetSearchDiagnosticProperty(candidate, kSearchDiagnosticHost,
+                              reinterpret_cast<ULONG_PTR>(backdrop));
+  SetSearchDiagnosticProperty(candidate, kSearchNativeAttempted, 1);
+
+  // DWMSBT_TRANSIENTWINDOW is itself the documented Windows 11 Desktop
+  // Acrylic request for the whole window bounds. Try it before the older
+  // host-backdrop/frame preparation path, which can fail in SearchHost's
+  // restricted AppContainer before the native material is even requested.
+  int corner = kDwmwcpRound;
+  ::DwmSetWindowAttribute(backdrop, kDwmaWindowCornerPreference, &corner,
+                          sizeof(corner));
+  COLORREF borderColor = kDwmColorNone;
+  ::DwmSetWindowAttribute(backdrop, kDwmaBorderColor, &borderColor,
+                          sizeof(borderColor));
+  ::DwmSetWindowAttribute(backdrop, kDwmaUseImmersiveDarkMode, &darkMode,
+                          sizeof(darkMode));
+
+  int requested = kDwmsbtTransientWindow;
+  const HRESULT setHr = ::DwmSetWindowAttribute(
+      backdrop, kDwmaSystemBackdropType, &requested, sizeof(requested));
+  int applied = 0;
+  const HRESULT getHr =
+      SUCCEEDED(setHr)
+          ? ::DwmGetWindowAttribute(backdrop, kDwmaSystemBackdropType, &applied,
+                                    sizeof(applied))
+          : setHr;
+
+  SetSearchDiagnosticProperty(candidate, kSearchNativeSetHr,
+                              static_cast<DWORD>(setHr));
+  SetSearchDiagnosticProperty(candidate, kSearchNativeGetHr,
+                              static_cast<DWORD>(getHr));
+  SetSearchDiagnosticProperty(candidate, kSearchNativeApplied,
+                              static_cast<DWORD>(applied));
+
+  if (FAILED(setHr) || FAILED(getHr) || applied != kDwmsbtTransientWindow) {
+    const HRESULT failure =
+        FAILED(setHr)
+            ? setHr
+            : (FAILED(getHr) ? getHr : HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED));
+    SetSearchLocalFailure(candidate, -110, failure);
+    return false;
+  }
+
+  ::SetPropW(backdrop, kAcrylicNativeDwmProperty,
+             reinterpret_cast<HANDLE>(static_cast<INT_PTR>(1)));
+  return true;
 }
 
 bool ExternalCoordinatorOnly() {
@@ -1887,18 +2003,29 @@ bool WeaselPanel::_CreateAcrylicBackdrop() {
       ::GetWindow(m_hWnd, GW_OWNER), nullptr, AcrylicWindowModule(), nullptr);
 
   if (!m_acrylicBackdrop) {
-    SetAcrylicCreationDiagnostic(m_hWnd, -2,
-                                 HRESULT_FROM_WIN32(::GetLastError()));
+    const HRESULT createHr = HRESULT_FROM_WIN32(::GetLastError());
+    SetSearchLocalFailure(m_hWnd, -2, createHr);
+    SetAcrylicCreationDiagnostic(m_hWnd, -2, createHr);
     if (!m_in_server && IsExternalCompatibleClient())
       m_acrylicBackdrop = CreateExternalCoordinator(m_hWnd);
     return false;
   }
   SetExternalProperty(m_hWnd, kExtCoordinator,
                       reinterpret_cast<ULONG_PTR>(m_acrylicBackdrop));
+
+  const BOOL useDarkMode = IsDarkColor(m_style.back_color) ? TRUE : FALSE;
+  if (!m_in_server &&
+      TrySearchNativeDwm(m_hWnd, m_acrylicBackdrop, useDarkMode)) {
+    m_acrylicBackdropEnabled = true;
+    SetAcrylicCreationDiagnostic(m_hWnd, 110, S_OK);
+    return true;
+  }
+
   MARGINS margins = {-1, -1, -1, -1};
   const HRESULT frameHr =
       DwmExtendFrameIntoClientArea(m_acrylicBackdrop, &margins);
   if (FAILED(frameHr)) {
+    SetSearchLocalFailure(m_hWnd, -3, frameHr);
     SetAcrylicCreationDiagnostic(m_hWnd, -3, frameHr);
     if (m_in_server || !IsExternalCompatibleClient())
       _DestroyAcrylicBackdrop();
@@ -1910,6 +2037,7 @@ bool WeaselPanel::_CreateAcrylicBackdrop() {
       m_acrylicBackdrop, kDwmaUseHostBackdropBrush, &useHostBackdropBrush,
       sizeof(useHostBackdropBrush));
   if (FAILED(brushHr)) {
+    SetSearchLocalFailure(m_hWnd, -4, brushHr);
     SetAcrylicCreationDiagnostic(m_hWnd, -4, brushHr);
     if (m_in_server || !IsExternalCompatibleClient())
       _DestroyAcrylicBackdrop();
@@ -1924,7 +2052,6 @@ bool WeaselPanel::_CreateAcrylicBackdrop() {
   DwmSetWindowAttribute(m_acrylicBackdrop, kDwmaBorderColor, &borderColor,
                         sizeof(borderColor));
 
-  const BOOL useDarkMode = IsDarkColor(m_style.back_color) ? TRUE : FALSE;
   DwmSetWindowAttribute(m_acrylicBackdrop, kDwmaUseImmersiveDarkMode,
                         &useDarkMode, sizeof(useDarkMode));
 
@@ -1946,33 +2073,13 @@ bool WeaselPanel::_CreateAcrylicBackdrop() {
       ExternalProperty(m_acrylicBackdrop, kAcrylicHrProperty)));
   g_acrylicAppSdkBridge.DetachWindow(m_acrylicBackdrop);
 
-  // Start menu search runs its candidate in an immersive window band while
-  // WeaselServer lives in the desktop band. A server-owned backdrop therefore
-  // cannot be reliably interleaved behind that candidate. Keep the visual host
-  // inside SearchHost and fall back to the documented Windows 11 transient
-  // system backdrop (Desktop Acrylic) when the AppSDK controller is
-  // unavailable.
+  // Search already tried the documented native Desktop Acrylic request
+  // immediately after creating its local visual host. If both that path and
+  // AppSDK fail, retain the native failure diagnostics and fall back to the
+  // existing external coordinator without making the foreground transparent.
   if (!m_in_server && SearchUsesLocalNativeDwmFallback()) {
-    int backdrop = kDwmsbtTransientWindow;
-    const HRESULT setHr =
-        ::DwmSetWindowAttribute(m_acrylicBackdrop, kDwmaSystemBackdropType,
-                                &backdrop, sizeof(backdrop));
-    int appliedBackdrop = 0;
-    const HRESULT getHr = SUCCEEDED(setHr)
-                              ? ::DwmGetWindowAttribute(
-                                    m_acrylicBackdrop, kDwmaSystemBackdropType,
-                                    &appliedBackdrop, sizeof(appliedBackdrop))
-                              : setHr;
-    if (SUCCEEDED(setHr) && SUCCEEDED(getHr) &&
-        appliedBackdrop == kDwmsbtTransientWindow) {
-      ::SetPropW(m_acrylicBackdrop, kAcrylicNativeDwmProperty,
-                 reinterpret_cast<HANDLE>(static_cast<INT_PTR>(1)));
-      m_acrylicBackdropEnabled = true;
-      SetAcrylicCreationDiagnostic(m_hWnd, 110, S_OK);
-      return true;
-    }
-
-    SetAcrylicCreationDiagnostic(m_hWnd, -110, FAILED(setHr) ? setHr : getHr);
+    if (!ExternalProperty(m_hWnd, kSearchLocalFailureStage))
+      SetSearchLocalFailure(m_hWnd, -5, appSdkHr);
     _DestroyAcrylicBackdrop();
     m_acrylicBackdrop = CreateExternalCoordinator(m_hWnd);
     return false;
