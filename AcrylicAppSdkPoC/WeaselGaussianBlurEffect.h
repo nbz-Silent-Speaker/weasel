@@ -62,7 +62,7 @@ struct GaussianBlurEffect final
 
   HRESULT STDMETHODCALLTYPE GetProperty(
       UINT index,
-      winrt::impl::abi_t<wf::IPropertyValue>** value) noexcept override {
+      ABI::Windows::Foundation::IPropertyValue** value) noexcept override {
     if (!value)
       return E_INVALIDARG;
     *value = nullptr;

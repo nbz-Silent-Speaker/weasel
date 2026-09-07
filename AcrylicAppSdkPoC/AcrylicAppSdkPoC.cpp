@@ -311,6 +311,8 @@ HRESULT EnsureLifetimeWindow(ThreadState& state) noexcept {
   return state.lifetimeWindow ? S_OK : LastWin32Error();
 }
 
+HRESULT ValidateWindow(HWND hwnd) noexcept;
+
 bool IsSearchHostProcess() noexcept {
   wchar_t family[256] = {};
   UINT32 familyLength = _countof(family);
