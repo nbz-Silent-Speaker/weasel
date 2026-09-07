@@ -17,7 +17,7 @@ namespace awge = ABI::Windows::Graphics::Effects;
 // Minimal effect description consumed by Windows.UI.Composition. This avoids a
 // Win2D runtime dependency while using the documented D2D Gaussian blur effect
 // through IGraphicsEffectD2D1Interop.
-struct GaussianBlurEffect final
+struct GaussianBlurEffect
     : winrt::implements<GaussianBlurEffect,
                         wge::IGraphicsEffect,
                         wge::IGraphicsEffectSource,
