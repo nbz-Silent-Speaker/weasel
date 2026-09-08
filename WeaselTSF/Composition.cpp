@@ -4,6 +4,113 @@
 #include "ResponseParser.h"
 #include "CandidateList.h"
 
+#include <oleacc.h>
+
+namespace {
+
+constexpr DWORD kR21MotionGateMs = 75;
+
+bool R21SameRect(const RECT& a, const RECT& b) {
+  return a.left == b.left && a.top == b.top && a.right == b.right &&
+         a.bottom == b.bottom;
+}
+
+bool R21SuccessfulRect(bool hasRect, HRESULT hr) {
+  return hasRect && SUCCEEDED(hr);
+}
+
+bool R21ReadMsaaCaret(HWND expectedView,
+                      RECT& caretRect,
+                      HWND& focus,
+                      HWND& root) {
+  focus = nullptr;
+  root = nullptr;
+  caretRect = {};
+
+  GUITHREADINFO info = {};
+  info.cbSize = sizeof(info);
+  if (!::GetGUIThreadInfo(0, &info) || !info.hwndFocus)
+    return false;
+
+  DWORD focusProcessId = 0;
+  ::GetWindowThreadProcessId(info.hwndFocus, &focusProcessId);
+  if (!focusProcessId || focusProcessId != ::GetCurrentProcessId())
+    return false;
+
+  const HWND focusRoot = ::GetAncestor(info.hwndFocus, GA_ROOT);
+  const HWND foreground = ::GetForegroundWindow();
+  const HWND foregroundRoot =
+      foreground ? ::GetAncestor(foreground, GA_ROOT) : nullptr;
+  if (!focusRoot || focusRoot != foregroundRoot)
+    return false;
+
+  if (expectedView) {
+    const HWND viewRoot = ::GetAncestor(expectedView, GA_ROOT);
+    if (viewRoot && viewRoot != focusRoot)
+      return false;
+  }
+
+  using AccessibleObjectFromWindowFn =
+      HRESULT(WINAPI*)(HWND, DWORD, REFIID, void**);
+  static const auto accessibleObjectFromWindow = [] {
+    HMODULE module = ::GetModuleHandleW(L"oleacc.dll");
+    if (!module)
+      module = ::LoadLibraryW(L"oleacc.dll");
+    return module ? reinterpret_cast<AccessibleObjectFromWindowFn>(
+                        ::GetProcAddress(module, "AccessibleObjectFromWindow"))
+                  : nullptr;
+  }();
+  if (!accessibleObjectFromWindow)
+    return false;
+
+  IAccessible* rawAccessible = nullptr;
+  const HRESULT objectHr = accessibleObjectFromWindow(
+      info.hwndFocus, static_cast<DWORD>(OBJID_CARET), __uuidof(IAccessible),
+      reinterpret_cast<void**>(&rawAccessible));
+  if (FAILED(objectHr) || !rawAccessible)
+    return false;
+
+  com_ptr<IAccessible> accessible;
+  accessible.Attach(rawAccessible);
+
+  LONG left = 0;
+  LONG top = 0;
+  LONG width = 0;
+  LONG height = 0;
+  VARIANT child = {};
+  child.vt = VT_I4;
+  child.lVal = CHILDID_SELF;
+  const HRESULT locationHr =
+      accessible->accLocation(&left, &top, &width, &height, child);
+  if (FAILED(locationHr) || width <= 0 || height <= 0)
+    return false;
+
+  RECT rootRect = {};
+  if (!::GetWindowRect(focusRoot, &rootRect))
+    return false;
+
+  RECT current = {left, top, left + width, top + height};
+  RECT intersection = {};
+  if (!::IntersectRect(&intersection, &current, &rootRect))
+    return false;
+
+  caretRect = current;
+  focus = info.hwndFocus;
+  root = focusRoot;
+  return true;
+}
+
+RECT R21TranslateRect(const RECT& source, LONG dx, LONG dy) {
+  RECT result = source;
+  result.left += dx;
+  result.right += dx;
+  result.top += dy;
+  result.bottom += dy;
+  return result;
+}
+
+}  // namespace
+
 /* Start Composition */
 class CStartCompositionEditSession : public CEditSession {
  public:
@@ -345,6 +452,8 @@ void WeaselTSF::_R19ResetPlacementProbeDiagnostics() {
   _r20SelectionLastClipped = FALSE;
   _r20CompositionStartLastClipped = FALSE;
   _r20CompositionEndLastClipped = FALSE;
+
+  _R21ResetPlacementFollow();
 }
 
 void WeaselTSF::_R19PlacementProbeTick(com_ptr<ITfContext> pContext) {
@@ -460,6 +569,201 @@ void WeaselTSF::_R20CompleteRangeSourceProbe(DWORD generation,
                _r20CompositionEndFailures, _r20CompositionEndRectChanges);
 }
 
+void WeaselTSF::_R21ResetPlacementFollow() {
+  _r21LastR20Sample = 0;
+  _r21HaveAuthoritativeStart = false;
+  _r21AuthoritativeStart = {};
+  _r21HaveTsfPair = false;
+  _r21PairStart = {};
+  _r21PairEnd = {};
+  _r21HaveMsaaBaseline = false;
+  _r21BaselineMsaa = {};
+  _r21BaselineFocus = nullptr;
+  _r21BaselineRoot = nullptr;
+  _r21BaselineCorrectionX = 0;
+  _r21BaselineCorrectionY = 0;
+  _r21CorrectionX = 0;
+  _r21CorrectionY = 0;
+  _r21CorrectionActive = false;
+  _r21MotionProvisional = false;
+  _r21MotionProvisionalTick = 0;
+  _r21MotionActive = false;
+  _r21LastTextActivityTick = ::GetTickCount();
+  _r21HaveNormalPosition = false;
+  _r21LastNormalPosition = {};
+  _r21HaveOutputPosition = false;
+  _r21LastOutputPosition = {};
+  _r21AuthoritativeRequeries = 0;
+  _r21Rebases = 0;
+  _r21MotionGates = 0;
+  _r21MotionActivations = 0;
+  _r21CorrectionUpdates = 0;
+  _r21MsaaUnavailable = 0;
+  _r21GuardResets = 0;
+}
+
+void WeaselTSF::_R21PlacementFollowTick(com_ptr<ITfContext> pContext) {
+  if (!_IsComposing())
+    return;
+
+  const DWORD now = ::GetTickCount();
+  const bool newSample = _r20SamplesCompleted != _r21LastR20Sample;
+  if (newSample)
+    _r21LastR20Sample = _r20SamplesCompleted;
+
+  const bool startUsable = R21SuccessfulRect(_r20CompositionStartHasRect,
+                                             _r20CompositionStartLastTextExtHr);
+  const bool endUsable = R21SuccessfulRect(_r20CompositionEndHasRect,
+                                           _r20CompositionEndLastTextExtHr);
+
+  if (newSample && startUsable) {
+    if (!_r21HaveAuthoritativeStart) {
+      _r21AuthoritativeStart = _r20CompositionStartLastRect;
+      _r21HaveAuthoritativeStart = true;
+    } else if (!R21SameRect(_r21AuthoritativeStart,
+                            _r20CompositionStartLastRect)) {
+      _r21AuthoritativeStart = _r20CompositionStartLastRect;
+      _r21CorrectionX = 0;
+      _r21CorrectionY = 0;
+      _r21CorrectionActive = false;
+      _r21MotionProvisional = false;
+      _r21MotionActive = false;
+      _r21HaveMsaaBaseline = false;
+      ++_r21AuthoritativeRequeries;
+      if (pContext)
+        _UpdateCompositionWindow(pContext);
+    }
+  }
+
+  // A transient END/START layout failure is common while the host catches up
+  // with typing. Freeze any existing correction rather than interpreting the
+  // accessibility caret as viewport motion.
+  if (!startUsable || !endUsable)
+    return;
+
+  const bool hadPair = _r21HaveTsfPair;
+  const bool pairStartChanged =
+      hadPair && !R21SameRect(_r21PairStart, _r20CompositionStartLastRect);
+  const bool pairEndChanged =
+      hadPair && !R21SameRect(_r21PairEnd, _r20CompositionEndLastRect);
+  const bool pairChanged = !hadPair || pairStartChanged || pairEndChanged;
+
+  RECT msaa = {};
+  HWND focus = nullptr;
+  HWND root = nullptr;
+  const bool haveMsaa = R21ReadMsaaCaret(_r19ProbeViewHwnd, msaa, focus, root);
+  if (!haveMsaa) {
+    ++_r21MsaaUnavailable;
+    _r21MotionProvisional = false;
+    _r21MotionActive = false;
+    return;
+  }
+
+  if (pairChanged) {
+    _r21PairStart = _r20CompositionStartLastRect;
+    _r21PairEnd = _r20CompositionEndLastRect;
+    _r21HaveTsfPair = true;
+
+    // A START change is authoritative and resets the correction above. An
+    // END-only change is typing/caret motion inside the same composition; keep
+    // the already-proven viewport correction and only rebase its MSAA witness.
+    _r21BaselineMsaa = msaa;
+    _r21BaselineFocus = focus;
+    _r21BaselineRoot = root;
+    _r21BaselineCorrectionX = _r21CorrectionX;
+    _r21BaselineCorrectionY = _r21CorrectionY;
+    _r21HaveMsaaBaseline = true;
+    _r21MotionProvisional = false;
+    _r21MotionActive = false;
+    ++_r21Rebases;
+    return;
+  }
+
+  if (!_r21HaveMsaaBaseline) {
+    _r21BaselineMsaa = msaa;
+    _r21BaselineFocus = focus;
+    _r21BaselineRoot = root;
+    _r21BaselineCorrectionX = _r21CorrectionX;
+    _r21BaselineCorrectionY = _r21CorrectionY;
+    _r21HaveMsaaBaseline = true;
+    ++_r21Rebases;
+    return;
+  }
+
+  if (focus != _r21BaselineFocus || root != _r21BaselineRoot) {
+    _r21BaselineMsaa = msaa;
+    _r21BaselineFocus = focus;
+    _r21BaselineRoot = root;
+    _r21BaselineCorrectionX = 0;
+    _r21BaselineCorrectionY = 0;
+    _r21CorrectionX = 0;
+    _r21CorrectionY = 0;
+    _r21CorrectionActive = false;
+    _r21MotionProvisional = false;
+    _r21MotionActive = false;
+    ++_r21Rebases;
+    ++_r21GuardResets;
+    if (pContext)
+      _UpdateCompositionWindow(pContext);
+    return;
+  }
+
+  const LONG motionX = msaa.left - _r21BaselineMsaa.left;
+  const LONG motionY = msaa.top - _r21BaselineMsaa.top;
+  if (motionX == 0 && motionY == 0) {
+    _r21MotionProvisional = false;
+    _r21MotionActive = false;
+    if (_r21CorrectionX == _r21BaselineCorrectionX &&
+        _r21CorrectionY == _r21BaselineCorrectionY)
+      return;
+
+    _r21CorrectionX = _r21BaselineCorrectionX;
+    _r21CorrectionY = _r21BaselineCorrectionY;
+    _r21CorrectionActive = _r21CorrectionX != 0 || _r21CorrectionY != 0;
+    ++_r21CorrectionUpdates;
+    const RECT source = _r21HaveNormalPosition ? _r21LastNormalPosition
+                                               : _r20CompositionStartLastRect;
+    _SetCompositionPosition(source);
+    return;
+  }
+
+  // Input can move the MSAA caret tens of milliseconds before the host's TSF
+  // END extent changes. During that window keep the current correction frozen.
+  if ((now - _r21LastTextActivityTick) < kR21MotionGateMs) {
+    _r21MotionProvisional = false;
+    _r21MotionActive = false;
+    return;
+  }
+
+  if (!_r21MotionActive) {
+    if (!_r21MotionProvisional) {
+      _r21MotionProvisional = true;
+      _r21MotionProvisionalTick = now;
+      ++_r21MotionGates;
+      return;
+    }
+    if ((now - _r21MotionProvisionalTick) < kR21MotionGateMs)
+      return;
+    _r21MotionProvisional = false;
+    _r21MotionActive = true;
+    ++_r21MotionActivations;
+  }
+
+  const LONG nextCorrectionX = _r21BaselineCorrectionX + motionX;
+  const LONG nextCorrectionY = _r21BaselineCorrectionY + motionY;
+  if (nextCorrectionX == _r21CorrectionX && nextCorrectionY == _r21CorrectionY)
+    return;
+
+  _r21CorrectionX = nextCorrectionX;
+  _r21CorrectionY = nextCorrectionY;
+  _r21CorrectionActive = _r21CorrectionX != 0 || _r21CorrectionY != 0;
+  ++_r21CorrectionUpdates;
+
+  const RECT source = _r21HaveNormalPosition ? _r21LastNormalPosition
+                                             : _r20CompositionStartLastRect;
+  _SetCompositionPosition(source);
+}
+
 void WeaselTSF::_R19PublishPlacementProbeDiagnostics(HWND hwnd) const {
   if (!hwnd)
     return;
@@ -545,6 +849,25 @@ void WeaselTSF::_R19PublishPlacementProbeDiagnostics(HWND hwnd) const {
                 _r20CompositionEndLastRect.bottom);
   publish(L"WeaselR20CompositionEndClipped",
           _r20CompositionEndLastClipped ? 1 : 0);
+
+  publish(L"WeaselR21FollowVersion", 1);
+  publish(L"WeaselR21AuthoritativeRequeries", _r21AuthoritativeRequeries);
+  publish(L"WeaselR21Rebases", _r21Rebases);
+  publish(L"WeaselR21MotionGates", _r21MotionGates);
+  publish(L"WeaselR21MotionActivations", _r21MotionActivations);
+  publish(L"WeaselR21CorrectionUpdates", _r21CorrectionUpdates);
+  publish(L"WeaselR21MsaaUnavailable", _r21MsaaUnavailable);
+  publish(L"WeaselR21GuardResets", _r21GuardResets);
+  publish(L"WeaselR21CorrectionActive", _r21CorrectionActive ? 1 : 0);
+  publish(L"WeaselR21MotionProvisional", _r21MotionProvisional ? 1 : 0);
+  publish(L"WeaselR21MotionActive", _r21MotionActive ? 1 : 0);
+  publishSigned(L"WeaselR21CorrectionX", _r21CorrectionX);
+  publishSigned(L"WeaselR21CorrectionY", _r21CorrectionY);
+  publish(L"WeaselR21HaveOutput", _r21HaveOutputPosition ? 1 : 0);
+  publishSigned(L"WeaselR21OutputLeft", _r21LastOutputPosition.left);
+  publishSigned(L"WeaselR21OutputTop", _r21LastOutputPosition.top);
+  publishSigned(L"WeaselR21OutputRight", _r21LastOutputPosition.right);
+  publishSigned(L"WeaselR21OutputBottom", _r21LastOutputPosition.bottom);
 }
 
 /* Composition Window Handling */
@@ -579,8 +902,33 @@ void WeaselTSF::_SetCompositionPosition(const RECT& rc) {
   RECT _rc;
   _rc.left = _rc.right = rc.left;
   _rc.top = _rc.bottom = rc.bottom;
-  m_client.UpdateInputPosition(rc);
-  _cand->UpdateInputPosition(rc);
+
+  const bool normalChanged =
+      _r21HaveNormalPosition && !R21SameRect(_r21LastNormalPosition, rc);
+  if (_r21CorrectionActive && normalChanged) {
+    // The normal TSF path itself has obtained a new anchor. Prefer it
+    // immediately and discard the accessibility correction rather than
+    // translating an already-fresh position twice.
+    _r21CorrectionX = 0;
+    _r21CorrectionY = 0;
+    _r21CorrectionActive = false;
+    _r21MotionProvisional = false;
+    _r21MotionActive = false;
+    _r21HaveMsaaBaseline = false;
+    ++_r21GuardResets;
+  }
+
+  _r21LastNormalPosition = rc;
+  _r21HaveNormalPosition = true;
+  const RECT output =
+      _r21CorrectionActive
+          ? R21TranslateRect(rc, _r21CorrectionX, _r21CorrectionY)
+          : rc;
+  _r21LastOutputPosition = output;
+  _r21HaveOutputPosition = true;
+
+  m_client.UpdateInputPosition(output);
+  _cand->UpdateInputPosition(output);
 }
 
 /* Inline Preedit */
@@ -720,6 +1068,10 @@ BOOL WeaselTSF::_InsertText(com_ptr<ITfContext> pContext,
 
 void WeaselTSF::_UpdateComposition(com_ptr<ITfContext> pContext) {
   HRESULT hr;
+
+  // Prevent input-driven MSAA movement from being classified as viewport
+  // motion while the host's TSF END extent is still catching up.
+  _r21LastTextActivityTick = ::GetTickCount();
 
   _pEditSessionContext = pContext;
 

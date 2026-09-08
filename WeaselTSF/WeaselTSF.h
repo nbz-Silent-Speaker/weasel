@@ -151,6 +151,8 @@ class WeaselTSF : public ITfTextInputProcessorEx,
                                     HRESULT compositionEndHr,
                                     const RECT* compositionEndRect,
                                     BOOL compositionEndClipped);
+  void _R21PlacementFollowTick(com_ptr<ITfContext> pContext);
+  void _R21ResetPlacementFollow();
   void _R19PublishPlacementProbeDiagnostics(HWND hwnd) const;
 
   /* Language bar */
@@ -291,6 +293,38 @@ class WeaselTSF : public ITfTextInputProcessorEx,
   BOOL _r20SelectionLastClipped = FALSE;
   BOOL _r20CompositionStartLastClipped = FALSE;
   BOOL _r20CompositionEndLastClipped = FALSE;
+
+  /* R21 generic TSF + MSAA placement follow state. */
+  DWORD _r21LastR20Sample = 0;
+  bool _r21HaveAuthoritativeStart = false;
+  RECT _r21AuthoritativeStart = {};
+  bool _r21HaveTsfPair = false;
+  RECT _r21PairStart = {};
+  RECT _r21PairEnd = {};
+  bool _r21HaveMsaaBaseline = false;
+  RECT _r21BaselineMsaa = {};
+  HWND _r21BaselineFocus = nullptr;
+  HWND _r21BaselineRoot = nullptr;
+  LONG _r21BaselineCorrectionX = 0;
+  LONG _r21BaselineCorrectionY = 0;
+  LONG _r21CorrectionX = 0;
+  LONG _r21CorrectionY = 0;
+  bool _r21CorrectionActive = false;
+  bool _r21MotionProvisional = false;
+  DWORD _r21MotionProvisionalTick = 0;
+  bool _r21MotionActive = false;
+  DWORD _r21LastTextActivityTick = 0;
+  bool _r21HaveNormalPosition = false;
+  RECT _r21LastNormalPosition = {};
+  bool _r21HaveOutputPosition = false;
+  RECT _r21LastOutputPosition = {};
+  DWORD _r21AuthoritativeRequeries = 0;
+  DWORD _r21Rebases = 0;
+  DWORD _r21MotionGates = 0;
+  DWORD _r21MotionActivations = 0;
+  DWORD _r21CorrectionUpdates = 0;
+  DWORD _r21MsaaUnavailable = 0;
+  DWORD _r21GuardResets = 0;
 
   /* Weasel Related */
   weasel::Client m_client;

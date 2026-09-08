@@ -683,9 +683,12 @@ void CCandidateList::_TickOwnerFollow() {
       !_ui->status().composing || !_pContextDocument)
     return;
 
-  // R19 is diagnostic only: actively query the authoritative TSF text extent,
-  // but do not feed the result into UpdateInputPosition or MoveTo.
+  // Keep the R19/R20 read-only revalidation probe. Ordinary hosts also use
+  // its most recently completed START/END pair for R21 placement follow, while
+  // Settings/Store retain their existing owner-follow protocol unchanged.
   _tsf->_R19PlacementProbeTick(_pContextDocument);
+  if (!_settingsFollowEnabled)
+    _tsf->_R21PlacementFollowTick(_pContextDocument);
   _PublishOwnerFollowDiagnostics();
   if (!_settingsFollowEnabled)
     return;
@@ -728,6 +731,9 @@ void CCandidateList::_TickOwnerFollow() {
 }
 
 void WeaselTSF::_UpdateUI(const Context& ctx, const Status& status) {
+  // Candidate-context changes are input activity, not viewport motion. Mark
+  // them before an accessibility caret can run ahead of the host's TSF layout.
+  _r21LastTextActivityTick = ::GetTickCount();
   _cand->UpdateUI(ctx, status);
 }
 
