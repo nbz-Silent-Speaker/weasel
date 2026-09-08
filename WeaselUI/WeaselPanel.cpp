@@ -3706,6 +3706,19 @@ void WeaselPanel::MoveTo(RECT const& rc) {
     return;  // avoid handling nullptr in _RepositionWindow
   }
 
+  // Some hosts can publish a valid caret, then briefly regress to a point-like
+  // rectangle before the candidate HWND is shown, and finally publish the real
+  // caret again. If the first valid rectangle already opened the initial gate,
+  // re-arm the same 50 ms provisional path for that hidden pre-show regression.
+  // Once the candidate is visible, preserve the historical point-caret
+  // behavior.
+  if (localState && localState->anchorStabilizationEnabled &&
+      localState->anchorGateResolved &&
+      !localState->acceptingProvisionalAnchor && rc.bottom <= rc.top &&
+      !::IsWindowVisible(m_hWnd)) {
+    localState->anchorGateResolved = false;
+  }
+
   if (localState && localState->anchorStabilizationEnabled &&
       !localState->anchorGateResolved &&
       !localState->acceptingProvisionalAnchor) {
