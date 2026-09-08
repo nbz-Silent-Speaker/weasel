@@ -141,6 +141,16 @@ class WeaselTSF : public ITfTextInputProcessorEx,
                                   HRESULT textExtHr,
                                   const RECT* rect,
                                   BOOL clipped);
+  void _R20CompleteRangeSourceProbe(DWORD generation,
+                                    HRESULT selectionHr,
+                                    const RECT* selectionRect,
+                                    BOOL selectionClipped,
+                                    HRESULT compositionStartHr,
+                                    const RECT* compositionStartRect,
+                                    BOOL compositionStartClipped,
+                                    HRESULT compositionEndHr,
+                                    const RECT* compositionEndRect,
+                                    BOOL compositionEndClipped);
   void _R19PublishPlacementProbeDiagnostics(HWND hwnd) const;
 
   /* Language bar */
@@ -260,6 +270,27 @@ class WeaselTSF : public ITfTextInputProcessorEx,
   RECT _r19ProbeLastRect = {};
   BOOL _r19ProbeLastClipped = FALSE;
   HWND _r19ProbeViewHwnd = nullptr;
+
+  /* R20 diagnostic-only range-source comparison. */
+  DWORD _r20SamplesCompleted = 0;
+  DWORD _r20SelectionFailures = 0;
+  DWORD _r20CompositionStartFailures = 0;
+  DWORD _r20CompositionEndFailures = 0;
+  DWORD _r20SelectionRectChanges = 0;
+  DWORD _r20CompositionStartRectChanges = 0;
+  DWORD _r20CompositionEndRectChanges = 0;
+  HRESULT _r20SelectionLastTextExtHr = S_OK;
+  HRESULT _r20CompositionStartLastTextExtHr = S_OK;
+  HRESULT _r20CompositionEndLastTextExtHr = S_OK;
+  bool _r20SelectionHasRect = false;
+  bool _r20CompositionStartHasRect = false;
+  bool _r20CompositionEndHasRect = false;
+  RECT _r20SelectionLastRect = {};
+  RECT _r20CompositionStartLastRect = {};
+  RECT _r20CompositionEndLastRect = {};
+  BOOL _r20SelectionLastClipped = FALSE;
+  BOOL _r20CompositionStartLastClipped = FALSE;
+  BOOL _r20CompositionEndLastClipped = FALSE;
 
   /* Weasel Related */
   weasel::Client m_client;

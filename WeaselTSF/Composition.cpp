@@ -237,26 +237,70 @@ STDMETHODIMP CR19PlacementProbeEditSession::DoEditSession(TfEditCookie ec) {
   HRESULT hr = _pContext->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &selection,
                                        &fetched);
   if (FAILED(hr) || fetched != 1 || !selection.range) {
-    _pTextService->_R19CompletePlacementProbe(
-        _generation, FAILED(hr) ? hr : E_FAIL, nullptr, FALSE);
+    const HRESULT selectionHr = FAILED(hr) ? hr : E_FAIL;
+    _pTextService->_R20CompleteRangeSourceProbe(
+        _generation, selectionHr, nullptr, FALSE, E_UNEXPECTED, nullptr, FALSE,
+        E_UNEXPECTED, nullptr, FALSE);
+    _pTextService->_R19CompletePlacementProbe(_generation, selectionHr, nullptr,
+                                              FALSE);
     return S_OK;
   }
 
   com_ptr<ITfRange> selectionRange;
   selectionRange.Attach(selection.range);
-  com_ptr<ITfRange> compositionRange;
-  ITfRange* range = selectionRange;
-  if (_pComposition != nullptr &&
-      _pComposition->GetRange(&compositionRange) == S_OK) {
-    compositionRange->Collapse(ec, TF_ANCHOR_START);
-    range = compositionRange;
+
+  RECT selectionRc = {};
+  BOOL selectionClipped = FALSE;
+  const HRESULT selectionHr = _pContextView->GetTextExt(
+      ec, selectionRange, &selectionRc, &selectionClipped);
+
+  com_ptr<ITfRange> compositionStartRange;
+  RECT compositionStartRc = {};
+  BOOL compositionStartClipped = FALSE;
+  HRESULT compositionStartHr = E_UNEXPECTED;
+  const bool haveCompositionStartRange =
+      _pComposition != nullptr &&
+      _pComposition->GetRange(&compositionStartRange) == S_OK;
+  if (haveCompositionStartRange) {
+    compositionStartRange->Collapse(ec, TF_ANCHOR_START);
+    compositionStartHr = _pContextView->GetTextExt(ec, compositionStartRange,
+                                                   &compositionStartRc,
+                                                   &compositionStartClipped);
   }
 
-  RECT rc = {};
-  BOOL clipped = FALSE;
-  hr = _pContextView->GetTextExt(ec, range, &rc, &clipped);
-  _pTextService->_R19CompletePlacementProbe(
-      _generation, hr, SUCCEEDED(hr) ? &rc : nullptr, clipped);
+  com_ptr<ITfRange> compositionEndRange;
+  RECT compositionEndRc = {};
+  BOOL compositionEndClipped = FALSE;
+  HRESULT compositionEndHr = E_UNEXPECTED;
+  const bool haveCompositionEndRange =
+      _pComposition != nullptr &&
+      _pComposition->GetRange(&compositionEndRange) == S_OK;
+  if (haveCompositionEndRange) {
+    compositionEndRange->Collapse(ec, TF_ANCHOR_END);
+    compositionEndHr = _pContextView->GetTextExt(
+        ec, compositionEndRange, &compositionEndRc, &compositionEndClipped);
+  }
+
+  _pTextService->_R20CompleteRangeSourceProbe(
+      _generation, selectionHr, SUCCEEDED(selectionHr) ? &selectionRc : nullptr,
+      selectionClipped, compositionStartHr,
+      SUCCEEDED(compositionStartHr) ? &compositionStartRc : nullptr,
+      compositionStartClipped, compositionEndHr,
+      SUCCEEDED(compositionEndHr) ? &compositionEndRc : nullptr,
+      compositionEndClipped);
+
+  // Preserve R19 source-selection semantics: while composing, use composition
+  // START; only fall back to selection when GetRange fails.
+  const HRESULT r19Hr =
+      haveCompositionStartRange ? compositionStartHr : selectionHr;
+  const RECT* r19Rc =
+      haveCompositionStartRange
+          ? (SUCCEEDED(compositionStartHr) ? &compositionStartRc : nullptr)
+          : (SUCCEEDED(selectionHr) ? &selectionRc : nullptr);
+  const BOOL r19Clipped =
+      haveCompositionStartRange ? compositionStartClipped : selectionClipped;
+  _pTextService->_R19CompletePlacementProbe(_generation, r19Hr, r19Rc,
+                                            r19Clipped);
   return S_OK;
 }
 
@@ -281,6 +325,26 @@ void WeaselTSF::_R19ResetPlacementProbeDiagnostics() {
   _r19ProbeLastRect = {};
   _r19ProbeLastClipped = FALSE;
   _r19ProbeViewHwnd = nullptr;
+
+  _r20SamplesCompleted = 0;
+  _r20SelectionFailures = 0;
+  _r20CompositionStartFailures = 0;
+  _r20CompositionEndFailures = 0;
+  _r20SelectionRectChanges = 0;
+  _r20CompositionStartRectChanges = 0;
+  _r20CompositionEndRectChanges = 0;
+  _r20SelectionLastTextExtHr = S_OK;
+  _r20CompositionStartLastTextExtHr = S_OK;
+  _r20CompositionEndLastTextExtHr = S_OK;
+  _r20SelectionHasRect = false;
+  _r20CompositionStartHasRect = false;
+  _r20CompositionEndHasRect = false;
+  _r20SelectionLastRect = {};
+  _r20CompositionStartLastRect = {};
+  _r20CompositionEndLastRect = {};
+  _r20SelectionLastClipped = FALSE;
+  _r20CompositionStartLastClipped = FALSE;
+  _r20CompositionEndLastClipped = FALSE;
 }
 
 void WeaselTSF::_R19PlacementProbeTick(com_ptr<ITfContext> pContext) {
@@ -347,6 +411,55 @@ void WeaselTSF::_R19CompletePlacementProbe(DWORD generation,
   _r19ProbeHasRect = true;
 }
 
+void WeaselTSF::_R20CompleteRangeSourceProbe(DWORD generation,
+                                             HRESULT selectionHr,
+                                             const RECT* selectionRect,
+                                             BOOL selectionClipped,
+                                             HRESULT compositionStartHr,
+                                             const RECT* compositionStartRect,
+                                             BOOL compositionStartClipped,
+                                             HRESULT compositionEndHr,
+                                             const RECT* compositionEndRect,
+                                             BOOL compositionEndClipped) {
+  if (generation != _r19ProbeGeneration)
+    return;
+
+  ++_r20SamplesCompleted;
+
+  const auto updateSource = [](HRESULT hr, const RECT* rect, BOOL clipped,
+                               HRESULT& lastHr, bool& hasRect, RECT& lastRect,
+                               BOOL& lastClipped, DWORD& failures,
+                               DWORD& rectChanges) {
+    lastHr = hr;
+    lastClipped = clipped;
+    if (FAILED(hr) || !rect) {
+      ++failures;
+      hasRect = false;
+      return;
+    }
+    if (hasRect &&
+        (rect->left != lastRect.left || rect->top != lastRect.top ||
+         rect->right != lastRect.right || rect->bottom != lastRect.bottom))
+      ++rectChanges;
+    lastRect = *rect;
+    hasRect = true;
+  };
+
+  updateSource(selectionHr, selectionRect, selectionClipped,
+               _r20SelectionLastTextExtHr, _r20SelectionHasRect,
+               _r20SelectionLastRect, _r20SelectionLastClipped,
+               _r20SelectionFailures, _r20SelectionRectChanges);
+  updateSource(compositionStartHr, compositionStartRect,
+               compositionStartClipped, _r20CompositionStartLastTextExtHr,
+               _r20CompositionStartHasRect, _r20CompositionStartLastRect,
+               _r20CompositionStartLastClipped, _r20CompositionStartFailures,
+               _r20CompositionStartRectChanges);
+  updateSource(compositionEndHr, compositionEndRect, compositionEndClipped,
+               _r20CompositionEndLastTextExtHr, _r20CompositionEndHasRect,
+               _r20CompositionEndLastRect, _r20CompositionEndLastClipped,
+               _r20CompositionEndFailures, _r20CompositionEndRectChanges);
+}
+
 void WeaselTSF::_R19PublishPlacementProbeDiagnostics(HWND hwnd) const {
   if (!hwnd)
     return;
@@ -384,6 +497,54 @@ void WeaselTSF::_R19PublishPlacementProbeDiagnostics(HWND hwnd) const {
   publish(L"WeaselR19ProbeClipped", _r19ProbeLastClipped ? 1 : 0);
   publish(L"WeaselR19ProbeViewHwnd",
           reinterpret_cast<ULONG_PTR>(_r19ProbeViewHwnd));
+
+  publish(L"WeaselR20ProbeVersion", 1);
+  publish(L"WeaselR20SamplesCompleted", _r20SamplesCompleted);
+  publish(L"WeaselR20SelectionFailures", _r20SelectionFailures);
+  publish(L"WeaselR20CompositionStartFailures", _r20CompositionStartFailures);
+  publish(L"WeaselR20CompositionEndFailures", _r20CompositionEndFailures);
+  publish(L"WeaselR20SelectionRectChanges", _r20SelectionRectChanges);
+  publish(L"WeaselR20CompositionStartRectChanges",
+          _r20CompositionStartRectChanges);
+  publish(L"WeaselR20CompositionEndRectChanges", _r20CompositionEndRectChanges);
+
+  publish(L"WeaselR20SelectionLastTextExtHr",
+          static_cast<DWORD>(_r20SelectionLastTextExtHr));
+  publish(L"WeaselR20CompositionStartLastTextExtHr",
+          static_cast<DWORD>(_r20CompositionStartLastTextExtHr));
+  publish(L"WeaselR20CompositionEndLastTextExtHr",
+          static_cast<DWORD>(_r20CompositionEndLastTextExtHr));
+
+  publish(L"WeaselR20SelectionHasRect", _r20SelectionHasRect ? 1 : 0);
+  publishSigned(L"WeaselR20SelectionLeft", _r20SelectionLastRect.left);
+  publishSigned(L"WeaselR20SelectionTop", _r20SelectionLastRect.top);
+  publishSigned(L"WeaselR20SelectionRight", _r20SelectionLastRect.right);
+  publishSigned(L"WeaselR20SelectionBottom", _r20SelectionLastRect.bottom);
+  publish(L"WeaselR20SelectionClipped", _r20SelectionLastClipped ? 1 : 0);
+
+  publish(L"WeaselR20CompositionStartHasRect",
+          _r20CompositionStartHasRect ? 1 : 0);
+  publishSigned(L"WeaselR20CompositionStartLeft",
+                _r20CompositionStartLastRect.left);
+  publishSigned(L"WeaselR20CompositionStartTop",
+                _r20CompositionStartLastRect.top);
+  publishSigned(L"WeaselR20CompositionStartRight",
+                _r20CompositionStartLastRect.right);
+  publishSigned(L"WeaselR20CompositionStartBottom",
+                _r20CompositionStartLastRect.bottom);
+  publish(L"WeaselR20CompositionStartClipped",
+          _r20CompositionStartLastClipped ? 1 : 0);
+
+  publish(L"WeaselR20CompositionEndHasRect", _r20CompositionEndHasRect ? 1 : 0);
+  publishSigned(L"WeaselR20CompositionEndLeft",
+                _r20CompositionEndLastRect.left);
+  publishSigned(L"WeaselR20CompositionEndTop", _r20CompositionEndLastRect.top);
+  publishSigned(L"WeaselR20CompositionEndRight",
+                _r20CompositionEndLastRect.right);
+  publishSigned(L"WeaselR20CompositionEndBottom",
+                _r20CompositionEndLastRect.bottom);
+  publish(L"WeaselR20CompositionEndClipped",
+          _r20CompositionEndLastClipped ? 1 : 0);
 }
 
 /* Composition Window Handling */
