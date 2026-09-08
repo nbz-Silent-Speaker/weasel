@@ -61,6 +61,7 @@ STDMETHODIMP CStartCompositionEditSession::DoEditSession(TfEditCookie ec) {
 
 void WeaselTSF::_StartComposition(com_ptr<ITfContext> pContext,
                                   BOOL fCUASWorkaroundEnabled) {
+  _R19ResetPlacementProbeDiagnostics();
   com_ptr<CStartCompositionEditSession> pStartCompositionEditSession;
   pStartCompositionEditSession.Attach(
       new CStartCompositionEditSession(this, pContext, fCUASWorkaroundEnabled));
@@ -209,8 +210,185 @@ STDMETHODIMP CGetTextExtentEditSession::DoEditSession(TfEditCookie ec) {
   return S_OK;
 }
 
+/* R19 diagnostic-only GetTextExt probe. It never updates candidate position. */
+class CR19PlacementProbeEditSession : public CEditSession {
+ public:
+  CR19PlacementProbeEditSession(com_ptr<WeaselTSF> pTextService,
+                                com_ptr<ITfContext> pContext,
+                                com_ptr<ITfContextView> pContextView,
+                                com_ptr<ITfComposition> pComposition,
+                                DWORD generation)
+      : CEditSession(pTextService, pContext),
+        _pContextView(pContextView),
+        _pComposition(pComposition),
+        _generation(generation) {}
+
+  STDMETHODIMP DoEditSession(TfEditCookie ec);
+
+ private:
+  com_ptr<ITfContextView> _pContextView;
+  com_ptr<ITfComposition> _pComposition;
+  DWORD _generation;
+};
+
+STDMETHODIMP CR19PlacementProbeEditSession::DoEditSession(TfEditCookie ec) {
+  TF_SELECTION selection = {};
+  ULONG fetched = 0;
+  HRESULT hr = _pContext->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &selection,
+                                       &fetched);
+  if (FAILED(hr) || fetched != 1 || !selection.range) {
+    _pTextService->_R19CompletePlacementProbe(
+        _generation, FAILED(hr) ? hr : E_FAIL, nullptr, FALSE);
+    return S_OK;
+  }
+
+  com_ptr<ITfRange> selectionRange;
+  selectionRange.Attach(selection.range);
+  com_ptr<ITfRange> compositionRange;
+  ITfRange* range = selectionRange;
+  if (_pComposition != nullptr &&
+      _pComposition->GetRange(&compositionRange) == S_OK) {
+    compositionRange->Collapse(ec, TF_ANCHOR_START);
+    range = compositionRange;
+  }
+
+  RECT rc = {};
+  BOOL clipped = FALSE;
+  hr = _pContextView->GetTextExt(ec, range, &rc, &clipped);
+  _pTextService->_R19CompletePlacementProbe(
+      _generation, hr, SUCCEEDED(hr) ? &rc : nullptr, clipped);
+  return S_OK;
+}
+
+void WeaselTSF::_R19ResetPlacementProbeDiagnostics() {
+  ++_r19ProbeGeneration;
+  if (!_r19ProbeGeneration)
+    ++_r19ProbeGeneration;
+  _r19ProbePending = false;
+  _r19ProbeRequests = 0;
+  _r19ProbeSubmitted = 0;
+  _r19ProbeCoalesced = 0;
+  _r19ProbeCompleted = 0;
+  _r19ProbeFailures = 0;
+  _r19ProbeRectChanges = 0;
+  _r19LayoutCallbacks = 0;
+  _r19LayoutChanges = 0;
+  _r19NormalPositionRequests = 0;
+  _r19ProbeLastSubmitHr = S_OK;
+  _r19ProbeLastSessionHr = S_OK;
+  _r19ProbeLastTextExtHr = S_OK;
+  _r19ProbeHasRect = false;
+  _r19ProbeLastRect = {};
+  _r19ProbeLastClipped = FALSE;
+  _r19ProbeViewHwnd = nullptr;
+}
+
+void WeaselTSF::_R19PlacementProbeTick(com_ptr<ITfContext> pContext) {
+  ++_r19ProbeRequests;
+  if (_r19ProbePending) {
+    ++_r19ProbeCoalesced;
+    return;
+  }
+  if (!pContext || !_IsComposing()) {
+    ++_r19ProbeFailures;
+    _r19ProbeLastSubmitHr = E_UNEXPECTED;
+    return;
+  }
+
+  com_ptr<ITfContextView> pContextView;
+  const HRESULT viewHr = pContext->GetActiveView(&pContextView);
+  if (FAILED(viewHr) || !pContextView) {
+    ++_r19ProbeFailures;
+    _r19ProbeLastSubmitHr = FAILED(viewHr) ? viewHr : E_FAIL;
+    return;
+  }
+  HWND viewHwnd = nullptr;
+  pContextView->GetWnd(&viewHwnd);
+  _r19ProbeViewHwnd = viewHwnd;
+
+  com_ptr<CR19PlacementProbeEditSession> pEditSession;
+  pEditSession.Attach(new CR19PlacementProbeEditSession(
+      this, pContext, pContextView, _pComposition, _r19ProbeGeneration));
+
+  _r19ProbePending = true;
+  ++_r19ProbeSubmitted;
+  HRESULT sessionHr = E_FAIL;
+  const HRESULT requestHr = pContext->RequestEditSession(
+      _tfClientId, pEditSession, TF_ES_ASYNCDONTCARE | TF_ES_READ, &sessionHr);
+  _r19ProbeLastSubmitHr = requestHr;
+  _r19ProbeLastSessionHr = sessionHr;
+  if (FAILED(requestHr) || (FAILED(sessionHr) && _r19ProbePending)) {
+    _r19ProbePending = false;
+    ++_r19ProbeFailures;
+  }
+}
+
+void WeaselTSF::_R19CompletePlacementProbe(DWORD generation,
+                                           HRESULT textExtHr,
+                                           const RECT* rect,
+                                           BOOL clipped) {
+  if (generation != _r19ProbeGeneration)
+    return;
+  _r19ProbePending = false;
+  ++_r19ProbeCompleted;
+  _r19ProbeLastTextExtHr = textExtHr;
+  _r19ProbeLastClipped = clipped;
+  if (FAILED(textExtHr) || !rect) {
+    ++_r19ProbeFailures;
+    _r19ProbeHasRect = false;
+    return;
+  }
+  if (_r19ProbeHasRect && (rect->left != _r19ProbeLastRect.left ||
+                           rect->top != _r19ProbeLastRect.top ||
+                           rect->right != _r19ProbeLastRect.right ||
+                           rect->bottom != _r19ProbeLastRect.bottom))
+    ++_r19ProbeRectChanges;
+  _r19ProbeLastRect = *rect;
+  _r19ProbeHasRect = true;
+}
+
+void WeaselTSF::_R19PublishPlacementProbeDiagnostics(HWND hwnd) const {
+  if (!hwnd)
+    return;
+  const auto publish = [hwnd](const wchar_t* name, ULONG_PTR value) {
+    ::SetPropW(hwnd, name, reinterpret_cast<HANDLE>(value));
+  };
+  const auto publishSigned = [hwnd](const wchar_t* name, LONG value) {
+    ::SetPropW(hwnd, name,
+               reinterpret_cast<HANDLE>(static_cast<LONG_PTR>(value)));
+  };
+  publish(L"WeaselR19ProbeVersion", 1);
+  publish(L"WeaselR19ProbePulse", ::GetTickCount());
+  publish(L"WeaselR19ProbeGeneration", _r19ProbeGeneration);
+  publish(L"WeaselR19ProbePending", _r19ProbePending ? 1 : 0);
+  publish(L"WeaselR19ProbeRequests", _r19ProbeRequests);
+  publish(L"WeaselR19ProbeSubmitted", _r19ProbeSubmitted);
+  publish(L"WeaselR19ProbeCoalesced", _r19ProbeCoalesced);
+  publish(L"WeaselR19ProbeCompleted", _r19ProbeCompleted);
+  publish(L"WeaselR19ProbeFailures", _r19ProbeFailures);
+  publish(L"WeaselR19ProbeRectChanges", _r19ProbeRectChanges);
+  publish(L"WeaselR19LayoutCallbacks", _r19LayoutCallbacks);
+  publish(L"WeaselR19LayoutChanges", _r19LayoutChanges);
+  publish(L"WeaselR19NormalPositionRequests", _r19NormalPositionRequests);
+  publish(L"WeaselR19ProbeLastSubmitHr",
+          static_cast<DWORD>(_r19ProbeLastSubmitHr));
+  publish(L"WeaselR19ProbeLastSessionHr",
+          static_cast<DWORD>(_r19ProbeLastSessionHr));
+  publish(L"WeaselR19ProbeLastTextExtHr",
+          static_cast<DWORD>(_r19ProbeLastTextExtHr));
+  publish(L"WeaselR19ProbeHasRect", _r19ProbeHasRect ? 1 : 0);
+  publishSigned(L"WeaselR19ProbeLeft", _r19ProbeLastRect.left);
+  publishSigned(L"WeaselR19ProbeTop", _r19ProbeLastRect.top);
+  publishSigned(L"WeaselR19ProbeRight", _r19ProbeLastRect.right);
+  publishSigned(L"WeaselR19ProbeBottom", _r19ProbeLastRect.bottom);
+  publish(L"WeaselR19ProbeClipped", _r19ProbeLastClipped ? 1 : 0);
+  publish(L"WeaselR19ProbeViewHwnd",
+          reinterpret_cast<ULONG_PTR>(_r19ProbeViewHwnd));
+}
+
 /* Composition Window Handling */
 BOOL WeaselTSF::_UpdateCompositionWindow(com_ptr<ITfContext> pContext) {
+  ++_r19NormalPositionRequests;
   com_ptr<ITfContextView> pContextView;
   if (pContext->GetActiveView(&pContextView) != S_OK)
     return FALSE;
@@ -424,6 +602,10 @@ void WeaselTSF::_AbortComposition(bool clear) {
 
 void WeaselTSF::_FinalizeComposition() {
   _pComposition = nullptr;
+  ++_r19ProbeGeneration;
+  if (!_r19ProbeGeneration)
+    ++_r19ProbeGeneration;
+  _r19ProbePending = false;
 }
 
 void WeaselTSF::_SetComposition(com_ptr<ITfComposition> pComposition) {

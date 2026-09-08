@@ -134,6 +134,15 @@ class WeaselTSF : public ITfTextInputProcessorEx,
   void _FinalizeComposition();
   void _AbortComposition(bool clear = true);
 
+  /* R19 diagnostic-only placement probe. Never updates candidate position. */
+  void _R19ResetPlacementProbeDiagnostics();
+  void _R19PlacementProbeTick(com_ptr<ITfContext> pContext);
+  void _R19CompletePlacementProbe(DWORD generation,
+                                  HRESULT textExtHr,
+                                  const RECT* rect,
+                                  BOOL clipped);
+  void _R19PublishPlacementProbeDiagnostics(HWND hwnd) const;
+
   /* Language bar */
   HWND _GetFocusedContextWindow();
   void _HandleLangBarMenuSelect(UINT wID);
@@ -231,6 +240,26 @@ class WeaselTSF : public ITfTextInputProcessorEx,
 
   /* CUAS Candidate Window Position Workaround */
   BOOL _fCUASWorkaroundTested, _fCUASWorkaroundEnabled;
+
+  /* R19 diagnostic-only placement probe state. */
+  bool _r19ProbePending = false;
+  DWORD _r19ProbeGeneration = 0;
+  DWORD _r19ProbeRequests = 0;
+  DWORD _r19ProbeSubmitted = 0;
+  DWORD _r19ProbeCoalesced = 0;
+  DWORD _r19ProbeCompleted = 0;
+  DWORD _r19ProbeFailures = 0;
+  DWORD _r19ProbeRectChanges = 0;
+  DWORD _r19LayoutCallbacks = 0;
+  DWORD _r19LayoutChanges = 0;
+  DWORD _r19NormalPositionRequests = 0;
+  HRESULT _r19ProbeLastSubmitHr = S_OK;
+  HRESULT _r19ProbeLastSessionHr = S_OK;
+  HRESULT _r19ProbeLastTextExtHr = S_OK;
+  bool _r19ProbeHasRect = false;
+  RECT _r19ProbeLastRect = {};
+  BOOL _r19ProbeLastClipped = FALSE;
+  HWND _r19ProbeViewHwnd = nullptr;
 
   /* Weasel Related */
   weasel::Client m_client;

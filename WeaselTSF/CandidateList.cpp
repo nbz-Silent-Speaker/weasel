@@ -574,13 +574,15 @@ void CCandidateList::_PublishOwnerFollowDiagnostics() {
     ::SetPropW(_followWindow, name,
                reinterpret_cast<HANDLE>(static_cast<UINT_PTR>(value)));
   };
-  publish(L"WeaselOwnerFollowPolicy", 1);
-  publish(L"WeaselOwnerFollowScope", 2);  // Settings + installed Store (R3).
+  publish(L"WeaselOwnerFollowPolicy", _settingsFollowEnabled ? 1 : 0);
+  publish(L"WeaselOwnerFollowScope",
+          _settingsFollowEnabled ? 2 : 0);  // Settings + installed Store (R3).
   publish(L"WeaselOwnerSourceUpdates", _followSourceUpdates);
   publish(L"WeaselOwnerTranslations", _followTranslations);
   publish(L"WeaselOwnerRepeatedSources", _followRepeatedSources);
   publish(L"WeaselOwnerLayoutInvalidations", _followLayoutInvalidations);
   publish(L"WeaselOwnerReadFailures", _followReadFailures);
+  _tsf->_R19PublishPlacementProbeDiagnostics(_followWindow);
 }
 
 LRESULT CALLBACK CCandidateList::_OwnerFollowWndProc(HWND hwnd,
@@ -624,8 +626,8 @@ LRESULT CALLBACK CCandidateList::_OwnerFollowWndProc(HWND hwnd,
 }
 
 void CCandidateList::_StartOwnerFollow() {
-  if (!_settingsFollowEnabled || !_uiStarted || !_pbShow || !_followView ||
-      !_ui || !_ui->IsShown() || !_ui->status().composing || _followTimerActive)
+  if (!_uiStarted || !_pbShow || !_ui || !_ui->IsShown() ||
+      !_ui->status().composing || _followTimerActive)
     return;
   if (!_followWindow) {
     WNDCLASSEXW wc = {};
@@ -651,9 +653,11 @@ void CCandidateList::_StartOwnerFollow() {
   _followTimerActive = ::SetTimer(_followWindow, kOwnerFollowTimer,
                                   kOwnerFollowIntervalMs, nullptr) != 0;
   _PublishOwnerFollowDiagnostics();
-  // The initial TSF position can arrive before _MakeUIWindow. Request one
-  // fresh anchor if necessary; never poll the text store on every timer tick.
-  if (_followTimerActive && !_haveEffectiveAnchor && _pContextDocument)
+  // Preserve the existing Settings/Store owner-anchor bootstrap. R19's
+  // diagnostic timer probes GetTextExt separately and never moves the
+  // candidate.
+  if (_settingsFollowEnabled && _followTimerActive && !_haveEffectiveAnchor &&
+      _pContextDocument)
     _tsf->_UpdateCompositionWindow(_pContextDocument);
 }
 
@@ -675,9 +679,17 @@ void CCandidateList::_StopOwnerFollow(bool destroyWindow) {
 }
 
 void CCandidateList::_TickOwnerFollow() {
-  if (!_settingsFollowEnabled || !_uiStarted || !_pbShow || !_ui ||
-      !_ui->IsShown() || !_ui->status().composing || !_pContextDocument)
+  if (!_uiStarted || !_pbShow || !_ui || !_ui->IsShown() ||
+      !_ui->status().composing || !_pContextDocument)
     return;
+
+  // R19 is diagnostic only: actively query the authoritative TSF text extent,
+  // but do not feed the result into UpdateInputPosition or MoveTo.
+  _tsf->_R19PlacementProbeTick(_pContextDocument);
+  _PublishOwnerFollowDiagnostics();
+  if (!_settingsFollowEnabled)
+    return;
+
   candidate_motion::OwnerGeometry owner;
   if (!_ReadOwnerGeometry(owner)) {
     ++_followReadFailures;
