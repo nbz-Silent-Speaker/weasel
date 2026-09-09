@@ -610,6 +610,8 @@ constexpr wchar_t kWeaselAcrylicAppSdkActiveProperty[] =
     L"WeaselAcrylicAppSdkActive";
 constexpr wchar_t kWeaselAcrylicSystemCompositionActiveProperty[] =
     L"WeaselAcrylicSystemCompositionActive";
+constexpr wchar_t kWeaselAcrylicForcedSystemCompositionActiveProperty[] =
+    L"WeaselAcrylicForcedSystemCompositionActive";
 constexpr wchar_t kWeaselAcrylicSystemCompositionCornerRadiusProperty[] =
     L"WeaselAcrylicSystemCompositionCornerRadius";
 constexpr wchar_t kAcrylicLocalClipWidthProperty[] =
@@ -833,7 +835,10 @@ AcrylicAppSdkBridge g_acrylicAppSdkBridge;
 
 bool AppSdkAcrylicNeedsExplicitClip(HWND backdrop) {
   return backdrop && ::GetPropW(backdrop, kWeaselAcrylicAppSdkActiveProperty) &&
-         !::GetPropW(backdrop, kWeaselAcrylicSystemCompositionActiveProperty) &&
+         (!::GetPropW(backdrop,
+                      kWeaselAcrylicSystemCompositionActiveProperty) ||
+          ::GetPropW(backdrop,
+                     kWeaselAcrylicForcedSystemCompositionActiveProperty)) &&
          !::GetPropW(backdrop, kAcrylicNativeDwmProperty);
 }
 
@@ -2566,7 +2571,9 @@ void WeaselPanel::_UpdateAcrylicBackdropTheme() {
                         &useDarkMode, sizeof(useDarkMode));
 
   if (::GetPropW(m_acrylicBackdrop,
-                 kWeaselAcrylicSystemCompositionActiveProperty)) {
+                 kWeaselAcrylicSystemCompositionActiveProperty) &&
+      !::GetPropW(m_acrylicBackdrop,
+                  kWeaselAcrylicForcedSystemCompositionActiveProperty)) {
     const int radius = DPI_SCALE(m_style.round_corner_ex);
     if (radius > 0) {
       ::SetPropW(m_acrylicBackdrop,
@@ -2695,6 +2702,10 @@ void WeaselPanel::_SyncAcrylicBackdrop() {
                      contentWidth, contentHeight,
                      SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER);
     }
+    // R22 A and B consume the same completed host geometry and local radius.
+    // Refresh after publication, including radius-only changes and fallback.
+    g_acrylicAppSdkBridge.SetDarkMode(
+        m_acrylicBackdrop, IsDarkColor(m_style.back_color) ? TRUE : FALSE);
     return;
   }
 

@@ -55,6 +55,16 @@ constexpr wchar_t kAppSdkRootClipHeight[] =
     L"WeaselAcrylicAppSdkRootClipHeight";
 constexpr wchar_t kAppSdkRootClipRadius[] =
     L"WeaselAcrylicAppSdkRootClipRadius";
+constexpr wchar_t kForceSystemCompositionEnvironment[] =
+    L"WEASEL_R22_FORCE_SYSTEM_COMPOSITION";
+constexpr wchar_t kForcedSystemCompositionActive[] =
+    L"WeaselAcrylicForcedSystemCompositionActive";
+constexpr wchar_t kForcedSystemCompositionClipWidth[] =
+    L"WeaselAcrylicForcedSystemCompositionClipWidth";
+constexpr wchar_t kForcedSystemCompositionClipHeight[] =
+    L"WeaselAcrylicForcedSystemCompositionClipHeight";
+constexpr wchar_t kForcedSystemCompositionClipRadius[] =
+    L"WeaselAcrylicForcedSystemCompositionClipRadius";
 constexpr wchar_t kAppSdkFailureStage[] = L"WeaselAcrylicAppSdkFailureStage";
 constexpr wchar_t kAppSdkFailureHresult[] =
     L"WeaselAcrylicAppSdkFailureHresult";
@@ -171,6 +181,7 @@ enum class TargetMode {
 struct Target {
   HWND hwnd = nullptr;
   TargetMode mode = TargetMode::AppSdkAcrylic;
+  bool forcedSystemComposition = false;
   winrt::Windows::UI::Composition::Compositor compositor{nullptr};
   winrt::Windows::UI::Composition::Desktop::DesktopWindowTarget desktop{
       nullptr};
@@ -182,7 +193,7 @@ struct Target {
   winrt::Microsoft::UI::Composition::SystemBackdrops::DesktopAcrylicController
       acrylic{nullptr};
 
-  // System Windows.UI.Composition fallback used only by SearchHost.
+  // System Windows.UI.Composition: SearchHost fallback or opt-in R22 route.
   winrt::Windows::UI::Composition::CompositionBackdropBrush hostBackdrop{
       nullptr};
   winrt::Windows::UI::Composition::CompositionEffectFactory blurFactory{
@@ -220,6 +231,10 @@ struct Target {
       ::RemovePropW(hwnd, kAppSdkRootClipWidth);
       ::RemovePropW(hwnd, kAppSdkRootClipHeight);
       ::RemovePropW(hwnd, kAppSdkRootClipRadius);
+      ::RemovePropW(hwnd, kForcedSystemCompositionActive);
+      ::RemovePropW(hwnd, kForcedSystemCompositionClipWidth);
+      ::RemovePropW(hwnd, kForcedSystemCompositionClipHeight);
+      ::RemovePropW(hwnd, kForcedSystemCompositionClipRadius);
     }
 
     if (root) {
@@ -272,6 +287,17 @@ struct Target {
   ~Target() { Reset(); }
 };
 
+int DecodeEncodedIntProperty(HWND hwnd, const wchar_t* name) {
+  const ULONG_PTR stored = reinterpret_cast<ULONG_PTR>(::GetPropW(hwnd, name));
+  return stored ? static_cast<int>(stored - 1) : -1;
+}
+
+void SetEncodedIntProperty(HWND hwnd, const wchar_t* name, int value) {
+  ::SetPropW(hwnd, name,
+             reinterpret_cast<HANDLE>(
+                 static_cast<ULONG_PTR>(static_cast<unsigned>(value) + 1)));
+}
+
 void UpdateSystemCompositionClip(Target& target) {
   if (target.mode != TargetMode::SystemComposition || !target.hwnd ||
       !target.clipGeometry)
@@ -290,6 +316,27 @@ void UpdateSystemCompositionClip(Target& target) {
 
   float radius = static_cast<float>(reinterpret_cast<ULONG_PTR>(
       ::GetPropW(target.hwnd, kSystemCompositionCornerRadius)));
+  if (target.forcedSystemComposition) {
+    const int localWidth =
+        DecodeEncodedIntProperty(target.hwnd, kLocalClipWidth);
+    const int localHeight =
+        DecodeEncodedIntProperty(target.hwnd, kLocalClipHeight);
+    const int localRadius =
+        DecodeEncodedIntProperty(target.hwnd, kLocalClipRadius);
+    // Attach precedes the first geometry publication. Do not substitute the
+    // SearchHost radius or report stale geometry as a valid R22 sample.
+    if (width <= 0.0f || height <= 0.0f || localWidth != width ||
+        localHeight != height || localRadius < 0) {
+      target.clipGeometry.Size({0.0f, 0.0f});
+      target.clipGeometry.CornerRadius({0.0f, 0.0f});
+      ::RemovePropW(target.hwnd, kForcedSystemCompositionClipWidth);
+      ::RemovePropW(target.hwnd, kForcedSystemCompositionClipHeight);
+      ::RemovePropW(target.hwnd, kForcedSystemCompositionClipRadius);
+      return;
+    }
+    radius = static_cast<float>(localRadius);
+  }
+
   const float radiusLimit = (width < height ? width : height) * 0.5f;
   if (radius < 0.0f)
     radius = 0.0f;
@@ -298,11 +345,15 @@ void UpdateSystemCompositionClip(Target& target) {
 
   target.clipGeometry.Size({width, height});
   target.clipGeometry.CornerRadius({radius, radius});
-}
 
-int DecodeLocalClipProperty(HWND hwnd, const wchar_t* name) {
-  const ULONG_PTR stored = reinterpret_cast<ULONG_PTR>(::GetPropW(hwnd, name));
-  return stored ? static_cast<int>(stored - 1) : -1;
+  if (target.forcedSystemComposition) {
+    SetEncodedIntProperty(target.hwnd, kForcedSystemCompositionClipWidth,
+                          static_cast<int>(width));
+    SetEncodedIntProperty(target.hwnd, kForcedSystemCompositionClipHeight,
+                          static_cast<int>(height));
+    SetEncodedIntProperty(target.hwnd, kForcedSystemCompositionClipRadius,
+                          static_cast<int>(radius));
+  }
 }
 
 void ClearAppSdkRootClip(Target& target) {
@@ -325,10 +376,10 @@ void UpdateAppSdkRootClip(Target& target) {
   const int width = client.right - client.left;
   const int height = client.bottom - client.top;
   const int requestedWidth =
-      DecodeLocalClipProperty(target.hwnd, kLocalClipWidth);
+      DecodeEncodedIntProperty(target.hwnd, kLocalClipWidth);
   const int requestedHeight =
-      DecodeLocalClipProperty(target.hwnd, kLocalClipHeight);
-  int radius = DecodeLocalClipProperty(target.hwnd, kLocalClipRadius);
+      DecodeEncodedIntProperty(target.hwnd, kLocalClipHeight);
+  int radius = DecodeEncodedIntProperty(target.hwnd, kLocalClipRadius);
 
   if (width <= 0 || height <= 0 || requestedWidth != width ||
       requestedHeight != height || radius < 0) {
@@ -455,6 +506,31 @@ bool IsSearchHostProcess() noexcept {
   return _wcsicmp(file, L"SearchHost.exe") == 0;
 }
 
+bool IsWeaselServerProcess() noexcept {
+  wchar_t image[32768] = {};
+  const DWORD length = ::GetModuleFileNameW(nullptr, image, _countof(image));
+  if (!length || length >= _countof(image))
+    return false;
+  const wchar_t* file = image;
+  for (DWORD i = 0; i < length; ++i) {
+    if (image[i] == L'\\' || image[i] == L'/')
+      file = image + i + 1;
+  }
+  return _wcsicmp(file, L"WeaselServer.exe") == 0;
+}
+
+bool ForceOrdinarySystemCompositionDiagnostic() noexcept {
+  // R22 is off by default. Only an exact process-environment value of "1"
+  // enables B at target creation; restart the test host without it for A.
+  // WeaselServer and packaged Settings/Store/Search keep their normal routes.
+  if (g_runtimeRoute != 1 || IsWeaselServerProcess())
+    return false;
+  wchar_t value[2] = {};
+  return ::GetEnvironmentVariableW(kForceSystemCompositionEnvironment, value,
+                                   _countof(value)) == 1 &&
+         value[0] == L'1';
+}
+
 HRESULT EnsureSystemCompositionThread(ThreadState& state) noexcept {
   if (!state.roOwned) {
     const HRESULT hr = ::RoInitialize(RO_INIT_SINGLETHREADED);
@@ -473,7 +549,8 @@ HRESULT EnsureSystemCompositionThread(ThreadState& state) noexcept {
 
 BOOL TryAttachSystemComposition(ThreadState& state,
                                 HWND hwnd,
-                                BOOL darkMode) noexcept {
+                                BOOL darkMode,
+                                bool forced = false) noexcept {
   try {
     Diagnose(130);
     const HRESULT prepared = EnsureSystemCompositionThread(state);
@@ -501,6 +578,7 @@ BOOL TryAttachSystemComposition(ThreadState& state,
     auto target = std::make_unique<Target>();
     target->hwnd = hwnd;
     target->mode = TargetMode::SystemComposition;
+    target->forcedSystemComposition = forced;
     target->dark = darkMode;
 
     Diagnose(140);
@@ -550,6 +628,10 @@ BOOL TryAttachSystemComposition(ThreadState& state,
     winrt::check_hresult(ValidateWindow(hwnd));
     ::SetPropW(hwnd, kSystemCompositionActive,
                reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(1)));
+    if (forced) {
+      ::SetPropW(hwnd, kForcedSystemCompositionActive,
+                 reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(1)));
+    }
     ::SetPropW(hwnd, kSystemCompositionStage,
                reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(180)));
     ::SetPropW(hwnd, kSystemCompositionHresult, nullptr);
@@ -823,6 +905,15 @@ WeaselAcrylicAppSdkAttach(HWND hwnd, BOOL darkMode) {
         return TryAttachSystemComposition(state, hwnd, darkMode);
       return FALSE;
     }
+
+    if (ForceOrdinarySystemCompositionDiagnostic()) {
+      if (TryAttachSystemComposition(state, hwnd, darkMode, true)) {
+        return TRUE;
+      }
+      ::RemovePropW(hwnd, kForcedSystemCompositionActive);
+      // Fail safe: continue into the existing AppSDK Desktop Acrylic route.
+    }
+
     using namespace winrt::Microsoft::UI::Composition::SystemBackdrops;
     Diagnose(10);
     const bool supported = g_runtimeRoute == 2
