@@ -612,6 +612,12 @@ constexpr wchar_t kWeaselAcrylicSystemCompositionActiveProperty[] =
     L"WeaselAcrylicSystemCompositionActive";
 constexpr wchar_t kWeaselAcrylicSystemCompositionCornerRadiusProperty[] =
     L"WeaselAcrylicSystemCompositionCornerRadius";
+constexpr wchar_t kAcrylicLocalClipWidthProperty[] =
+    L"WeaselAcrylicLocalClipWidth";
+constexpr wchar_t kAcrylicLocalClipHeightProperty[] =
+    L"WeaselAcrylicLocalClipHeight";
+constexpr wchar_t kAcrylicLocalClipRadiusProperty[] =
+    L"WeaselAcrylicLocalClipRadius";
 constexpr wchar_t kAcrylicStageProperty[] = L"WeaselAcrylicAppSdkStage";
 constexpr wchar_t kAcrylicHrProperty[] = L"WeaselAcrylicAppSdkHresult";
 constexpr wchar_t kAcrylicPolicyProperty[] = L"WeaselAcrylicAppSdkPolicy";
@@ -824,6 +830,79 @@ class AcrylicAppSdkBridge {
 };
 
 AcrylicAppSdkBridge g_acrylicAppSdkBridge;
+
+bool AppSdkAcrylicNeedsExplicitClip(HWND backdrop) {
+  return backdrop && ::GetPropW(backdrop, kWeaselAcrylicAppSdkActiveProperty) &&
+         !::GetPropW(backdrop, kWeaselAcrylicSystemCompositionActiveProperty) &&
+         !::GetPropW(backdrop, kAcrylicNativeDwmProperty);
+}
+
+int AcrylicClipProperty(HWND backdrop, const wchar_t* name) {
+  const ULONG_PTR stored =
+      reinterpret_cast<ULONG_PTR>(::GetPropW(backdrop, name));
+  return stored ? static_cast<int>(stored - 1) : -1;
+}
+
+void SetAcrylicClipProperty(HWND backdrop, const wchar_t* name, int value) {
+  ::SetPropW(backdrop, name,
+             reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(value + 1)));
+}
+
+void ClearAcrylicExplicitClip(HWND backdrop, bool redraw) {
+  if (!backdrop)
+    return;
+  if (::GetPropW(backdrop, kAcrylicLocalClipWidthProperty) ||
+      ::GetPropW(backdrop, kAcrylicLocalClipHeightProperty) ||
+      ::GetPropW(backdrop, kAcrylicLocalClipRadiusProperty))
+    ::SetWindowRgn(backdrop, nullptr, redraw ? TRUE : FALSE);
+  ::RemovePropW(backdrop, kAcrylicLocalClipWidthProperty);
+  ::RemovePropW(backdrop, kAcrylicLocalClipHeightProperty);
+  ::RemovePropW(backdrop, kAcrylicLocalClipRadiusProperty);
+}
+
+bool AcrylicExplicitClipMatches(HWND backdrop,
+                                int width,
+                                int height,
+                                int radius) {
+  return AcrylicClipProperty(backdrop, kAcrylicLocalClipWidthProperty) ==
+             width &&
+         AcrylicClipProperty(backdrop, kAcrylicLocalClipHeightProperty) ==
+             height &&
+         AcrylicClipProperty(backdrop, kAcrylicLocalClipRadiusProperty) ==
+             radius;
+}
+
+bool ApplyAcrylicExplicitClip(HWND backdrop,
+                              int width,
+                              int height,
+                              int radius) {
+  if (!backdrop || width <= 0 || height <= 0)
+    return false;
+  radius = max(0, min(radius, min(width, height) / 2));
+  if (AcrylicExplicitClipMatches(backdrop, width, height, radius))
+    return true;
+
+  if (radius == 0) {
+    if (!::SetWindowRgn(backdrop, nullptr, TRUE))
+      return false;
+  } else {
+    const int diameter = radius * 2;
+    HRGN region =
+        ::CreateRoundRectRgn(0, 0, width + 1, height + 1, diameter, diameter);
+    if (!region)
+      return false;
+    if (!::SetWindowRgn(backdrop, region, TRUE)) {
+      ::DeleteObject(region);
+      return false;
+    }
+    // After a successful SetWindowRgn, Windows owns the region handle.
+  }
+
+  SetAcrylicClipProperty(backdrop, kAcrylicLocalClipWidthProperty, width);
+  SetAcrylicClipProperty(backdrop, kAcrylicLocalClipHeightProperty, height);
+  SetAcrylicClipProperty(backdrop, kAcrylicLocalClipRadiusProperty, radius);
+  return true;
+}
 
 // Phase2 R1: optional asynchronous compatible-client -> WeaselServer lease.
 // Only HWNDs and integer tokens cross processes. The client publishes the final
@@ -1598,6 +1677,15 @@ void ApplyExternalSnapshot(HWND hwnd,
     if (::IsWindowVisible(hwnd) && !state->active)
       return;  // Never borrow a backdrop displaying the server's own panel.
     EndExternalServerLease(hwnd, state);
+    // External Settings/Store/Search leases still publish the historical
+    // ContentRect geometry. Do not leave a local candidate's expanded explicit
+    // clip on the shared server Acrylic HWND.
+    if (AppSdkAcrylicNeedsExplicitClip(hwnd)) {
+      ClearAcrylicExplicitClip(hwnd, false);
+      int corner = kDwmwcpRound;
+      ::DwmSetWindowAttribute(hwnd, kDwmaWindowCornerPreference, &corner,
+                              sizeof(corner));
+    }
     state->active = true;
     state->peer = client;
     state->candidate = snap.candidate;
@@ -2358,7 +2446,10 @@ bool WeaselPanel::_CreateAcrylicBackdrop() {
     const bool systemComposition =
         ::GetPropW(m_acrylicBackdrop,
                    kWeaselAcrylicSystemCompositionActiveProperty) != nullptr;
-    int corner = systemComposition ? kDwmwcpDoNotRound : kDwmwcpRound;
+    // SystemComposition already owns an explicit rounded clip. AppSDK Acrylic
+    // receives its exact foreground-matched clip during _SyncAcrylicBackdrop().
+    // In both cases, disable Windows' independent system corner radius.
+    int corner = kDwmwcpDoNotRound;
     ::DwmSetWindowAttribute(m_acrylicBackdrop, kDwmaWindowCornerPreference,
                             &corner, sizeof(corner));
     SetAcrylicCreationDiagnostic(m_hWnd, systemComposition ? 180 : 100, S_OK);
@@ -2417,6 +2508,9 @@ bool WeaselPanel::_CreateAcrylicBackdrop() {
     ::SetPropW(m_acrylicBackdrop, kWeaselAcrylicAppSdkActiveProperty,
                reinterpret_cast<HANDLE>(static_cast<INT_PTR>(1)));
     m_acrylicBackdropEnabled = true;
+    int explicitCorner = kDwmwcpDoNotRound;
+    ::DwmSetWindowAttribute(m_acrylicBackdrop, kDwmaWindowCornerPreference,
+                            &explicitCorner, sizeof(explicitCorner));
     SetAcrylicCreationDiagnostic(m_hWnd, 100, S_OK);
     if (m_in_server)
       PrepareExternalServer(m_acrylicBackdrop);
@@ -2451,6 +2545,7 @@ void WeaselPanel::_DestroyAcrylicBackdrop() {
   ::RemovePropW(m_hWnd, kExtCoordinator);
   m_acrylicBackdropEnabled = false;
   if (m_acrylicBackdrop) {
+    ClearAcrylicExplicitClip(m_acrylicBackdrop, false);
     ::RemovePropW(m_acrylicBackdrop, kWeaselAcrylicAppSdkActiveProperty);
     ::RemovePropW(m_acrylicBackdrop,
                   kWeaselAcrylicSystemCompositionCornerRadiusProperty);
@@ -2481,6 +2576,10 @@ void WeaselPanel::_UpdateAcrylicBackdropTheme() {
       ::RemovePropW(m_acrylicBackdrop,
                     kWeaselAcrylicSystemCompositionCornerRadiusProperty);
     }
+  }
+
+  if (::GetPropW(m_acrylicBackdrop, kWeaselAcrylicAppSdkActiveProperty) &&
+      !::GetPropW(m_acrylicBackdrop, kAcrylicNativeDwmProperty)) {
     int corner = kDwmwcpDoNotRound;
     ::DwmSetWindowAttribute(m_acrylicBackdrop, kDwmaWindowCornerPreference,
                             &corner, sizeof(corner));
@@ -2517,19 +2616,21 @@ void WeaselPanel::_SyncAcrylicBackdrop() {
   GetWindowRect(&panelRect);
   CRect contentRect = m_layout->GetContentRect();
 
-  const int x = panelRect.left + contentRect.left;
-  const int y = panelRect.top + contentRect.top;
-  const int width = contentRect.Width();
-  const int height = contentRect.Height();
+  const int contentX = panelRect.left + contentRect.left;
+  const int contentY = panelRect.top + contentRect.top;
+  const int contentWidth = contentRect.Width();
+  const int contentHeight = contentRect.Height();
 
-  if (width <= 0 || height <= 0) {
+  if (contentWidth <= 0 || contentHeight <= 0) {
     HideAcrylicBackdrop();
     return;
   }
 
   if (!m_acrylicBackdropEnabled) {
-    // Publish the final content rectangle without waiting for another process.
-    SyncExternalClient(m_acrylicBackdrop, m_hWnd, this, x, y, width, height,
+    // External compatibility clients keep the established ContentRect protocol.
+    // The shared server host is restored to DWM rounding when a lease begins.
+    SyncExternalClient(m_acrylicBackdrop, m_hWnd, this, contentX, contentY,
+                       contentWidth, contentHeight,
                        IsDarkColor(m_style.back_color) ? TRUE : FALSE);
     return;
   }
@@ -2543,16 +2644,59 @@ void WeaselPanel::_SyncAcrylicBackdrop() {
   if (localState && !localState->panel)
     return;
 
+  const bool explicitClip = AppSdkAcrylicNeedsExplicitClip(m_acrylicBackdrop);
+  const int borderPx = explicitClip && COLORNOTTRANSPARENT(m_style.border_color)
+                           ? max(0, DPI_SCALE(m_style.border))
+                           : 0;
+  const int envelope = (borderPx + 1) / 2;
+  const int x = contentX - envelope;
+  const int y = contentY - envelope;
+  const int width = contentWidth + envelope * 2;
+  const int height = contentHeight + envelope * 2;
+  const int radius =
+      explicitClip ? max(0, DPI_SCALE(m_style.round_corner_ex) + envelope) : 0;
+
+  const bool geometryMatches = LocalAcrylicGeometryMatches(
+      m_acrylicBackdrop, m_hWnd, x, y, width, height);
+  const bool clipMatches =
+      !explicitClip ||
+      AcrylicExplicitClipMatches(m_acrylicBackdrop, width, height, radius);
+
   // Skip duplicate geometry/visibility/Z-order work, including notifications
-  // caused by our own SetWindowPos. Re-check the HWNDs, not a stale cache.
-  if (LocalAcrylicGeometryMatches(m_acrylicBackdrop, m_hWnd, x, y, width,
-                                  height))
+  // caused by our own SetWindowPos. The clip is part of that visual geometry:
+  // style-only border/radius changes must still refresh it.
+  if (geometryMatches && clipMatches)
     return;
 
-  // Keep the DWM Acrylic host immediately below the existing layered
-  // Weasel candidate panel.
-  ::SetWindowPos(m_acrylicBackdrop, m_hWnd, x, y, width, height,
-                 SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER);
+  if (!geometryMatches) {
+    // Keep the Acrylic host immediately below the existing layered candidate.
+    ::SetWindowPos(m_acrylicBackdrop, m_hWnd, x, y, width, height,
+                   SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER);
+  }
+
+  if (explicitClip) {
+    // Proven corner model:
+    // 1) disable DWM's unrelated system radius;
+    // 2) cover the centered GDI+ border's real outer alpha envelope; and
+    // 3) clip the Acrylic HWND to the same outer round-rect.
+    int corner = kDwmwcpDoNotRound;
+    const HRESULT cornerHr =
+        ::DwmSetWindowAttribute(m_acrylicBackdrop, kDwmaWindowCornerPreference,
+                                &corner, sizeof(corner));
+    if (FAILED(cornerHr) ||
+        !ApplyAcrylicExplicitClip(m_acrylicBackdrop, width, height, radius)) {
+      // Fail safe to the pre-fix presentation instead of exposing an unrounded
+      // expanded Acrylic rectangle.
+      ClearAcrylicExplicitClip(m_acrylicBackdrop, false);
+      corner = kDwmwcpRound;
+      ::DwmSetWindowAttribute(m_acrylicBackdrop, kDwmaWindowCornerPreference,
+                              &corner, sizeof(corner));
+      ::SetWindowPos(m_acrylicBackdrop, m_hWnd, contentX, contentY,
+                     contentWidth, contentHeight,
+                     SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER);
+    }
+    return;
+  }
 
   // The system Composition clip uses the real client size. Refresh once more
   // after SetWindowPos so first-show and resize geometry match immediately.
