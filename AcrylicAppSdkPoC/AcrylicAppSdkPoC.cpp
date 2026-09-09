@@ -45,6 +45,16 @@ constexpr wchar_t kSystemCompositionHostBrushHr[] =
     L"WeaselAcrylicSystemCompositionHostBrushHresult";
 constexpr wchar_t kSystemCompositionCornerRadius[] =
     L"WeaselAcrylicSystemCompositionCornerRadius";
+constexpr wchar_t kLocalClipWidth[] = L"WeaselAcrylicLocalClipWidth";
+constexpr wchar_t kLocalClipHeight[] = L"WeaselAcrylicLocalClipHeight";
+constexpr wchar_t kLocalClipRadius[] = L"WeaselAcrylicLocalClipRadius";
+constexpr wchar_t kAppSdkRootClipActive[] =
+    L"WeaselAcrylicAppSdkRootClipActive";
+constexpr wchar_t kAppSdkRootClipWidth[] = L"WeaselAcrylicAppSdkRootClipWidth";
+constexpr wchar_t kAppSdkRootClipHeight[] =
+    L"WeaselAcrylicAppSdkRootClipHeight";
+constexpr wchar_t kAppSdkRootClipRadius[] =
+    L"WeaselAcrylicAppSdkRootClipRadius";
 constexpr wchar_t kAppSdkFailureStage[] = L"WeaselAcrylicAppSdkFailureStage";
 constexpr wchar_t kAppSdkFailureHresult[] =
     L"WeaselAcrylicAppSdkFailureHresult";
@@ -206,6 +216,17 @@ struct Target {
       ::RemovePropW(hwnd, kSystemCompositionStage);
       ::RemovePropW(hwnd, kSystemCompositionHresult);
       ::RemovePropW(hwnd, kSystemCompositionHostBrushHr);
+      ::RemovePropW(hwnd, kAppSdkRootClipActive);
+      ::RemovePropW(hwnd, kAppSdkRootClipWidth);
+      ::RemovePropW(hwnd, kAppSdkRootClipHeight);
+      ::RemovePropW(hwnd, kAppSdkRootClipRadius);
+    }
+
+    if (root) {
+      try {
+        root.Clip(nullptr);
+      } catch (...) {
+      }
     }
 
     if (acrylic) {
@@ -277,6 +298,68 @@ void UpdateSystemCompositionClip(Target& target) {
 
   target.clipGeometry.Size({width, height});
   target.clipGeometry.CornerRadius({radius, radius});
+}
+
+int DecodeLocalClipProperty(HWND hwnd, const wchar_t* name) {
+  const ULONG_PTR stored = reinterpret_cast<ULONG_PTR>(::GetPropW(hwnd, name));
+  return stored ? static_cast<int>(stored - 1) : -1;
+}
+
+void ClearAppSdkRootClip(Target& target) {
+  if (target.root)
+    target.root.Clip(nullptr);
+  ::RemovePropW(target.hwnd, kAppSdkRootClipActive);
+  ::RemovePropW(target.hwnd, kAppSdkRootClipWidth);
+  ::RemovePropW(target.hwnd, kAppSdkRootClipHeight);
+  ::RemovePropW(target.hwnd, kAppSdkRootClipRadius);
+}
+
+void UpdateAppSdkRootClip(Target& target) {
+  if (target.mode != TargetMode::AppSdkAcrylic || !target.hwnd || !target.root)
+    return;
+
+  RECT client{};
+  if (!::GetClientRect(target.hwnd, &client))
+    winrt::throw_hresult(LastWin32Error());
+
+  const int width = client.right - client.left;
+  const int height = client.bottom - client.top;
+  const int requestedWidth =
+      DecodeLocalClipProperty(target.hwnd, kLocalClipWidth);
+  const int requestedHeight =
+      DecodeLocalClipProperty(target.hwnd, kLocalClipHeight);
+  int radius = DecodeLocalClipProperty(target.hwnd, kLocalClipRadius);
+
+  if (width <= 0 || height <= 0 || requestedWidth != width ||
+      requestedHeight != height || radius < 0) {
+    ClearAppSdkRootClip(target);
+    return;
+  }
+
+  radius = min(radius, min(width, height) / 2);
+  if (!target.clipGeometry) {
+    target.clipGeometry = target.compositor.CreateRoundedRectangleGeometry();
+    target.roundedClip =
+        target.compositor.CreateGeometricClip(target.clipGeometry);
+  }
+
+  target.clipGeometry.Size(
+      {static_cast<float>(width), static_cast<float>(height)});
+  target.clipGeometry.CornerRadius(
+      {static_cast<float>(radius), static_cast<float>(radius)});
+  target.root.Clip(target.roundedClip);
+
+  ::SetPropW(target.hwnd, kAppSdkRootClipActive,
+             reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(1)));
+  ::SetPropW(target.hwnd, kAppSdkRootClipWidth,
+             reinterpret_cast<HANDLE>(
+                 static_cast<ULONG_PTR>(static_cast<unsigned>(width) + 1)));
+  ::SetPropW(target.hwnd, kAppSdkRootClipHeight,
+             reinterpret_cast<HANDLE>(
+                 static_cast<ULONG_PTR>(static_cast<unsigned>(height) + 1)));
+  ::SetPropW(target.hwnd, kAppSdkRootClipRadius,
+             reinterpret_cast<HANDLE>(
+                 static_cast<ULONG_PTR>(static_cast<unsigned>(radius) + 1)));
 }
 
 struct ThreadState {
@@ -804,6 +887,7 @@ WeaselAcrylicAppSdkAttach(HWND hwnd, BOOL darkMode) {
     if (!target->acrylic.SetTarget(
             winrt::Microsoft::UI::GetWindowIdFromWindow(hwnd), target->desktop))
       winrt::throw_hresult(E_FAIL);
+    UpdateAppSdkRootClip(*target);
     winrt::check_hresult(ValidateWindow(hwnd));
     state.targets.emplace(hwnd, std::move(target));
     Diagnose(100);
@@ -855,6 +939,13 @@ WeaselAcrylicAppSdkSetWindowTheme(HWND hwnd, BOOL darkMode) {
       Diagnose(75, E_UNEXPECTED);
     }
     return;
+  }
+  try {
+    UpdateAppSdkRootClip(*it->second);
+  } catch (winrt::hresult_error const& error) {
+    Diagnose(76, error.code(), error.message().c_str());
+  } catch (...) {
+    Diagnose(76, E_UNEXPECTED);
   }
   if (it->second->dark == darkMode)
     return;
