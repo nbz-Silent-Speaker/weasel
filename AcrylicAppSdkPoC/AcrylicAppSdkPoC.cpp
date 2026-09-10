@@ -24,6 +24,7 @@
 #include <winrt/Windows.UI.Composition.Desktop.h>
 
 #include "WeaselGaussianBlurEffect.h"
+#include "RootClipDiagnosticState.h"
 
 #pragma comment(lib, "Dwmapi.lib")
 #pragma comment(lib, "CoreMessaging.lib")
@@ -70,6 +71,24 @@ constexpr wchar_t kAppSdkFailureHresult[] =
     L"WeaselAcrylicAppSdkFailureHresult";
 constexpr wchar_t kLifetimeWindowClass[] = L"WeaselAcrylicThreadLifetimeV3";
 constexpr UINT_PTR kShutdownTimer = 1;
+constexpr UINT_PTR kRootClipTestTimer = 0x5225;
+constexpr wchar_t kRootClipTestEnvironment[] =
+    L"WEASEL_R22_ROOT_CLIP_DIAGNOSTIC";
+constexpr wchar_t kRootClipTestEnabled[] = L"WeaselAcrylicRootClipTestEnabled";
+constexpr wchar_t kRootClipTestRequest[] = L"WeaselAcrylicRootClipTestRequest";
+constexpr wchar_t kRootClipTestAck[] = L"WeaselAcrylicRootClipTestAck";
+constexpr wchar_t kRootClipTestMode[] = L"WeaselAcrylicRootClipTestMode";
+constexpr wchar_t kRootClipTestReason[] = L"WeaselAcrylicRootClipTestReason";
+constexpr wchar_t kRootClipTestReadback[] =
+    L"WeaselAcrylicRootClipTestReadback";
+constexpr wchar_t kRootClipTestError[] = L"WeaselAcrylicRootClipTestError";
+constexpr wchar_t kRootClipTestMarkerX[] = L"WeaselAcrylicRootClipTestMarkerX";
+constexpr wchar_t kRootClipTestMarkerY[] = L"WeaselAcrylicRootClipTestMarkerY";
+constexpr const wchar_t* kRootClipTestProperties[] = {
+    kRootClipTestEnabled, kRootClipTestRequest, kRootClipTestAck,
+    kRootClipTestMode,    kRootClipTestReason,  kRootClipTestReadback,
+    kRootClipTestError,   kRootClipTestMarkerX, kRootClipTestMarkerY};
+void CALLBACK RootClipTestTimerProc(HWND, UINT, UINT_PTR, DWORD) noexcept;
 thread_local LONG t_lastStage = 0;
 thread_local HRESULT t_lastHresult = S_OK;
 thread_local wchar_t t_lastMessage[512] = {};
@@ -182,6 +201,11 @@ struct Target {
   HWND hwnd = nullptr;
   TargetMode mode = TargetMode::AppSdkAcrylic;
   bool forcedSystemComposition = false;
+  bool rootClipTest = false;
+  bool rootClipTestFailed = false;
+  bool rootClipTestTimer = false;
+  weasel_acrylic::RootClipDiagnosticState rootClipTestState;
+  winrt::Windows::UI::Composition::SpriteVisual rootClipTestMarker{nullptr};
   winrt::Windows::UI::Composition::Compositor compositor{nullptr};
   winrt::Windows::UI::Composition::Desktop::DesktopWindowTarget desktop{
       nullptr};
@@ -222,7 +246,22 @@ struct Target {
   }
 
   void Reset() noexcept {
+    if (rootClipTestTimer) {
+      ::KillTimer(hwnd, kRootClipTestTimer);
+      rootClipTestTimer = false;
+    }
+    if (rootClipTestMarker && root) {
+      try {
+        root.Children().Remove(rootClipTestMarker);
+      } catch (...) {
+      }
+    }
+    rootClipTestMarker = nullptr;
     if (hwnd) {
+      if (rootClipTest) {
+        for (const auto name : kRootClipTestProperties)
+          ::RemovePropW(hwnd, name);
+      }
       ::RemovePropW(hwnd, kSystemCompositionActive);
       ::RemovePropW(hwnd, kSystemCompositionStage);
       ::RemovePropW(hwnd, kSystemCompositionHresult);
@@ -356,7 +395,103 @@ void UpdateSystemCompositionClip(Target& target) {
   }
 }
 
+void FailRootClipTest(Target& target, HRESULT error) noexcept {
+  target.rootClipTestFailed = true;
+  target.rootClipTestState.half = false;
+  ::RemovePropW(target.hwnd, kRootClipTestReadback);
+  ::SetPropW(target.hwnd, kRootClipTestError,
+             reinterpret_cast<HANDLE>(
+                 static_cast<ULONG_PTR>(static_cast<DWORD>(error))));
+  // Keep the timer alive: it retries normal full-width restoration on the
+  // owning UI thread if a transient COM failure interrupted the last update.
+}
+
+int RootClipTestWidth(Target& target, int width, int height, int radius) {
+  if (target.rootClipTestFailed)
+    return width;
+  ::RemovePropW(target.hwnd, kRootClipTestReadback);
+  if (!target.rootClipTestTimer) {
+    if (!::SetTimer(target.hwnd, kRootClipTestTimer, 50, RootClipTestTimerProc))
+      winrt::throw_hresult(LastWin32Error());
+    target.rootClipTestTimer = true;
+  }
+  if (width < 96 || height < 96 || radius > width / 4)
+    winrt::throw_hresult(E_INVALIDARG);
+  if (!target.rootClipTestMarker) {
+    target.rootClipTestMarker = target.compositor.CreateSpriteVisual();
+    target.rootClipTestMarker.Size({4.0f, 4.0f});
+    target.rootClipTestMarker.Brush(
+        target.compositor.CreateColorBrush({255, 255, 0, 255}));
+    // Identical positive control in full/half/restored, outside the main ROI.
+    // Only the parent clip width changes. Screen pixels, not a property flag,
+    // must prove that this marker was actually clipped and restored.
+    target.root.Children().InsertAtTop(target.rootClipTestMarker);
+  }
+  const int markerX = width - 24;
+  const int markerY = height - max(24, radius + 4);
+  target.rootClipTestMarker.Offset(
+      {static_cast<float>(markerX), static_cast<float>(markerY), 0.0f});
+  SetEncodedIntProperty(target.hwnd, kRootClipTestMarkerX, markerX);
+  SetEncodedIntProperty(target.hwnd, kRootClipTestMarkerY, markerY);
+  ::SetPropW(target.hwnd, kRootClipTestEnabled,
+             reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(1)));
+  const ULONG_PTR request = reinterpret_cast<ULONG_PTR>(
+      ::GetPropW(target.hwnd, kRootClipTestRequest));
+  // Reject high pointer bits instead of truncating into a valid x86 command.
+  const auto command =
+      request <= 0x7fffffffU ? static_cast<unsigned int>(request) : 0xffffffffU;
+  return target.rootClipTestState.SelectWidth(
+      command, ::GetTickCount64(), width, height, radius,
+      ::IsWindowVisible(target.hwnd) != FALSE);
+}
+
+void ObserveRootClipTest(Target& target,
+                         int hostWidth,
+                         int clipWidth,
+                         int height,
+                         int radius) {
+  const auto sameObject = [](const auto& a, const auto& b) {
+    return a && b &&
+           a.template as<::IUnknown>().get() ==
+               b.template as<::IUnknown>().get();
+  };
+  const auto root = target.desktop.Root();
+  const auto clip = target.root.Clip();
+  const auto geometry = target.roundedClip.Geometry();
+  const auto size = target.clipGeometry.Size();
+  const auto corner = target.clipGeometry.CornerRadius();
+  const auto markerSize = target.rootClipTestMarker.Size();
+  const auto markerOffset = target.rootClipTestMarker.Offset();
+  const auto markerColor =
+      target.rootClipTestMarker.Brush()
+          .as<winrt::Windows::UI::Composition::CompositionColorBrush>()
+          .Color();
+  if (!sameObject(root, target.root) || !sameObject(clip, target.roundedClip) ||
+      !sameObject(geometry, target.clipGeometry) ||
+      !sameObject(target.rootClipTestMarker.Parent(), target.root) ||
+      size.x != clipWidth || size.y != height || corner.x != radius ||
+      corner.y != radius || markerSize.x != 4.0f || markerSize.y != 4.0f ||
+      markerOffset.x != hostWidth - 24 ||
+      markerOffset.y != height - max(24, radius + 4) ||
+      markerOffset.z != 0.0f || markerColor.A != 255 || markerColor.R != 255 ||
+      markerColor.G != 0 || markerColor.B != 255)
+    winrt::throw_hresult(E_UNEXPECTED);
+  SetEncodedIntProperty(target.hwnd, kRootClipTestReason,
+                        target.rootClipTestState.reason);
+  ::SetPropW(target.hwnd, kRootClipTestMode,
+             reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(
+                 target.rootClipTestState.half ? 2 : 1)));
+  ::SetPropW(target.hwnd, kRootClipTestAck,
+             reinterpret_cast<HANDLE>(
+                 static_cast<ULONG_PTR>(target.rootClipTestState.request)));
+}
+
 void ClearAppSdkRootClip(Target& target) {
+  if (target.rootClipTest) {
+    target.rootClipTestState.SelectWidth(target.rootClipTestState.request,
+                                         ::GetTickCount64(), 0, 0, 0, false);
+    ::RemovePropW(target.hwnd, kRootClipTestReadback);
+  }
   if (target.root)
     target.root.Clip(nullptr);
   ::RemovePropW(target.hwnd, kAppSdkRootClipActive);
@@ -388,6 +523,16 @@ void UpdateAppSdkRootClip(Target& target) {
   }
 
   radius = min(radius, min(width, height) / 2);
+  int clipWidth = width;
+  if (target.rootClipTest) {
+    try {
+      clipWidth = RootClipTestWidth(target, width, height, radius);
+    } catch (winrt::hresult_error const& error) {
+      FailRootClipTest(target, error.code());
+    } catch (...) {
+      FailRootClipTest(target, E_UNEXPECTED);
+    }
+  }
   if (!target.clipGeometry) {
     target.clipGeometry = target.compositor.CreateRoundedRectangleGeometry();
     target.roundedClip =
@@ -395,22 +540,45 @@ void UpdateAppSdkRootClip(Target& target) {
   }
 
   target.clipGeometry.Size(
-      {static_cast<float>(width), static_cast<float>(height)});
+      {static_cast<float>(clipWidth), static_cast<float>(height)});
   target.clipGeometry.CornerRadius(
       {static_cast<float>(radius), static_cast<float>(radius)});
   target.root.Clip(target.roundedClip);
+
+  if (target.rootClipTest && !target.rootClipTestFailed) {
+    try {
+      ObserveRootClipTest(target, width, clipWidth, height, radius);
+    } catch (winrt::hresult_error const& error) {
+      FailRootClipTest(target, error.code());
+    } catch (...) {
+      FailRootClipTest(target, E_UNEXPECTED);
+    }
+  }
+  if (target.rootClipTestFailed) {
+    clipWidth = width;
+    target.clipGeometry.Size(
+        {static_cast<float>(width), static_cast<float>(height)});
+    ::SetPropW(target.hwnd, kRootClipTestMode,
+               reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(1)));
+  }
 
   ::SetPropW(target.hwnd, kAppSdkRootClipActive,
              reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(1)));
   ::SetPropW(target.hwnd, kAppSdkRootClipWidth,
              reinterpret_cast<HANDLE>(
-                 static_cast<ULONG_PTR>(static_cast<unsigned>(width) + 1)));
+                 static_cast<ULONG_PTR>(static_cast<unsigned>(clipWidth) + 1)));
   ::SetPropW(target.hwnd, kAppSdkRootClipHeight,
              reinterpret_cast<HANDLE>(
                  static_cast<ULONG_PTR>(static_cast<unsigned>(height) + 1)));
   ::SetPropW(target.hwnd, kAppSdkRootClipRadius,
              reinterpret_cast<HANDLE>(
                  static_cast<ULONG_PTR>(static_cast<unsigned>(radius) + 1)));
+  if (target.rootClipTest && !target.rootClipTestFailed) {
+    // Publish last, after effective dimensions. This is actual object/value
+    // readback only; the screen marker is the separate presentation gate.
+    ::SetPropW(target.hwnd, kRootClipTestReadback,
+               reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(1)));
+  }
 }
 
 struct ThreadState {
@@ -529,6 +697,24 @@ bool ForceOrdinarySystemCompositionDiagnostic() noexcept {
   return ::GetEnvironmentVariableW(kForceSystemCompositionEnvironment, value,
                                    _countof(value)) == 1 &&
          value[0] == L'1';
+}
+
+bool EnableRootClipDiagnostic() noexcept {
+  // Explicit opt-in for an isolated unpackaged Word process only. Never mix
+  // this experiment with R22's forced backend, Settings/Search, or the server.
+  if (g_runtimeRoute != 1 || ForceOrdinarySystemCompositionDiagnostic())
+    return false;
+  wchar_t value[2] = {};
+  if (::GetEnvironmentVariableW(kRootClipTestEnvironment, value,
+                                _countof(value)) != 1 ||
+      value[0] != L'1')
+    return false;
+  wchar_t image[32768] = {};
+  const DWORD length = ::GetModuleFileNameW(nullptr, image, _countof(image));
+  if (!length || length >= _countof(image))
+    return false;
+  const wchar_t* file = wcsrchr(image, L'\\');
+  return _wcsicmp(file ? file + 1 : image, L"WINWORD.EXE") == 0;
 }
 
 HRESULT EnsureSystemCompositionThread(ThreadState& state) noexcept {
@@ -753,6 +939,27 @@ struct BusyScope {
   }
 };
 
+void CALLBACK RootClipTestTimerProc(HWND hwnd,
+                                    UINT,
+                                    UINT_PTR timer,
+                                    DWORD) noexcept {
+  if (timer != kRootClipTestTimer || !t_state || t_state->busy ||
+      t_state->stopping)
+    return;
+  auto it = t_state->targets.find(hwnd);
+  if (it == t_state->targets.end() || !it->second->rootClipTest ||
+      it->second->pendingDetach)
+    return;
+  BusyScope guard(*t_state);
+  try {
+    UpdateAppSdkRootClip(*it->second);
+  } catch (winrt::hresult_error const& error) {
+    FailRootClipTest(*it->second, error.code());
+  } catch (...) {
+    FailRootClipTest(*it->second, E_UNEXPECTED);
+  }
+}
+
 // Keep host-owned factories local to Attach. No cross-thread/static factory
 // cache and no direct DllGetActivationFactory or system-package path loading.
 struct HostRuntimeFactories {
@@ -939,6 +1146,7 @@ WeaselAcrylicAppSdkAttach(HWND hwnd, BOOL darkMode) {
     auto target = std::make_unique<Target>();
     target->hwnd = hwnd;
     target->mode = TargetMode::AppSdkAcrylic;
+    target->rootClipTest = EnableRootClipDiagnostic();
     Diagnose(40);
     target->compositor = winrt::Windows::UI::Composition::Compositor();
     Diagnose(50);
@@ -1034,8 +1242,12 @@ WeaselAcrylicAppSdkSetWindowTheme(HWND hwnd, BOOL darkMode) {
   try {
     UpdateAppSdkRootClip(*it->second);
   } catch (winrt::hresult_error const& error) {
+    if (it->second->rootClipTest)
+      FailRootClipTest(*it->second, error.code());
     Diagnose(76, error.code(), error.message().c_str());
   } catch (...) {
+    if (it->second->rootClipTest)
+      FailRootClipTest(*it->second, E_UNEXPECTED);
     Diagnose(76, E_UNEXPECTED);
   }
   if (it->second->dark == darkMode)

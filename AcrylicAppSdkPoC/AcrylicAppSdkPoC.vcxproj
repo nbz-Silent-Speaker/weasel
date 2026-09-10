@@ -117,7 +117,9 @@
 
   <ItemGroup>
     <ClCompile Include="AcrylicAppSdkPoC.cpp" />
+    <ClCompile Include="tests\RootClipDiagnosticStateTests.cpp" />
     <ClInclude Include="WeaselGaussianBlurEffect.h" />
+    <ClInclude Include="RootClipDiagnosticState.h" />
     <None Include="AcrylicAppSdkPoC.x86.def" />
   </ItemGroup>
 
