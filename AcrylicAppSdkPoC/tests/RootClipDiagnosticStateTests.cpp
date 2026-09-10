@@ -77,10 +77,10 @@ constexpr bool RadiusAndMarkerRoomAreNeverSilentlyClamped() {
                               {197, 268, 50},
                               {400, 100, 51},
                               {197, 268, -1}};
-  for (const auto& dimensions : cases) {
+  for (int index = 0; index != 5; ++index) {
     RootClipDiagnosticState state;
-    if (state.SelectWidth(6, 100, dimensions[0], dimensions[1], dimensions[2],
-                          true) != dimensions[0] ||
+    if (state.SelectWidth(6, 100, cases[index][0], cases[index][1],
+                          cases[index][2], true) != cases[index][0] ||
         state.half || state.reason != 4)
       return false;
   }
