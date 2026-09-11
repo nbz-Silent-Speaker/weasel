@@ -220,7 +220,7 @@ LRESULT UIStyleSettingsDialog::OnSave(WORD, WORD id, HWND, BOOL&) {
       return 0;
     deployed_ = true;
   }
-  auto api = static_cast<RimeLeversApi*>(
+  auto api = reinterpret_cast<RimeLeversApi*>(
       rime_get_api()->find_module("levers")->get_api());
   if (!api->load_settings(settings_->settings()) ||
       !settings_->LoadAppearance()) {
