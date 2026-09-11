@@ -1,6 +1,8 @@
 #include "stdafx.h"
 #include "WeaselServerApp.h"
 #include <filesystem>
+#include <atlstr.h>
+#include <WeaselUserSettings.h>
 
 WeaselServerApp::WeaselServerApp()
     : m_handler(std::make_unique<RimeWithWeaselHandler>(&m_ui)),
@@ -69,6 +71,20 @@ void WeaselServerApp::SetupMenuHandlers() {
                           std::bind(open, L"https://rime.im/"));
   m_server.AddMenuHandler(ID_WEASELTRAY_FORUM,
                           std::bind(open, L"https://rime.im/discuss/"));
+  m_server.AddMenuHandler(ID_WEASELTRAY_ACRYLIC, [this] {
+    const bool enabled = !weasel::UserSettings::Load().acrylic;
+    const LSTATUS result = weasel::UserSettingsStore().WriteBool(
+        weasel::kAcrylicEnabledSetting, enabled);
+    if (result != ERROR_SUCCESS) {
+      CString message;
+      message.LoadStringW(IDS_STR_SETTINGS_SAVE_FAILED);
+      ::MessageBoxW(m_server.GetHWnd(), message, get_weasel_ime_name().c_str(),
+                    MB_OK | MB_ICONERROR);
+      return false;
+    }
+    weasel::NotifyUserSettingsChanged();
+    return true;
+  });
   m_server.AddMenuHandler(ID_WEASELTRAY_CHECKUPDATE, check_update);
   m_server.AddMenuHandler(ID_WEASELTRAY_INSTALLDIR, std::bind(explore, dir));
   m_server.AddMenuHandler(ID_WEASELTRAY_USERCONFIG,

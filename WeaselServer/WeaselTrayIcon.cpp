@@ -1,6 +1,7 @@
 ﻿#include "stdafx.h"
 #include "WeaselTrayIcon.h"
 #include <atlstr.h>
+#include <WeaselUserSettings.h>
 
 // nasty
 #include <resource.h>
@@ -17,7 +18,16 @@ WeaselTrayIcon::WeaselTrayIcon(weasel::UI& ui)
       m_schema_ascii_icon(),
       m_disabled(false) {}
 
-void WeaselTrayIcon::CustomizeMenu(HMENU hMenu) {}
+void WeaselTrayIcon::CustomizeMenu(HMENU hMenu) {
+  for (int i = 0; i < ::GetMenuItemCount(hMenu); ++i) {
+    if (HMENU submenu = ::GetSubMenu(hMenu, i))
+      CustomizeMenu(submenu);
+  }
+  ::CheckMenuItem(
+      hMenu, ID_WEASELTRAY_ACRYLIC,
+      MF_BYCOMMAND |
+          (weasel::UserSettings::Load().acrylic ? MF_CHECKED : MF_UNCHECKED));
+}
 
 BOOL WeaselTrayIcon::Create(HWND hTargetWnd) {
   HMODULE hModule = GetModuleHandle(NULL);

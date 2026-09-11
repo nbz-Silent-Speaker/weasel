@@ -1,6 +1,7 @@
 #pragma once
 #include <WeaselIPCData.h>
 #include <WeaselUI.h>
+#include <WeaselUserSettings.h>
 #include "StandardLayout.h"
 #include "Layout.h"
 #include "GdiplusBlur.h"
@@ -29,6 +30,7 @@ class WeaselPanel
   MESSAGE_HANDLER(WM_CREATE, OnCreate)
   MESSAGE_HANDLER(WM_DESTROY, OnDestroy)
   MESSAGE_HANDLER(WM_DPICHANGED, OnDpiChanged)
+  MESSAGE_HANDLER(weasel::UserSettingsChangedMessage(), OnUserSettingsChanged)
   MESSAGE_HANDLER(WM_MOUSEACTIVATE, OnMouseActivate)
   MESSAGE_HANDLER(WM_LBUTTONUP, OnLeftClickedUp)
   MESSAGE_HANDLER(WM_LBUTTONDOWN, OnLeftClickedDown)
@@ -41,6 +43,10 @@ class WeaselPanel
   LRESULT OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
   LRESULT OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
   LRESULT OnDpiChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+  LRESULT OnUserSettingsChanged(UINT uMsg,
+                                WPARAM wParam,
+                                LPARAM lParam,
+                                BOOL& bHandled);
   LRESULT OnMouseActivate(UINT uMsg,
                           WPARAM wParam,
                           LPARAM lParam,
@@ -98,6 +104,7 @@ class WeaselPanel
   void _CreateLayout();
   void _ResizeWindow();
   void _RepositionWindow(const bool& adj = false);
+  bool _UpdateAcrylicBackdropMode();
   bool _CreateAcrylicBackdrop();
   void _DestroyAcrylicBackdrop();
   void _SyncAcrylicBackdrop();
@@ -170,4 +177,5 @@ class WeaselPanel
   bool m_redraw_by_monitor_change = false;
   HWND m_acrylicBackdrop = NULL;
   bool m_acrylicBackdropEnabled = false;
+  bool m_acrylicRequested = false;
 };

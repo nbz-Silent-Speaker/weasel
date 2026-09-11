@@ -1,10 +1,14 @@
 #include "../ChildBackdropTarget.h"
 #include "../EdgeClipDiagnostic.h"
+#include "../AlignedAcrylicClip.h"
+#include "../../include/WeaselUserSettings.h"
 
 #include <functional>
 #include <iostream>
 #include <stdexcept>
 #include <thread>
+#include <climits>
+#include <string>
 
 namespace {
 
@@ -119,6 +123,34 @@ void Check(bool value) {
     throw std::runtime_error("contract assertion failed");
 }
 
+struct SettingsFixture {
+  std::wstring path = L"Software\\WeaselSettingsTests-" +
+                      std::to_wstring(::GetCurrentProcessId()) + L"-" +
+                      std::to_wstring(::GetTickCount64());
+  HKEY key = nullptr;
+  weasel::UserSettingsStore store{HKEY_CURRENT_USER, path.c_str()};
+  SettingsFixture() {
+    DWORD disposition = 0;
+    Check(::RegCreateKeyExW(HKEY_CURRENT_USER, path.c_str(), 0, nullptr,
+                            REG_OPTION_VOLATILE,
+                            KEY_ALL_ACCESS | KEY_WOW64_64KEY, nullptr, &key,
+                            &disposition) == ERROR_SUCCESS);
+    Check(disposition == REG_CREATED_NEW_KEY);
+  }
+  ~SettingsFixture() {
+    if (key) {
+      ::RegCloseKey(key);
+      ::RegDeleteKeyExW(HKEY_CURRENT_USER, path.c_str(), KEY_WOW64_64KEY, 0);
+    }
+  }
+  void Finish() {
+    Check(::RegCloseKey(key) == ERROR_SUCCESS);
+    key = nullptr;
+    Check(::RegDeleteKeyExW(HKEY_CURRENT_USER, path.c_str(), KEY_WOW64_64KEY,
+                            0) == ERROR_SUCCESS);
+  }
+};
+
 struct Fixture {
   ComPtr<Native> native = Make<Native>();
   ComPtr<Brush> brush = Make<Brush>();
@@ -146,6 +178,110 @@ int main() {
     return 2;
   int result = 0;
   try {
+    Run("aligned clip defaults to ordinary hosts and preserves compatibility "
+        "routes",
+        [] {
+          using weasel_acrylic::UseAlignedAcrylicClip;
+          Check(UseAlignedAcrylicClip(1, false, false));
+          Check(!UseAlignedAcrylicClip(1, true, false));
+          Check(!UseAlignedAcrylicClip(1, false, true));
+          Check(!UseAlignedAcrylicClip(2, false, false));
+          Check(!UseAlignedAcrylicClip(0, false, false));
+        });
+    Run("aligned clip scales with eligible content instead of a fixed sample",
+        [] {
+          using namespace weasel_acrylic;
+          for (int radius = 3; radius <= 17; ++radius) {
+            const int sizes[][2] = {{2 * radius + 1, 2 * radius + 2},
+                                    {2 * radius + 2, 2 * radius + 1},
+                                    {195, 266},
+                                    {194, 265},
+                                    {800, 160}};
+            for (const auto& size : sizes) {
+              Check(SupportsAlignedAcrylicClip(size[0], size[1], 1, 255, radius,
+                                               1));
+              const int w = size[0] + 2, h = size[1] + 2, r = radius + 1;
+              const auto clip = SelectAlignedAcrylicClip(w, h, r, w, h, r);
+              Check(clip.x == 1 && clip.y == 1 && clip.width == w - 1 &&
+                    clip.height == h - 1 && clip.radius == r);
+              Check(clip.x + clip.width == w && clip.y + clip.height == h);
+            }
+          }
+        });
+    Run("aligned clip rejects unverified borders and compressed corners", [] {
+      using weasel_acrylic::SupportsAlignedAcrylicClip;
+      for (int border : {0, 2, 3, 4, -1})
+        Check(!SupportsAlignedAcrylicClip(195, 266, border, 255, 16, 1));
+      for (unsigned alpha : {0U, 24U, 254U, 256U})
+        Check(!SupportsAlignedAcrylicClip(195, 266, 1, alpha, 16, 1));
+      for (int r : {0, 1, 2, 18, 48, 64, -1, INT_MAX})
+        Check(!SupportsAlignedAcrylicClip(195, 266, 1, 255, r, 1));
+      for (int r = 3; r <= 17; ++r) {
+        Check(!SupportsAlignedAcrylicClip(2 * r, 266, 1, 255, r, 1));
+        Check(!SupportsAlignedAcrylicClip(195, 2 * r, 1, 255, r, 1));
+      }
+      Check(!SupportsAlignedAcrylicClip(195, 266, 1, 255, 16, 0));
+      Check(!SupportsAlignedAcrylicClip(-1, 0, 1, 255, 16, 1));
+    });
+    Run("aligned clip rejects stale or cleared layout publications and "
+        "reapplies",
+        [] {
+          using namespace weasel_acrylic;
+          const int publications[][3] = {
+              {-1, -1, -1}, {198, 268, 17}, {197, 269, 17}, {197, 268, 18}};
+          for (const auto& p : publications) {
+            const auto clip =
+                SelectAlignedAcrylicClip(197, 268, 17, p[0], p[1], p[2]);
+            Check(clip.x == 0 && clip.y == 0 && clip.width == 197 &&
+                  clip.height == 268 && clip.radius == 17);
+          }
+          const auto clip =
+              SelectAlignedAcrylicClip(197, 268, 17, 197, 268, 17);
+          Check(EdgeClipReadbackMatches(clip, 1, 1, 196, 267, 17, 17));
+          Check(!EdgeClipReadbackMatches(clip, 0, 0, 197, 268, 17, 17));
+        });
+    Run("user settings persist off and on without replacing other preferences",
+        [] {
+          SettingsFixture f;
+          Check(f.store.ReadBool(weasel::kAcrylicEnabledSetting, true));
+          Check(!f.store.ReadBool(L"FutureSetting", false));
+          Check(f.store.WriteBool(L"FutureSetting", true) == ERROR_SUCCESS);
+          for (bool enabled : {false, true, false}) {
+            Check(f.store.WriteBool(weasel::kAcrylicEnabledSetting, enabled) ==
+                  ERROR_SUCCESS);
+            const weasel::UserSettingsStore reopened(HKEY_CURRENT_USER,
+                                                     f.path.c_str());
+            Check(reopened.ReadBool(weasel::kAcrylicEnabledSetting, true) ==
+                  enabled);
+            Check(reopened.ReadBool(L"FutureSetting", false));
+          }
+          f.Finish();
+        });
+    Run("malformed user settings cannot enable optional material", [] {
+      SettingsFixture f;
+      const DWORD invalid = 2;
+      Check(::RegSetValueExW(f.key, weasel::kAcrylicEnabledSetting, 0,
+                             REG_DWORD, reinterpret_cast<const BYTE*>(&invalid),
+                             sizeof(invalid)) == ERROR_SUCCESS);
+      Check(!f.store.ReadBool(weasel::kAcrylicEnabledSetting, true));
+      const wchar_t text[] = L"true";
+      Check(::RegSetValueExW(f.key, weasel::kAcrylicEnabledSetting, 0, REG_SZ,
+                             reinterpret_cast<const BYTE*>(text),
+                             sizeof(text)) == ERROR_SUCCESS);
+      Check(!f.store.ReadBool(weasel::kAcrylicEnabledSetting, true));
+      f.Finish();
+    });
+    Run("failed settings storage is reported and notification identity is "
+        "stable",
+        [] {
+          weasel::UserSettingsStore invalid(nullptr, L"invalid");
+          Check(invalid.WriteBool(weasel::kAcrylicEnabledSetting, false) !=
+                ERROR_SUCCESS);
+          Check(!invalid.ReadBool(weasel::kAcrylicEnabledSetting, true));
+          const UINT message = weasel::UserSettingsChangedMessage();
+          Check(message >= 0xc000 && message <= 0xffff);
+          Check(message == weasel::UserSettingsChangedMessage());
+        });
     Run("edge clip rejects unmeasured foreground styles", [] {
       using weasel_acrylic::IsMeasuredEdgeClipSample;
       Check(IsMeasuredEdgeClipSample(144, 195, 266, 1, 255, 16, 1, true, true));

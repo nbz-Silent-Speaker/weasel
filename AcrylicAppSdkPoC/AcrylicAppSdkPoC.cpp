@@ -27,6 +27,7 @@
 #include "RootClipDiagnosticState.h"
 #include "ChildBackdropTarget.h"
 #include "EdgeClipDiagnostic.h"
+#include "AlignedAcrylicClip.h"
 
 #pragma comment(lib, "Dwmapi.lib")
 #pragma comment(lib, "CoreMessaging.lib")
@@ -242,6 +243,7 @@ struct Target {
   winrt::Windows::UI::Composition::ContainerVisual root{nullptr};
   bool childClipTest = false;
   bool edgeClipTest = false;
+  bool alignedClip = false;
   bool childClipFailed = false;
   bool childClipTimer = false;
   bool childRegionRemoved = false;
@@ -301,6 +303,7 @@ struct Target {
     }
     rootClipTestMarker = nullptr;
     if (hwnd) {
+      ::RemovePropW(hwnd, weasel_acrylic::kAlignedClipEnabled);
       if (childClipTest) {
         for (const auto name : kChildClipProperties)
           ::RemovePropW(hwnd, name);
@@ -615,6 +618,16 @@ weasel_acrylic::EdgeClipGeometry ReadEdgeClipGeometry(Target& target,
                                                       int width,
                                                       int height,
                                                       int radius) {
+  if (target.alignedClip) {
+    return weasel_acrylic::SelectAlignedAcrylicClip(
+        width, height, radius,
+        DecodeEncodedIntProperty(target.hwnd,
+                                 weasel_acrylic::kAlignedClipWidth),
+        DecodeEncodedIntProperty(target.hwnd,
+                                 weasel_acrylic::kAlignedClipHeight),
+        DecodeEncodedIntProperty(target.hwnd,
+                                 weasel_acrylic::kAlignedClipRadius));
+  }
   return weasel_acrylic::SelectEdgeClipGeometry(
       target.edgeClipTest,
       ::GetPropW(target.hwnd, kEdgeClipSample) == reinterpret_cast<HANDLE>(1),
@@ -1450,6 +1463,11 @@ WeaselAcrylicAppSdkAttach(HWND hwnd, BOOL darkMode) {
     target->rootClipTest = EnableRootClipDiagnostic();
     target->childClipTest = EnableChildClipDiagnostic();
     target->edgeClipTest = target->childClipTest && EnableEdgeClipDiagnostic();
+    target->alignedClip = weasel_acrylic::UseAlignedAcrylicClip(
+        g_runtimeRoute, IsWeaselServerProcess(),
+        target->rootClipTest || target->childClipTest ||
+            ForceOrdinarySystemCompositionDiagnostic());
+    target->childClipTest = target->childClipTest || target->alignedClip;
     Diagnose(40);
     target->compositor = winrt::Windows::UI::Composition::Compositor();
     Diagnose(50);
@@ -1471,7 +1489,12 @@ WeaselAcrylicAppSdkAttach(HWND hwnd, BOOL darkMode) {
                            weasel_acrylic::ChildBackdropTarget>(
           &target->childTarget, target->desktop.as<::IUnknown>().get(),
           target->childVisual.as<::IUnknown>().get()));
-      ::SetPropW(hwnd, kChildClipEnabled, reinterpret_cast<HANDLE>(1));
+      if (!::SetPropW(hwnd, kChildClipEnabled, reinterpret_cast<HANDLE>(1)))
+        winrt::throw_last_error();
+      if (target->alignedClip &&
+          !::SetPropW(hwnd, weasel_acrylic::kAlignedClipEnabled,
+                      reinterpret_cast<HANDLE>(1)))
+        winrt::throw_last_error();
       if (target->edgeClipTest)
         ::SetPropW(hwnd, kEdgeClipEnabled, reinterpret_cast<HANDLE>(1));
     }

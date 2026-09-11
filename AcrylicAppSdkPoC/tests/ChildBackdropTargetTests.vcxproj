@@ -39,6 +39,8 @@
     <ClCompile Include="ChildBackdropTargetTests.cpp" />
     <ClInclude Include="..\ChildBackdropTarget.h" />
     <ClInclude Include="..\EdgeClipDiagnostic.h" />
+    <ClInclude Include="..\AlignedAcrylicClip.h" />
+    <ClInclude Include="..\..\include\WeaselUserSettings.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

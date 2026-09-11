@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "WeaselPanel.h"
 #include "../AcrylicAppSdkPoC/EdgeClipDiagnostic.h"
+#include "../AcrylicAppSdkPoC/AlignedAcrylicClip.h"
 
 #include <utility>
 #include <ShellScalingApi.h>
@@ -867,6 +868,45 @@ void SetAcrylicClipProperty(HWND backdrop, const wchar_t* name, int value) {
              reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(value + 1)));
 }
 
+void ClearAlignedAcrylicClip(HWND backdrop) {
+  ::RemovePropW(backdrop, weasel_acrylic::kAlignedClipWidth);
+  ::RemovePropW(backdrop, weasel_acrylic::kAlignedClipHeight);
+  ::RemovePropW(backdrop, weasel_acrylic::kAlignedClipRadius);
+}
+
+bool PublishAlignedAcrylicClip(HWND backdrop,
+                               bool eligible,
+                               int width,
+                               int height,
+                               int radius) {
+  using namespace weasel_acrylic;
+  if (!eligible) {
+    ClearAlignedAcrylicClip(backdrop);
+    return !::GetPropW(backdrop, kAlignedClipWidth) &&
+           !::GetPropW(backdrop, kAlignedClipHeight) &&
+           !::GetPropW(backdrop, kAlignedClipRadius);
+  }
+  const auto matches = [&] {
+    return AcrylicClipProperty(backdrop, kAlignedClipWidth) == width &&
+           AcrylicClipProperty(backdrop, kAlignedClipHeight) == height &&
+           AcrylicClipProperty(backdrop, kAlignedClipRadius) == radius;
+  };
+  if (matches())
+    return true;
+  // Width is the validity flag: invalidate first and publish it last. Never
+  // apply a new style qualification to a previous window's dimensions.
+  ClearAlignedAcrylicClip(backdrop);
+  if (::GetPropW(backdrop, kAlignedClipWidth))
+    return false;
+  SetAcrylicClipProperty(backdrop, kAlignedClipHeight, height);
+  SetAcrylicClipProperty(backdrop, kAlignedClipRadius, radius);
+  SetAcrylicClipProperty(backdrop, kAlignedClipWidth, width);
+  if (matches())
+    return true;
+  ClearAlignedAcrylicClip(backdrop);
+  return false;
+}
+
 void ClearAcrylicExplicitClip(HWND backdrop, bool redraw) {
   if (!backdrop)
     return;
@@ -878,6 +918,7 @@ void ClearAcrylicExplicitClip(HWND backdrop, bool redraw) {
   ::RemovePropW(backdrop, kAcrylicLocalClipHeightProperty);
   ::RemovePropW(backdrop, kAcrylicLocalClipRadiusProperty);
   ::RemovePropW(backdrop, weasel_acrylic::kEdgeClipSample);
+  ClearAlignedAcrylicClip(backdrop);
 }
 
 bool AcrylicExplicitClipMatches(HWND backdrop,
@@ -2402,8 +2443,28 @@ WeaselPanel::~WeaselPanel() {
   // pDWR.reset();
 }
 
+bool WeaselPanel::_UpdateAcrylicBackdropMode() {
+  const bool requested = weasel::UserSettings::Load().acrylic;
+  if (requested == m_acrylicRequested)
+    return false;
+  m_acrylicRequested = requested;
+  _DestroyAcrylicBackdrop();
+  if (!requested)
+    return true;
+  m_acrylicBackdropEnabled = _CreateAcrylicBackdrop();
+  if (m_acrylicBackdropEnabled ||
+      (m_acrylicBackdrop && !m_in_server && IsExternalCompatibleClient() &&
+       CurrentExternalKind() != ExternalClientKind::Settings))
+    InstallLocalAcrylicGeometry(
+        m_hWnd, this,
+        !m_in_server && CurrentExternalKind() == ExternalClientKind::None);
+  return true;
+}
+
 bool WeaselPanel::_CreateAcrylicBackdrop() {
   m_acrylicBackdropEnabled = false;
+  if (!m_acrylicRequested)
+    return false;
   SetAcrylicCreationDiagnostic(m_hWnd, 1, S_OK);
   if (!EnsureAcrylicBackdropClass()) {
     SetAcrylicCreationDiagnostic(m_hWnd, -1,
@@ -2525,9 +2586,12 @@ bool WeaselPanel::_CreateAcrylicBackdrop() {
   // Failure restores the skin and retains diagnostics on a hidden host.
   if (!searchLocal && g_acrylicAppSdkBridge.TryInitialize(
                           m_acrylicBackdrop, useDarkMode, m_in_server)) {
-    if (::GetPropW(m_acrylicBackdrop, L"WeaselAcrylicChildClipEnabled"))
-      ::SetPropW(m_acrylicBackdrop, kAcrylicChildClipCandidateProperty,
-                 reinterpret_cast<HANDLE>(m_hWnd));
+    if (::GetPropW(m_acrylicBackdrop, L"WeaselAcrylicChildClipEnabled") &&
+        !::SetPropW(m_acrylicBackdrop, kAcrylicChildClipCandidateProperty,
+                    reinterpret_cast<HANDLE>(m_hWnd))) {
+      _DestroyAcrylicBackdrop();
+      return false;
+    }
     ::SetPropW(m_acrylicBackdrop, kWeaselAcrylicAppSdkActiveProperty,
                reinterpret_cast<HANDLE>(static_cast<INT_PTR>(1)));
     m_acrylicBackdropEnabled = true;
@@ -2691,6 +2755,20 @@ void WeaselPanel::_SyncAcrylicBackdrop() {
   const int radius =
       explicitClip ? max(0, DPI_SCALE(m_style.round_corner_ex) + envelope) : 0;
 
+  if (::GetPropW(m_acrylicBackdrop, weasel_acrylic::kAlignedClipEnabled)) {
+    const bool eligible =
+        explicitClip && weasel_acrylic::SupportsAlignedAcrylicClip(
+                            contentWidth, contentHeight, borderPx,
+                            (m_style.border_color >> 24) & 255,
+                            DPI_SCALE(m_style.round_corner_ex), envelope);
+    if (!PublishAlignedAcrylicClip(m_acrylicBackdrop, eligible, width, height,
+                                   radius)) {
+      _DestroyAcrylicBackdrop();
+      RedrawWindow();
+      return;
+    }
+  }
+
   // Publish current style eligibility before helper calls can re-enter. The
   // helper independently checks the live host dimensions and DPI as well.
   if (::GetPropW(m_acrylicBackdrop, weasel_acrylic::kEdgeClipEnabled)) {
@@ -2828,6 +2906,7 @@ void WeaselPanel::_CreateLayout() {
 
 // 更新界面
 void WeaselPanel::Refresh() {
+  const bool acrylicModeChanged = _UpdateAcrylicBackdropMode();
   LocalAcrylicGeometryBatch geometry(m_hWnd);
   IncrementPlacementDiag(m_hWnd, kPlacementDiagRefreshCount);
   bool should_show_icon =
@@ -2874,7 +2953,7 @@ void WeaselPanel::Refresh() {
     CommitPlacementDiagEvent(m_hWnd,
                              PlacementDiagEvent::RefreshBeforeReposition);
     _RepositionWindow();
-    if (m_ctx != m_octx) {
+    if (m_ctx != m_octx || acrylicModeChanged) {
       m_octx = m_ctx;
       RedrawWindow();
     }
@@ -3872,13 +3951,8 @@ LRESULT WeaselPanel::OnCreate(UINT uMsg,
 
   m_mouse_entry = false;
   m_hoverIndex = -1;
-  m_acrylicBackdropEnabled = _CreateAcrylicBackdrop();
-  if (m_acrylicBackdropEnabled ||
-      (m_acrylicBackdrop && !m_in_server && IsExternalCompatibleClient() &&
-       CurrentExternalKind() != ExternalClientKind::Settings))
-    InstallLocalAcrylicGeometry(
-        m_hWnd, this,
-        !m_in_server && CurrentExternalKind() == ExternalClientKind::None);
+  m_acrylicRequested = false;
+  _UpdateAcrylicBackdropMode();
   Refresh();
   return TRUE;
 }
@@ -3893,6 +3967,18 @@ LRESULT WeaselPanel::OnDestroy(UINT uMsg,
   m_sticky = false;
   delete m_layout;
   m_layout = NULL;
+  return 0;
+}
+
+LRESULT WeaselPanel::OnUserSettingsChanged(UINT uMsg,
+                                           WPARAM wParam,
+                                           LPARAM lParam,
+                                           BOOL& bHandled) {
+  if (!uMsg) {
+    bHandled = FALSE;
+    return 0;
+  }
+  Refresh();
   return 0;
 }
 
