@@ -20,15 +20,24 @@ class UserSettingsStore {
       : root_(root), key_(key) {}
 
   bool ReadBool(const wchar_t* name, bool fallback) const {
+    HKEY key = nullptr;
+    LSTATUS result = ::RegOpenKeyExW(root_, key_, 0,
+                                     KEY_QUERY_VALUE | KEY_WOW64_64KEY, &key);
+    if (result == ERROR_FILE_NOT_FOUND || result == ERROR_PATH_NOT_FOUND)
+      return fallback;
+    if (result != ERROR_SUCCESS)
+      return false;
+    DWORD type = 0;
     DWORD value = 0;
     DWORD bytes = sizeof(value);
-    const LSTATUS result = ::RegGetValueW(
-        root_, key_, name, RRF_RT_REG_DWORD | RRF_SUBKEY_WOW6464KEY, nullptr,
-        &value, &bytes);
+    result = ::RegQueryValueExW(key, name, nullptr, &type,
+                                reinterpret_cast<BYTE*>(&value), &bytes);
+    ::RegCloseKey(key);
     if (result == ERROR_FILE_NOT_FOUND || result == ERROR_PATH_NOT_FOUND)
       return fallback;
     // An unreadable or malformed preference must not enable optional material.
-    return result == ERROR_SUCCESS && value <= 1 && value != 0;
+    return result == ERROR_SUCCESS && type == REG_DWORD &&
+           bytes == sizeof(value) && value == 1;
   }
 
   LSTATUS WriteBool(const wchar_t* name, bool value) const {

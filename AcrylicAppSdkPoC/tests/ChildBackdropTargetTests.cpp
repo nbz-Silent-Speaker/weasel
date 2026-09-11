@@ -264,6 +264,11 @@ int main() {
                              REG_DWORD, reinterpret_cast<const BYTE*>(&invalid),
                              sizeof(invalid)) == ERROR_SUCCESS);
       Check(!f.store.ReadBool(weasel::kAcrylicEnabledSetting, true));
+      const BYTE shortValue = 1;
+      Check(::RegSetValueExW(f.key, weasel::kAcrylicEnabledSetting, 0,
+                             REG_DWORD, &shortValue,
+                             sizeof(shortValue)) == ERROR_SUCCESS);
+      Check(!f.store.ReadBool(weasel::kAcrylicEnabledSetting, true));
       const wchar_t text[] = L"true";
       Check(::RegSetValueExW(f.key, weasel::kAcrylicEnabledSetting, 0, REG_SZ,
                              reinterpret_cast<const BYTE*>(text),
