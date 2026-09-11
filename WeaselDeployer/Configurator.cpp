@@ -69,17 +69,16 @@ static bool configure_switcher(RimeLeversApi* api,
 
 static bool configure_ui(RimeLeversApi* api,
                          UIStyleSettings* ui_style_settings,
-                         bool* reconfigured) {
+                         bool* deployed) {
   RimeCustomSettings* settings = ui_style_settings->settings();
   if (!api->load_settings(settings))
     return false;
   UIStyleSettingsDialog dialog(ui_style_settings);
-  if (dialog.DoModal() == IDOK) {
-    if (api->save_settings(settings))
-      *reconfigured = true;
-    return true;
-  }
-  return false;
+  // The appearance page handles Apply/save/deploy as one operation.
+  // A cancelled page must not discard an earlier successful Apply.
+  const int result = dialog.DoModal();
+  *deployed = dialog.deployed();
+  return result == IDOK || dialog.saved();
 }
 
 int Configurator::Run(bool installing) {
@@ -91,6 +90,7 @@ int Configurator::Run(bool installing) {
     return 1;
 
   bool reconfigured = false;
+  bool appearance_deployed = false;
 
   RimeSwitcherSettings* switcher_settings = api->switcher_settings_init();
   UIStyleSettings ui_style_settings;
@@ -98,16 +98,16 @@ int Configurator::Run(bool installing) {
   bool skip_switcher_settings =
       installing && !api->is_first_run((RimeCustomSettings*)switcher_settings);
   bool skip_ui_style_settings =
-      installing && !api->is_first_run(ui_style_settings.settings());
+      installing;  // Shipped Fluent defaults work without a first-run picker.
 
   (skip_switcher_settings ||
    configure_switcher(api, switcher_settings, &reconfigured)) &&
       (skip_ui_style_settings ||
-       configure_ui(api, &ui_style_settings, &reconfigured));
+       configure_ui(api, &ui_style_settings, &appearance_deployed));
 
   api->custom_settings_destroy((RimeCustomSettings*)switcher_settings);
 
-  if (installing || reconfigured) {
+  if ((installing || reconfigured) && !appearance_deployed) {
     return UpdateWorkspace(reconfigured);
   }
   return 0;
@@ -127,14 +127,8 @@ int Configurator::ConfigureColorScheme(weasel::ColorSchemeTarget target) {
     return 1;
   }
   UIStyleSettingsDialog dialog(&settings);
-  if (dialog.DoModal() != IDOK)
-    return 0;
-  if (!api->save_settings(settings.settings())) {
-    MSG_BY_IDS(IDS_STR_SCHEME_SAVE_FAILED, IDS_STR_WEASEL,
-               MB_OK | MB_ICONERROR);
-    return 1;
-  }
-  return UpdateWorkspace(true);
+  dialog.DoModal();
+  return 0;
 }
 
 int Configurator::UpdateWorkspace(bool report_errors) {
@@ -162,12 +156,14 @@ int Configurator::UpdateWorkspace(bool report_errors) {
     client.StartMaintenance();
   }
 
+  bool deployed = false;
   {
     RimeApi* rime = rime_get_api();
     // initialize default config, preset schemas
-    rime->deploy();
+    const bool schemasDeployed = rime->deploy() != False;
     // initialize weasel config
-    rime->deploy_config_file("weasel.yaml", "config_version");
+    deployed = rime->deploy_config_file("weasel.yaml", "config_version") &&
+               schemasDeployed;
   }
 
   CloseHandle(hMutex);  // should be closed before resuming service.
@@ -176,7 +172,11 @@ int Configurator::UpdateWorkspace(bool report_errors) {
     LOG(INFO) << "Resuming service.";
     client.EndMaintenance();
   }
-  return 0;
+  if (!deployed && report_errors) {
+    MSG_BY_IDS(IDS_STR_SCHEME_DEPLOY_FAILED, IDS_STR_WEASEL,
+               MB_OK | MB_ICONERROR);
+  }
+  return deployed ? 0 : 1;
 }
 
 int Configurator::DictManagement() {

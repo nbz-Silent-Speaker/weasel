@@ -32,8 +32,7 @@ int APIENTRY _tWinMain(HINSTANCE hInstance,
   // (MSLU) is used
   ::DefWindowProc(NULL, 0, 0, 0L);
 
-  AtlInitCommonControls(
-      ICC_BAR_CLASSES);  // add flags to support other controls
+  AtlInitCommonControls(ICC_BAR_CLASSES | ICC_TAB_CLASSES);
 
   hRes = _Module.Init(NULL, hInstance);
   ATLASSERT(SUCCEEDED(hRes));
@@ -85,6 +84,9 @@ static int Run(LPTSTR lpCmdLine) {
     return 0;
   }
 
+  if (!wcscmp(L"/settings", lpCmdLine))
+    return configurator.ConfigureColorScheme(
+        weasel::ColorSchemeTarget::Default);
   if (!wcscmp(L"/acrylic-color", lpCmdLine))
     return configurator.ConfigureColorScheme(
         weasel::ColorSchemeTarget::Acrylic);

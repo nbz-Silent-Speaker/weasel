@@ -29,6 +29,7 @@
 
 #include "stdafx.h"
 #include "SystemTraySDK.h"
+#include <WeaselMenuPlacement.h>
 
 #ifdef _DEBUG
 #undef THIS_FILE
@@ -802,7 +803,14 @@ LRESULT CSystemTray::OnTrayNotification(WPARAM wParam, LPARAM lParam) {
 #endif
 
     ::SetForegroundWindow(m_tnd.hWnd);
-    ::TrackPopupMenu(hSubMenu, 0, pos.x, pos.y, 0, hTargetWnd, NULL);
+    NOTIFYICONIDENTIFIER identifier{sizeof(identifier)};
+    identifier.hWnd = m_tnd.hWnd;
+    identifier.uID = m_tnd.uID;
+    RECT icon{};
+    const bool haveIcon =
+        SUCCEEDED(::Shell_NotifyIconGetRect(&identifier, &icon));
+    weasel::TrackTrayMenu(hSubMenu, pos, hTargetWnd, 0,
+                          haveIcon ? &icon : nullptr);
 
     // BUGFIX: See "PRB: Menus for Notification Icons Don't Work Correctly"
     ::PostMessage(m_tnd.hWnd, WM_NULL, 0, 0);

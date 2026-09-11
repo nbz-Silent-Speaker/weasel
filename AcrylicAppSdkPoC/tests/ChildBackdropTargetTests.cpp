@@ -4,6 +4,7 @@
 #include "../../include/WeaselUserSettings.h"
 #include "../../include/WeaselMenu.h"
 #include "ModeColorSchemeTests.h"
+#include "../../include/WeaselMenuPlacement.h"
 
 #include <functional>
 #include <iostream>
@@ -248,6 +249,59 @@ int main() {
     return 2;
   int result = 0;
   try {
+    Run("tray popup follows four edges and signed secondary monitor "
+        "coordinates",
+        [] {
+          const RECT work{0, 0, 1920, 1080};
+          auto left = weasel::PlaceMenu({0, 1000}, work, ABE_LEFT);
+          Check(!left.cascade_left && !(left.flags & TPM_RIGHTALIGN));
+          auto right = weasel::PlaceMenu({1920, 1000}, work, ABE_RIGHT);
+          Check(right.cascade_left && (right.flags & TPM_RIGHTALIGN));
+          Check(right.anchor.x == 1919);
+          auto top = weasel::PlaceMenu({1800, -40}, work, ABE_TOP);
+          Check(top.cascade_left && !(top.flags & TPM_BOTTOMALIGN));
+          Check(top.anchor.y == 0);
+          auto bottom = weasel::PlaceMenu({100, 1120}, work, ABE_BOTTOM);
+          Check(!bottom.cascade_left && (bottom.flags & TPM_BOTTOMALIGN));
+          Check(bottom.anchor.y == 1079);
+          const RECT secondary{-2560, -1440, 0, 0};
+          auto hidden = weasel::PlaceMenu({-1, -100}, secondary);
+          Check(hidden.cascade_left && (hidden.flags & TPM_BOTTOMALIGN));
+          auto opposite = weasel::PlaceMenu({-2500, -1400}, secondary);
+          Check(!opposite.cascade_left && !(opposite.flags & TPM_BOTTOMALIGN));
+        });
+    Run("palette groups require explicit valid light and dark members", [] {
+      ModeSchemeConfig f;
+      Check(f.Open());
+      Check(f.api->config_load_string(&f.config, R"(
+preset_color_schemes:
+  day: {back_color: 0xffffff}
+  night: {back_color: 0x111111}
+  broken: scalar
+color_scheme_groups:
+  complete: {light: day, dark: night}
+  missing: {light: day}
+  unavailable: {light: day, dark: removed}
+  malformed: {light: day, dark: broken}
+)"));
+      weasel::ColorSchemePair pair;
+      Check(weasel::ReadColorSchemePair(f.api, &f.config, &f.config,
+                                        "color_scheme_groups/complete", &pair));
+      Check(pair.light == "day" && pair.dark == "night");
+      for (auto id : {"missing", "unavailable", "malformed", "absent"})
+        Check(!weasel::ReadColorSchemePair(
+            f.api, &f.config, &f.config,
+            std::string("color_scheme_groups/") + id, &pair));
+      Check(std::string(weasel::ColorSchemeConfigKey(
+                weasel::ColorSchemeTarget::Normal)) == "style/color_scheme");
+      Check(std::string(weasel::ColorSchemeConfigKey(
+                weasel::ColorSchemeTarget::NormalDark)) ==
+            "style/color_scheme_dark");
+      // Without legacy normal overrides the existing normal/schema resolution
+      // remains authoritative, including when an Acrylic scheme is configured.
+      Check(weasel::ModeColorScheme(f.api, &f.config, false, false).empty());
+      Check(weasel::ModeColorScheme(f.api, &f.config, false, true).empty());
+    });
     Run("mode palettes independently resolve real YAML without changing legacy "
         "keys",
         [] {

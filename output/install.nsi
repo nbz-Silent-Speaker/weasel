@@ -301,7 +301,9 @@ program_files:
   File "WeaselSetup.exe"
   ; shared data files
   SetOutPath $INSTDIR\data
-  File "data\*.yaml"
+  ; User overrides are created in the user's profile, never shipped/overwritten.
+  File /x *.custom.yaml /x weasel.yaml "data\*.yaml"
+  File /oname=weasel.yaml "..\data\weasel.yaml"
   File /nonfatal "data\*.txt"
   File /nonfatal "data\*.gram"
   ; opencc data files

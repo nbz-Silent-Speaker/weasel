@@ -8,6 +8,7 @@
 #include <WeaselUtility.h>
 #include <WeaselUserSettings.h>
 #include <WeaselMenu.h>
+#include <WeaselMenuPlacement.h>
 
 static const DWORD LANGBARITEMSINK_COOKIE = 0x42424242;
 
@@ -151,9 +152,8 @@ STDMETHODIMP CLangBarItemButton::OnClick(TfLBIClick click,
       HMENU popupMenu = GetSubMenu(menu, 0);
       weasel::SetMenuCommandChecked(popupMenu, ID_WEASELTRAY_ACRYLIC,
                                     weasel::UserSettings::Load().acrylic);
-      UINT wID = TrackPopupMenuEx(
-          popupMenu, TPM_NONOTIFY | TPM_RETURNCMD | TPM_HORPOSANIMATION, pt.x,
-          pt.y, hwnd, NULL);
+      UINT wID = weasel::TrackTrayMenu(popupMenu, pt, hwnd,
+                                       TPM_NONOTIFY | TPM_RETURNCMD, prcArea);
       DestroyMenu(menu);
       _pTextService->_HandleLangBarMenuSelect(wID);
     }

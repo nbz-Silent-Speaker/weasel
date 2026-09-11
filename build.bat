@@ -294,6 +294,8 @@ rem ---------------------------------------------------------------------------
   set WSLENV=plum_dir:rime_dir
   bash plum/rime-install %WEASEL_BUNDLED_RECIPES%
   if errorlevel 1 goto error
+  copy /y "%WEASEL_ROOT%\data\weasel.yaml" "%WEASEL_ROOT%\output\data\weasel.yaml"
+  if errorlevel 1 goto error
   exit /b
 
 rem ---------------------------------------------------------------------------

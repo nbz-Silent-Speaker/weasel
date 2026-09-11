@@ -43,6 +43,7 @@
     <ClInclude Include="..\AlignedAcrylicClip.h" />
     <ClInclude Include="..\..\include\WeaselUserSettings.h" />
     <ClInclude Include="..\..\include\WeaselMenu.h" />
+    <ClInclude Include="..\..\include\WeaselMenuPlacement.h" />
     <ClInclude Include="..\..\include\WeaselColorScheme.h" />
     <ClInclude Include="ModeColorSchemeTests.h" />
   </ItemGroup>
