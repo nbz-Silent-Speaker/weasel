@@ -126,7 +126,10 @@ inline void DrawAppearancePreview(HDC dc,
   }
   canvas.Flush(FlushIntentionSync);
   Graphics output(dc);
-  output.DrawImage(&buffer, bounds.left, bounds.top);
+  // The buffer already matches the control's physical pixels. Specifying its
+  // size avoids GDI+ scaling it a second time on a different-DPI display.
+  output.DrawImage(&buffer, Rect(static_cast<INT>(bounds.left),
+                                 static_cast<INT>(bounds.top), width, height));
 }
 
 }  // namespace weasel
