@@ -323,6 +323,13 @@ bool UIStyleSettings::SaveAppearance(const std::array<std::string, 4>& colors) {
   return true;
 }
 
+int UIStyleSettings::PreviewLayoutInt(const char* key, int fallback) {
+  int value = fallback;
+  const auto path = std::string("style/layout/") + key;
+  rime_get_api()->config_get_int(&original_, path.c_str(), &value);
+  return (std::max)(0, value);
+}
+
 COLORREF UIStyleSettings::PreviewColor(const std::string& id,
                                        const char* key,
                                        COLORREF fallback) {

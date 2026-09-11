@@ -44,6 +44,7 @@ class UIStyleSettings {
   COLORREF PreviewColor(const std::string& id,
                         const char* key,
                         COLORREF fallback);
+  int PreviewLayoutInt(const char* key, int fallback);
 
   RimeCustomSettings* settings() { return settings_; }
 

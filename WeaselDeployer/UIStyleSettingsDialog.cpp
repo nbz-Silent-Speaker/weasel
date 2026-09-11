@@ -2,6 +2,7 @@
 #include "WeaselDeployer.h"
 #include "UIStyleSettingsDialog.h"
 #include "Configurator.h"
+#include "AppearancePreview.h"
 #include <WeaselUtility.h>
 #include <WeaselUserSettings.h>
 #include <algorithm>
@@ -13,143 +14,190 @@ CString UIStyleSettingsDialog::Text(UINT id) const {
 }
 
 LRESULT UIStyleSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
-  if (!settings_->LoadAppearance()) {
+  Gdiplus::GdiplusStartupInput startup;
+  if (Gdiplus::GdiplusStartup(&graphics_token_, &startup, nullptr) !=
+          Gdiplus::Ok ||
+      !settings_->LoadAppearance()) {
     MSG_BY_IDS(IDS_STR_SCHEME_SAVE_FAILED, IDS_STR_WEASEL,
                MB_OK | MB_ICONERROR);
     EndDialog(IDCANCEL);
     return TRUE;
   }
-  colors_ = settings_->ActiveAppearance();
-  CTabCtrl pages(GetDlgItem(IDC_SETTINGS_PAGES));
-  TCITEMW page{};
-  page.mask = TCIF_TEXT;
-  CString title = Text(IDS_APPEARANCE_TITLE);
-  page.pszText = title.GetBuffer();
-  pages.InsertItem(0, &page);
-  title.ReleaseBuffer();
-  acrylic_ = weasel::UserSettings::Load().acrylic;
-  CheckDlgButton(IDC_ACRYLIC_ENABLED, acrylic_ ? BST_CHECKED : BST_UNCHECKED);
-  CComboBox source(GetDlgItem(IDC_SCHEME_SOURCE));
-  for (UINT id :
-       {IDS_APPEARANCE_ALL, IDS_APPEARANCE_BASE, IDS_APPEARANCE_CUSTOM})
-    source.AddString(Text(id));
-  source.SetCurSel(0);
-  FillGroups();
-  FillSingles();
-  ShowAdvanced(false);
-  RefreshStatus();
+  draft_.Load(settings_->ActiveAppearance(),
+              weasel::UserSettings::Load().acrylic);
+  LOGFONTW heading{};
+  ::GetObjectW(GetFont(), sizeof(heading), &heading);
+  heading.lfHeight = heading.lfHeight * 4 / 3;
+  heading.lfWeight = FW_SEMIBOLD;
+  if (heading_font_.CreateFontIndirect(&heading))
+    CWindow(GetDlgItem(IDC_APPEARANCE_TITLE)).SetFont(heading_font_);
+  RECT unit{0, 0, 0, 14};
+  MapDialogRect(&unit);
+  item_height_ = unit.bottom;
+  for (UINT id : {IDC_COLOR_FAMILY, IDC_COLOR_LIGHT, IDC_COLOR_DARK})
+    CComboBox(GetDlgItem(id)).SetItemHeight(-1, item_height_);
+  RefreshMode();
   ready_ = true;
   CenterWindow();
   return TRUE;
 }
 
+std::vector<UIStyleSettingsDialog::PaletteEntry>&
+UIStyleSettingsDialog::Entries(UINT id) {
+  return id == IDC_COLOR_FAMILY ? groups_ : singles_[id - IDC_COLOR_LIGHT];
+}
+
+void UIStyleSettingsDialog::AddEntry(CComboBox& combo, PaletteEntry entry) {
+  auto& entries = Entries(combo.GetDlgCtrlID());
+  // Insert the description first: CB_ADDSTRING may synchronously measure it.
+  entries.push_back(entry);
+  const int item = combo.AddString(entry.label);
+  if (item >= 0)
+    combo.SetItemHeight(item, item_height_ * (entry.heading ? 2 : 1));
+}
+
 void UIStyleSettingsDialog::FillGroups() {
-  const int filter = CComboBox(GetDlgItem(IDC_SCHEME_SOURCE)).GetCurSel();
+  CComboBox combo(GetDlgItem(IDC_COLOR_FAMILY));
+  combo.ResetContent();
+  groups_.clear();
   const auto& groups = settings_->groups();
-  for (int mode = 0; mode < 2; ++mode) {
-    CComboBox combo(GetDlgItem(IDC_ACRYLIC_GROUP + mode));
-    combo.ResetContent();
-    combo.SetItemData(combo.AddString(Text(IDS_APPEARANCE_MIXED)),
-                      static_cast<DWORD_PTR>(-1));
-    int selected = 0;
+  int active = -1;
+  for (size_t i = 0; i < groups.size(); ++i) {
+    if (groups[i].light == draft_.current(false) &&
+        groups[i].dark == draft_.current(true)) {
+      active = static_cast<int>(i);
+      break;
+    }
+  }
+  int selected = 0;
+  if (active < 0)
+    AddEntry(combo, {Text(IDS_APPEARANCE_MIXED), -1});
+  for (bool custom : {false, true}) {
+    bool first = true;
     for (size_t i = 0; i < groups.size(); ++i) {
       const auto& group = groups[i];
-      const bool active = group.light == colors_[mode * 2] &&
-                          group.dark == colors_[mode * 2 + 1];
-      if (!active &&
-          ((filter == 1 && group.custom) || (filter == 2 && !group.custom)))
+      if (group.custom != custom)
         continue;
-      CString label(u8tow(group.name).c_str());
-      label += L"  \u00b7  ";
-      label += Text(group.custom ? IDS_APPEARANCE_CUSTOM : IDS_APPEARANCE_BASE);
-      const int item = combo.AddString(label);
-      combo.SetItemData(item, i);
-      if (active)
-        selected = item;
+      if (static_cast<int>(i) == active)
+        selected = static_cast<int>(groups_.size());
+      AddEntry(
+          combo,
+          {CString(u8tow(group.name).c_str()), static_cast<int>(i),
+           first ? (custom ? IDS_APPEARANCE_CUSTOM : IDS_APPEARANCE_BASE) : 0});
+      first = false;
     }
-    combo.SetCurSel(selected);
   }
+  combo.SetCurSel(selected);
 }
 
 void UIStyleSettingsDialog::FillSingles() {
-  const int filter = CComboBox(GetDlgItem(IDC_SCHEME_SOURCE)).GetCurSel();
-  for (int slot = 0; slot < 4; ++slot) {
-    CComboBox combo(GetDlgItem(IDC_ACRYLIC_LIGHT + slot));
+  for (int dark = 0; dark < 2; ++dark) {
+    CComboBox combo(GetDlgItem(IDC_COLOR_LIGHT + dark));
     combo.ResetContent();
-    combo.SetItemData(combo.AddString(Text(IDS_STR_SCHEME_FOLLOW_CONFIG)),
-                      static_cast<DWORD_PTR>(-1));
+    singles_[dark].clear();
+    AddEntry(combo, {Text(IDS_STR_SCHEME_FOLLOW_CONFIG), -1});
     int selected = 0;
-    for (size_t i = 0; i < settings_->schemes().size(); ++i) {
-      const auto& scheme = settings_->schemes()[i];
-      const bool active = scheme.color_scheme_id == colors_[slot];
-      if (!active &&
-          ((filter == 1 && scheme.custom) || (filter == 2 && !scheme.custom)))
-        continue;
-      CString label =
-          Text(scheme.custom ? IDS_APPEARANCE_CUSTOM : IDS_APPEARANCE_BASE);
-      label += L" \u00b7 ";
-      label += u8tow(scheme.name).c_str();
-      const int item = combo.AddString(label);
-      combo.SetItemData(item, i);
-      if (scheme.color_scheme_id == colors_[slot])
-        selected = item;
+    for (bool custom : {false, true}) {
+      bool first = true;
+      for (size_t i = 0; i < settings_->schemes().size(); ++i) {
+        const auto& scheme = settings_->schemes()[i];
+        if (scheme.custom != custom)
+          continue;
+        if (scheme.color_scheme_id == draft_.current(dark != 0))
+          selected = static_cast<int>(singles_[dark].size());
+        AddEntry(combo,
+                 {CString(u8tow(scheme.name).c_str()), static_cast<int>(i),
+                  first ? (custom ? IDS_APPEARANCE_CUSTOM : IDS_APPEARANCE_BASE)
+                        : 0});
+        first = false;
+      }
     }
     combo.SetCurSel(selected);
   }
 }
 
+void UIStyleSettingsDialog::RefreshMode() {
+  CheckDlgButton(IDC_ACRYLIC_ENABLED,
+                 draft_.acrylic() ? BST_CHECKED : BST_UNCHECKED);
+  SetDlgItemText(IDC_MATERIAL_HINT,
+                 Text(draft_.acrylic() ? IDS_APPEARANCE_ACRYLIC_HINT
+                                       : IDS_APPEARANCE_NORMAL_HINT));
+  SetDlgItemText(
+      IDC_PALETTE_LABEL,
+      Text(draft_.acrylic() ? IDS_APPEARANCE_ACRYLIC : IDS_APPEARANCE_NORMAL));
+  SetDlgItemText(IDC_PREVIEW_HINT,
+                 Text(draft_.acrylic() ? IDS_APPEARANCE_ACRYLIC_PREVIEW
+                                       : IDS_APPEARANCE_NORMAL_PREVIEW));
+  FillGroups();
+  FillSingles();
+  ShowAdvanced(advanced_[draft_.acrylic() ? 0 : 1]);
+  RefreshPreview();
+}
+
 void UIStyleSettingsDialog::ShowAdvanced(bool show) {
-  CheckDlgButton(IDC_ADVANCED_COLORS, show ? BST_CHECKED : BST_UNCHECKED);
-  for (int id = IDC_ACRYLIC_LIGHT; id <= IDC_NORMAL_DARK; ++id)
+  advanced_[draft_.acrylic() ? 0 : 1] = show;
+  CString caption(show ? L"\u25be  " : L"\u25b8  ");
+  caption += Text(IDS_APPEARANCE_ADVANCED);
+  SetDlgItemText(IDC_ADVANCED_COLORS, caption);
+  for (int id :
+       {IDC_COLOR_LIGHT, IDC_COLOR_DARK, IDC_LIGHT_LABEL, IDC_DARK_LABEL})
     ::ShowWindow(GetDlgItem(id), show ? SW_SHOW : SW_HIDE);
-  for (int id : {IDC_LIGHT_LABEL, IDC_DARK_LABEL, IDC_ADV_ACRYLIC_LABEL,
-                 IDC_ADV_NORMAL_LABEL, IDC_ADVANCED_HINT})
-    ::ShowWindow(GetDlgItem(id), show ? SW_SHOW : SW_HIDE);
+  if (show == expanded_)
+    return;
+  RECT delta{0, 0, 0, 40};
+  MapDialogRect(&delta);
+  const int shift = show ? delta.bottom : -delta.bottom;
+  for (int id : {IDC_SETTINGS_DIVIDER, IDC_RESTORE_APPEARANCE, IDC_APPLY, IDOK,
+                 IDCANCEL}) {
+    RECT rect{};
+    HWND control = GetDlgItem(id);
+    ::GetWindowRect(control, &rect);
+    ::MapWindowPoints(nullptr, m_hWnd, reinterpret_cast<POINT*>(&rect), 2);
+    ::SetWindowPos(control, nullptr, rect.left, rect.top + shift, 0, 0,
+                   SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+  }
+  RECT window{};
+  GetWindowRect(&window);
+  SetWindowPos(nullptr, 0, 0, window.right - window.left,
+               window.bottom - window.top + shift,
+               SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+  expanded_ = show;
+  Invalidate();
 }
 
-void UIStyleSettingsDialog::RefreshStatus() {
-  DWORD light = 1, size = sizeof(light);
-  ::RegGetValueW(
-      HKEY_CURRENT_USER,
-      L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
-      L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &light, &size);
-  const bool acrylic = weasel::UserSettings::Load().acrylic;
-  auto actual = settings_->ActiveAppearance();
-  const int slot = (acrylic ? 0 : 2) + (light ? 0 : 1);
-  CString status = Text(IDS_APPEARANCE_CURRENT);
-  status += Text(acrylic ? IDS_APPEARANCE_ACRYLIC : IDS_APPEARANCE_NORMAL);
-  status += L" \u00b7 ";
-  status += Text(light ? IDS_APPEARANCE_LIGHT : IDS_APPEARANCE_DARK);
-  status += L" \u00b7 ";
-  status += actual[slot].empty() ? Text(IDS_STR_SCHEME_FOLLOW_CONFIG)
-                                 : CString(u8tow(actual[slot]).c_str());
-  SetDlgItemText(IDC_ACTIVE_APPEARANCE, status);
-  ::InvalidateRect(GetDlgItem(IDC_PREVIEW_LIGHT), nullptr, TRUE);
-  ::InvalidateRect(GetDlgItem(IDC_PREVIEW_DARK), nullptr, TRUE);
+void UIStyleSettingsDialog::RefreshPreview() {
+  ::EnableWindow(GetDlgItem(IDC_APPLY), draft_.changed());
+  ::InvalidateRect(GetDlgItem(IDC_PREVIEW_LIGHT), nullptr, FALSE);
+  ::InvalidateRect(GetDlgItem(IDC_PREVIEW_DARK), nullptr, FALSE);
 }
 
-LRESULT UIStyleSettingsDialog::OnGroup(WORD notification,
-                                       WORD id,
-                                       HWND,
-                                       BOOL&) {
-  if (!ready_ || notification != CBN_SELCHANGE)
+LRESULT UIStyleSettingsDialog::OnMaterial(WORD, WORD, HWND, BOOL&) {
+  if (ready_) {
+    draft_.SetAcrylic(IsDlgButtonChecked(IDC_ACRYLIC_ENABLED) == BST_CHECKED);
+    RefreshMode();
+  }
+  return 0;
+}
+
+LRESULT UIStyleSettingsDialog::OnGroup(WORD, WORD, HWND, BOOL&) {
+  if (!ready_)
     return 0;
-  CComboBox combo(GetDlgItem(id));
-  const auto item = combo.GetItemData(combo.GetCurSel());
-  if (item == static_cast<DWORD_PTR>(-1)) {
+  const int selected = CComboBox(GetDlgItem(IDC_COLOR_FAMILY)).GetCurSel();
+  if (selected < 0 || static_cast<size_t>(selected) >= groups_.size())
+    return 0;
+  const int index = groups_[selected].index;
+  if (index < 0) {
     ShowAdvanced(true);
     return 0;
   }
-  if (item >= settings_->groups().size())
-    return 0;
-  const int slot = (id - IDC_ACRYLIC_GROUP) * 2;
-  const auto& group = settings_->groups()[item];
-  colors_[slot] = group.light;
-  colors_[slot + 1] = group.dark;
+  const auto& group = settings_->groups()[index];
+  draft_.SelectPair(group.light, group.dark);
+  FillGroups();
   FillSingles();
-  RefreshStatus();
+  RefreshPreview();
   return 0;
 }
+
 LRESULT UIStyleSettingsDialog::OnSingle(WORD notification,
                                         WORD id,
                                         HWND,
@@ -157,55 +205,56 @@ LRESULT UIStyleSettingsDialog::OnSingle(WORD notification,
   if (!ready_ || notification != CBN_SELCHANGE)
     return 0;
   CComboBox combo(GetDlgItem(id));
-  const auto item = combo.GetItemData(combo.GetCurSel());
-  colors_[id - IDC_ACRYLIC_LIGHT] =
-      item < settings_->schemes().size()
-          ? settings_->schemes()[item].color_scheme_id
-          : "";
+  const int selected = combo.GetCurSel();
+  const auto& entries = Entries(id);
+  if (selected < 0 || static_cast<size_t>(selected) >= entries.size())
+    return 0;
+  const int index = entries[selected].index;
+  draft_.SelectSingle(
+      id == IDC_COLOR_DARK,
+      index < 0 ? "" : settings_->schemes()[index].color_scheme_id);
   FillGroups();
-  RefreshStatus();
+  RefreshPreview();
   return 0;
 }
-LRESULT UIStyleSettingsDialog::OnSource(WORD, WORD, HWND, BOOL&) {
-  FillGroups();
-  FillSingles();
-  return 0;
-}
+
 LRESULT UIStyleSettingsDialog::OnAdvanced(WORD, WORD, HWND, BOOL&) {
-  ShowAdvanced(IsDlgButtonChecked(IDC_ADVANCED_COLORS) == BST_CHECKED);
+  ShowAdvanced(!expanded_);
   return 0;
 }
+
 LRESULT UIStyleSettingsDialog::OnReset(WORD, WORD, HWND, BOOL&) {
-  colors_ = {"Fluent_light", "Fluent_dark", "Fluent_light", "Fluent_dark"};
-  CheckDlgButton(IDC_ACRYLIC_ENABLED, BST_CHECKED);
-  CComboBox(GetDlgItem(IDC_SCHEME_SOURCE)).SetCurSel(0);
-  FillGroups();
-  FillSingles();
-  RefreshStatus();
+  draft_.ResetCurrent();
+  RefreshMode();
   return 0;
 }
-LRESULT UIStyleSettingsDialog::OnThemeChanged(UINT, WPARAM, LPARAM, BOOL&) {
-  if (ready_)
-    RefreshStatus();
-  return 0;
-}
+
 LRESULT UIStyleSettingsDialog::OnCancel(WORD, WORD, HWND, BOOL&) {
   EndDialog(IDCANCEL);
   return 0;
 }
+
 LRESULT UIStyleSettingsDialog::OnClose(UINT, WPARAM, LPARAM, BOOL&) {
   EndDialog(IDCANCEL);
   return 0;
 }
 
+LRESULT UIStyleSettingsDialog::OnDestroy(UINT, WPARAM, LPARAM, BOOL& handled) {
+  if (graphics_token_)
+    Gdiplus::GdiplusShutdown(graphics_token_);
+  graphics_token_ = 0;
+  handled = FALSE;
+  return 0;
+}
+
 LRESULT UIStyleSettingsDialog::OnSave(WORD, WORD id, HWND, BOOL&) {
-  const bool desired = IsDlgButtonChecked(IDC_ACRYLIC_ENABLED) == BST_CHECKED;
+  const bool desired = draft_.acrylic();
   const bool before = weasel::UserSettings::Load().acrylic;
-  const bool changeMaterial = desired != acrylic_;
+  const bool changeMaterial = desired != draft_.saved_acrylic();
   if ((changeMaterial &&
        weasel::UserSettingsStore().WriteBool(weasel::kAcrylicEnabledSetting,
                                              desired) != ERROR_SUCCESS) ||
-      !settings_->SaveAppearance(colors_)) {
+      !settings_->SaveAppearance(draft_.colors())) {
     if (changeMaterial)
       weasel::UserSettingsStore().WriteBool(weasel::kAcrylicEnabledSetting,
                                             before);
@@ -230,73 +279,126 @@ LRESULT UIStyleSettingsDialog::OnSave(WORD, WORD id, HWND, BOOL&) {
     return 0;
   }
   const auto applied = settings_->ActiveAppearance();
-  for (size_t i = 0; i < colors_.size(); ++i) {
-    if (!colors_[i].empty() && applied[i] != colors_[i]) {
+  for (size_t i = 0; i < draft_.colors().size(); ++i) {
+    if (!draft_.colors()[i].empty() && applied[i] != draft_.colors()[i]) {
       MSG_BY_IDS(IDS_STR_SCHEME_DEPLOY_FAILED, IDS_STR_WEASEL,
                  MB_OK | MB_ICONERROR);
       return 0;
     }
   }
-  acrylic_ = weasel::UserSettings::Load().acrylic;
-  colors_ = settings_->ActiveAppearance();
-  CheckDlgButton(IDC_ACRYLIC_ENABLED, acrylic_ ? BST_CHECKED : BST_UNCHECKED);
-  FillGroups();
-  FillSingles();
-  RefreshStatus();
+  draft_.Load(applied, weasel::UserSettings::Load().acrylic);
+  RefreshMode();
   if (id == IDOK)
     EndDialog(IDOK);
   return 0;
 }
 
+LRESULT UIStyleSettingsDialog::OnMeasureItem(UINT,
+                                             WPARAM,
+                                             LPARAM param,
+                                             BOOL& handled) {
+  const auto measure = reinterpret_cast<MEASUREITEMSTRUCT*>(param);
+  if (measure->CtlID != IDC_COLOR_FAMILY && measure->CtlID != IDC_COLOR_LIGHT &&
+      measure->CtlID != IDC_COLOR_DARK) {
+    handled = FALSE;
+    return 0;
+  }
+  const auto& entries = Entries(measure->CtlID);
+  const bool heading =
+      measure->itemID < entries.size() && entries[measure->itemID].heading != 0;
+  measure->itemHeight = item_height_ * (heading ? 2 : 1);
+  return TRUE;
+}
+
+void UIStyleSettingsDialog::DrawCombo(const DRAWITEMSTRUCT& draw) {
+  const auto& entries = Entries(draw.CtlID);
+  const int saved = ::SaveDC(draw.hDC);
+  ::FillRect(draw.hDC, &draw.rcItem, ::GetSysColorBrush(COLOR_WINDOW));
+  if (draw.itemID < entries.size()) {
+    const auto& entry = entries[draw.itemID];
+    RECT row = draw.rcItem;
+    const bool field = (draw.itemState & ODS_COMBOBOXEDIT) != 0;
+    ::SelectObject(draw.hDC, GetFont());
+    ::SetBkMode(draw.hDC, TRANSPARENT);
+    // Headings belong to the first selectable row in each group, so keyboard
+    // navigation cannot accidentally select a heading as a palette.
+    if (!field && entry.heading) {
+      RECT heading = row;
+      heading.bottom = heading.top + item_height_;
+      heading.left += 7;
+      ::SetTextColor(draw.hDC, ::GetSysColor(COLOR_GRAYTEXT));
+      ::DrawTextW(draw.hDC, Text(entry.heading), -1, &heading,
+                  DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+      row.top += item_height_;
+    }
+    const bool selected = (draw.itemState & ODS_SELECTED) != 0;
+    ::FillRect(draw.hDC, &row,
+               ::GetSysColorBrush(selected ? COLOR_HIGHLIGHT : COLOR_WINDOW));
+    ::SetTextColor(draw.hDC, ::GetSysColor(selected ? COLOR_HIGHLIGHTTEXT
+                                                    : COLOR_WINDOWTEXT));
+    RECT label = row;
+    label.left += field ? 5 : 13;
+    label.right -= 5;
+    ::DrawTextW(draw.hDC, entry.label, -1, &label,
+                DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+    if ((draw.itemState & ODS_FOCUS) && !(draw.itemState & ODS_NOFOCUSRECT))
+      ::DrawFocusRect(draw.hDC, &row);
+  }
+  ::RestoreDC(draw.hDC, saved);
+}
+
 LRESULT UIStyleSettingsDialog::OnDrawItem(UINT,
                                           WPARAM,
-                                          LPARAM lParam,
+                                          LPARAM param,
                                           BOOL& handled) {
-  const auto draw = reinterpret_cast<DRAWITEMSTRUCT*>(lParam);
+  const auto draw = reinterpret_cast<DRAWITEMSTRUCT*>(param);
+  if (draw->CtlID == IDC_COLOR_FAMILY || draw->CtlID == IDC_COLOR_LIGHT ||
+      draw->CtlID == IDC_COLOR_DARK) {
+    DrawCombo(*draw);
+    return TRUE;
+  }
   if (draw->CtlID != IDC_PREVIEW_LIGHT && draw->CtlID != IDC_PREVIEW_DARK) {
     handled = FALSE;
     return 0;
   }
-  const bool dark = draw->CtlID == IDC_PREVIEW_DARK;
-  // Palette previews intentionally do not simulate a live desktop backdrop.
-  const int saved = ::SaveDC(draw->hDC);
-  ::FillRect(draw->hDC, &draw->rcItem, ::GetSysColorBrush(COLOR_WINDOW));
-  const int height = (draw->rcItem.bottom - draw->rcItem.top) / 2;
-  for (int mode = 0; mode < 2; ++mode) {
-    const auto& scheme = colors_[mode * 2 + (dark ? 1 : 0)];
-    RECT area = draw->rcItem;
-    area.top += mode * height;
-    area.bottom = area.top + height;
-    ::InflateRect(&area, -6, -6);
-    auto brush = ::CreateSolidBrush(settings_->PreviewColor(
-        scheme, "back_color", dark ? RGB(40, 40, 40) : RGB(249, 249, 249)));
-    ::FillRect(draw->hDC, &area, brush);
-    ::DeleteObject(brush);
-    ::SetBkMode(draw->hDC, TRANSPARENT);
-    ::SetTextColor(draw->hDC, settings_->PreviewColor(
-                                  scheme, "text_color",
-                                  dark ? RGB(240, 240, 240) : RGB(32, 32, 32)));
-    ::SelectObject(draw->hDC, GetFont());
-    ::InflateRect(&area, -10, -4);
-    ::DrawTextW(
-        draw->hDC,
-        Text(mode == 0 ? IDS_APPEARANCE_ACRYLIC : IDS_APPEARANCE_NORMAL), -1,
-        &area, DT_TOP | DT_SINGLELINE | DT_NOPREFIX);
-    TEXTMETRICW metrics{};
-    ::GetTextMetricsW(draw->hDC, &metrics);
-    area.top += metrics.tmHeight + 8;
-    area.bottom = (std::min)(area.bottom, area.top + metrics.tmHeight + 12);
-    brush = ::CreateSolidBrush(
-        settings_->PreviewColor(scheme, "hilited_candidate_back_color",
-                                dark ? RGB(66, 66, 66) : RGB(229, 229, 229)));
-    ::FillRect(draw->hDC, &area, brush);
-    ::DeleteObject(brush);
-    ::SetTextColor(draw->hDC, settings_->PreviewColor(
-                                  scheme, "hilited_candidate_text_color",
-                                  dark ? RGB(255, 255, 255) : RGB(17, 17, 17)));
-    ::DrawTextW(draw->hDC, Text(IDS_APPEARANCE_SAMPLE), -1, &area,
-                DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX);
+  if (!graphics_token_)
+    return TRUE;
+  weasel::AppearancePreview preview{};
+  preview.dark = draw->CtlID == IDC_PREVIEW_DARK;
+  preview.acrylic = draft_.acrylic();
+  auto scheme = draft_.current(preview.dark);
+  if (scheme.empty()) {
+    // "Follow configuration" still previews the effective original choice.
+    const auto actual = settings_->ActiveAppearance();
+    scheme = actual[draft_.offset() + (preview.dark ? 1 : 0)];
+    if (scheme.empty() && preview.acrylic)
+      scheme = actual[preview.dark ? 3 : 2];
   }
-  ::RestoreDC(draw->hDC, saved);
+  const auto color = [&](const char* key, COLORREF light, COLORREF dark) {
+    return settings_->PreviewColor(scheme, key, preview.dark ? dark : light);
+  };
+  preview.background = color("back_color", RGB(249, 249, 249), RGB(44, 44, 44));
+  preview.border = color("border_color", RGB(213, 213, 213), RGB(80, 80, 80));
+  preview.text =
+      color("candidate_text_color", RGB(32, 32, 32), RGB(242, 242, 242));
+  preview.label = color("label_color", RGB(104, 104, 104), RGB(176, 176, 176));
+  preview.highlight = color("hilited_candidate_back_color", RGB(229, 229, 229),
+                            RGB(66, 66, 66));
+  preview.highlighted_text = color("hilited_candidate_text_color",
+                                   RGB(17, 17, 17), RGB(255, 255, 255));
+  preview.highlighted_label =
+      color("hilited_label_color", RGB(0, 103, 192), RGB(96, 205, 255));
+  preview.mark =
+      color("hilited_mark_color", RGB(0, 103, 192), RGB(96, 205, 255));
+  preview.radius =
+      static_cast<float>(settings_->PreviewLayoutInt("corner_radius", 11));
+  preview.highlight_radius =
+      static_cast<float>(settings_->PreviewLayoutInt("round_corner", 8));
+  preview.border_width =
+      static_cast<float>(settings_->PreviewLayoutInt("border_width", 1));
+  preview.candidates = {static_cast<LPCWSTR>(Text(IDS_APPEARANCE_SAMPLE)),
+                        static_cast<LPCWSTR>(Text(IDS_APPEARANCE_SAMPLE_2)),
+                        static_cast<LPCWSTR>(Text(IDS_APPEARANCE_SAMPLE_3))};
+  weasel::DrawAppearancePreview(draw->hDC, draw->rcItem, GetFont(), preview);
   return TRUE;
 }

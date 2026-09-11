@@ -36,6 +36,12 @@
     <ClInclude Include="UIStyleSettingsDialog.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="AppearancePreview.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\include\WeaselAppearanceDraft.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="UIStyleSettings.h">
       <Filter>Header Files</Filter>
     </ClInclude>

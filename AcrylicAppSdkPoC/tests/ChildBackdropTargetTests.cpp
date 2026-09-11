@@ -5,6 +5,8 @@
 #include "../../include/WeaselMenu.h"
 #include "ModeColorSchemeTests.h"
 #include "../../include/WeaselMenuPlacement.h"
+#include "../../include/WeaselAppearanceDraft.h"
+#include "../../WeaselDeployer/AppearancePreview.h"
 
 #include <functional>
 #include <iostream>
@@ -254,21 +256,128 @@ int main() {
         [] {
           const RECT work{0, 0, 1920, 1080};
           auto left = weasel::PlaceMenu({0, 1000}, work, ABE_LEFT);
-          Check(!left.cascade_left && !(left.flags & TPM_RIGHTALIGN));
+          Check(!(left.flags & TPM_RIGHTALIGN));
           auto right = weasel::PlaceMenu({1920, 1000}, work, ABE_RIGHT);
-          Check(right.cascade_left && (right.flags & TPM_RIGHTALIGN));
+          Check(right.flags & TPM_RIGHTALIGN);
           Check(right.anchor.x == 1919);
           auto top = weasel::PlaceMenu({1800, -40}, work, ABE_TOP);
-          Check(top.cascade_left && !(top.flags & TPM_BOTTOMALIGN));
+          Check((top.flags & TPM_RIGHTALIGN) && !(top.flags & TPM_BOTTOMALIGN));
           Check(top.anchor.y == 0);
           auto bottom = weasel::PlaceMenu({100, 1120}, work, ABE_BOTTOM);
-          Check(!bottom.cascade_left && (bottom.flags & TPM_BOTTOMALIGN));
+          Check(!(bottom.flags & TPM_RIGHTALIGN) &&
+                (bottom.flags & TPM_BOTTOMALIGN));
           Check(bottom.anchor.y == 1079);
           const RECT secondary{-2560, -1440, 0, 0};
           auto hidden = weasel::PlaceMenu({-1, -100}, secondary);
-          Check(hidden.cascade_left && (hidden.flags & TPM_BOTTOMALIGN));
+          Check((hidden.flags & TPM_RIGHTALIGN) &&
+                (hidden.flags & TPM_BOTTOMALIGN));
           auto opposite = weasel::PlaceMenu({-2500, -1400}, secondary);
-          Check(!opposite.cascade_left && !(opposite.flags & TPM_BOTTOMALIGN));
+          Check(!(opposite.flags & TPM_RIGHTALIGN) &&
+                !(opposite.flags & TPM_BOTTOMALIGN));
+        });
+    Run("appearance mode changes retain each mode's unsaved palette", [] {
+      weasel::AppearanceDraft draft;
+      const weasel::AppearanceDraft::Colors original{
+          "glass_day", "glass_night", "plain_day", "plain_night"};
+      draft.Load(original, true);
+      Check(!draft.changed());
+      draft.SelectPair("glass_new_day", "glass_new_night");
+      draft.SetAcrylic(false);
+      Check(draft.current(false) == "plain_day" &&
+            draft.current(true) == "plain_night");
+      draft.SelectSingle(true, "plain_new_night");
+      draft.SetAcrylic(true);
+      Check(draft.current(false) == "glass_new_day" &&
+            draft.current(true) == "glass_new_night");
+      Check(draft.colors()[2] == "plain_day" &&
+            draft.colors()[3] == "plain_new_night");
+      Check(draft.changed() && draft.saved_acrylic());
+      // Reopening after Cancel loads the unchanged persisted choices.
+      draft.Load(original, true);
+      Check(!draft.changed() && draft.colors() == original);
+    });
+    Run("appearance reset and applied snapshot respect the current mode", [] {
+      weasel::AppearanceDraft draft;
+      draft.Load({"glass_day", "glass_night", "plain_day", "plain_night"},
+                 false);
+      draft.ResetCurrent();
+      Check(!draft.acrylic());
+      Check(draft.colors() ==
+            weasel::AppearanceDraft::Colors{"glass_day", "glass_night",
+                                            "Fluent_light", "Fluent_dark"});
+      Check(draft.changed());
+      const auto applied = draft.colors();
+      draft.Load(applied, false);
+      Check(!draft.changed());
+      draft.SetAcrylic(true);
+      draft.ResetCurrent();
+      Check(draft.colors()[2] == "Fluent_light" &&
+            draft.colors()[3] == "Fluent_dark");
+      Check(draft.changed());
+      draft.Load(applied, false);
+      Check(!draft.changed() && draft.current(false) == "Fluent_light");
+      draft.SetAcrylic(true);
+      Check(draft.current(false) == "glass_day");
+    });
+    Run("appearance preview draws rounded opaque and translucent candidates",
+        [] {
+          struct PreviewFixture {
+            ULONG_PTR token = 0;
+            HDC dc = nullptr;
+            HBITMAP bitmap = nullptr;
+            HGDIOBJ previous = nullptr;
+            ~PreviewFixture() {
+              if (previous)
+                ::SelectObject(dc, previous);
+              if (bitmap)
+                ::DeleteObject(bitmap);
+              if (dc)
+                ::DeleteDC(dc);
+              if (token)
+                Gdiplus::GdiplusShutdown(token);
+            }
+          } f;
+          Gdiplus::GdiplusStartupInput input;
+          Check(Gdiplus::GdiplusStartup(&f.token, &input, nullptr) ==
+                Gdiplus::Ok);
+          f.dc = ::CreateCompatibleDC(nullptr);
+          Check(f.dc != nullptr);
+          BITMAPINFO info{};
+          info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+          info.bmiHeader.biWidth = 320;
+          info.bmiHeader.biHeight = -192;
+          info.bmiHeader.biPlanes = 1;
+          info.bmiHeader.biBitCount = 32;
+          void* pixels = nullptr;
+          f.bitmap = ::CreateDIBSection(f.dc, &info, DIB_RGB_COLORS, &pixels,
+                                        nullptr, 0);
+          Check(f.bitmap && pixels);
+          f.previous = ::SelectObject(f.dc, f.bitmap);
+          Check(f.previous && f.previous != HGDI_ERROR);
+          const auto font =
+              static_cast<HFONT>(::GetStockObject(DEFAULT_GUI_FONT));
+          const RECT area{0, 0, 320, 192};
+          weasel::AppearancePreview style{};
+          style.acrylic = false;
+          style.background = RGB(250, 245, 240);
+          style.border = RGB(110, 110, 110);
+          style.text = style.label = RGB(30, 30, 30);
+          style.highlight = RGB(225, 225, 225);
+          style.highlighted_text = RGB(10, 10, 10);
+          style.highlighted_label = style.mark = RGB(0, 103, 192);
+          style.candidates = {L"Hello", L"Hi", L"You"};
+          weasel::DrawAppearancePreview(f.dc, area, font, style);
+          Check(::GetPixel(f.dc, 200, 150) == style.background);
+          Check(::GetPixel(f.dc, 200, 60) == style.highlight);
+          Check(::GetPixel(f.dc, 14, 14) != style.background);
+          style.acrylic = true;
+          weasel::DrawAppearancePreview(f.dc, area, font, style);
+          Check(::GetPixel(f.dc, 200, 150) != style.background);
+          Check(::GetPixel(f.dc, 200, 60) == style.highlight);
+          style.acrylic = false;
+          style.radius = style.border_width = 0;
+          weasel::DrawAppearancePreview(f.dc, area, font, style);
+          Check(::GetPixel(f.dc, 14, 14) == style.background);
         });
     Run("palette groups require explicit valid light and dark members", [] {
       ModeSchemeConfig f;

@@ -9,18 +9,17 @@ namespace weasel {
 struct MenuPlacement {
   POINT anchor;
   UINT flags;
-  bool cascade_left;
 };
 
 // Use signed screen coordinates: secondary monitors can have negative origins.
 inline MenuPlacement PlaceMenu(POINT point, const RECT& work, int edge = -1) {
-  MenuPlacement result{point, TPM_RIGHTBUTTON, false};
+  MenuPlacement result{point, TPM_RIGHTBUTTON};
   result.anchor.x = (std::max)(work.left, (std::min)(point.x, work.right - 1));
   result.anchor.y = (std::max)(work.top, (std::min)(point.y, work.bottom - 1));
-  result.cascade_left =
+  const bool align_right =
       edge == ABE_RIGHT ||
       (edge != ABE_LEFT && point.x - work.left > work.right - point.x);
-  result.flags |= result.cascade_left ? TPM_RIGHTALIGN : TPM_LEFTALIGN;
+  result.flags |= align_right ? TPM_RIGHTALIGN : TPM_LEFTALIGN;
   result.flags |=
       edge == ABE_BOTTOM ||
               (edge != ABE_TOP && point.y - work.top > work.bottom - point.y)
@@ -29,19 +28,6 @@ inline MenuPlacement PlaceMenu(POINT point, const RECT& work, int edge = -1) {
   result.flags |=
       edge == ABE_LEFT || edge == ABE_RIGHT ? TPM_HORIZONTAL : TPM_VERTICAL;
   return result;
-}
-
-inline void SetMenuCascade(HMENU menu, bool left) {
-  for (int i = 0; i < ::GetMenuItemCount(menu); ++i) {
-    MENUITEMINFOW item{sizeof(item)};
-    item.fMask = MIIM_FTYPE | MIIM_SUBMENU;
-    if (!::GetMenuItemInfoW(menu, i, TRUE, &item) || !item.hSubMenu)
-      continue;
-    item.fType =
-        left ? item.fType | MFT_RIGHTORDER : item.fType & ~MFT_RIGHTORDER;
-    ::SetMenuItemInfoW(menu, i, TRUE, &item);
-    SetMenuCascade(item.hSubMenu, left);
-  }
 }
 
 inline UINT TrackTrayMenu(HMENU menu,
@@ -72,7 +58,8 @@ inline UINT TrackTrayMenu(HMENU menu,
       edge = ABE_BOTTOM;
   }
   const auto placement = PlaceMenu(point, info.rcWork, edge);
-  SetMenuCascade(menu, placement.cascade_left);
+  // Anchor the root popup only. USER32 fits submenus to the available space;
+  // MFT_RIGHTORDER is RTL language layout, not a taskbar placement control.
   TPMPARAMS params{sizeof(params)};
   if (icon)
     params.rcExclude = *icon;
