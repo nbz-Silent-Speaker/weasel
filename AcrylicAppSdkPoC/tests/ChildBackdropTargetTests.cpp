@@ -366,18 +366,29 @@ int main() {
           style.highlighted_text = RGB(10, 10, 10);
           style.highlighted_label = style.mark = RGB(0, 103, 192);
           style.candidates = {L"Hello", L"Hi", L"You"};
+          const auto checkPixel = [&](int x, int y, COLORREF expected,
+                                      bool equal, const char* description) {
+            const auto actual = ::GetPixel(f.dc, x, y);
+            if ((actual == expected) != equal)
+              throw std::runtime_error(std::string(description) +
+                                       ": actual=" + std::to_string(actual) +
+                                       " expected=" + std::to_string(expected));
+          };
           weasel::DrawAppearancePreview(f.dc, area, font, style);
-          Check(::GetPixel(f.dc, 200, 150) == style.background);
-          Check(::GetPixel(f.dc, 200, 60) == style.highlight);
-          Check(::GetPixel(f.dc, 14, 14) != style.background);
+          checkPixel(200, 150, style.background, true, "opaque background");
+          checkPixel(200, 60, style.highlight, true, "opaque highlight");
+          // Two pixels inside the rectangular bounds: outside an 11px rounded
+          // corner, but clear of the antialiased boundary when radius is zero.
+          checkPixel(16, 16, style.background, false, "rounded corner");
           style.acrylic = true;
           weasel::DrawAppearancePreview(f.dc, area, font, style);
-          Check(::GetPixel(f.dc, 200, 150) != style.background);
-          Check(::GetPixel(f.dc, 200, 60) == style.highlight);
+          checkPixel(200, 150, style.background, false,
+                     "translucent background");
+          checkPixel(200, 60, style.highlight, true, "acrylic highlight");
           style.acrylic = false;
           style.radius = style.border_width = 0;
           weasel::DrawAppearancePreview(f.dc, area, font, style);
-          Check(::GetPixel(f.dc, 14, 14) == style.background);
+          checkPixel(16, 16, style.background, true, "square corner interior");
         });
     Run("palette groups require explicit valid light and dark members", [] {
       ModeSchemeConfig f;
