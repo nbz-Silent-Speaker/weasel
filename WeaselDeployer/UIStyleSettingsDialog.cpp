@@ -1,4 +1,5 @@
 #include "stdafx.h"
+#include "WeaselDeployer.h"
 #include "UIStyleSettingsDialog.h"
 #include "UIStyleSettings.h"
 #include "Configurator.h"
