@@ -1,4 +1,5 @@
 #include "../ChildBackdropTarget.h"
+#include "../EdgeClipDiagnostic.h"
 
 #include <functional>
 #include <iostream>
@@ -145,6 +146,83 @@ int main() {
     return 2;
   int result = 0;
   try {
+    Run("edge clip rejects unmeasured foreground styles", [] {
+      using weasel_acrylic::IsMeasuredEdgeClipSample;
+      Check(IsMeasuredEdgeClipSample(144, 195, 266, 1, 255, 16, 1, true, true));
+      const int original[] = {144, 195, 266, 1, 255, 16, 1};
+      for (int changed = 0; changed < 7; ++changed) {
+        for (int delta : {-1, 1}) {
+          int input[7];
+          for (int i = 0; i < 7; ++i)
+            input[i] = original[i];
+          input[changed] += delta;
+          Check(!IsMeasuredEdgeClipSample(input[0], input[1], input[2],
+                                          input[3], input[4], input[5],
+                                          input[6], true, true));
+        }
+      }
+      Check(
+          !IsMeasuredEdgeClipSample(144, 195, 266, 1, 255, 16, 1, false, true));
+      Check(
+          !IsMeasuredEdgeClipSample(144, 195, 266, 1, 255, 16, 1, true, false));
+    });
+    Run("edge clip requires opt-in and matching live host", [] {
+      using weasel_acrylic::SelectEdgeClipGeometry;
+      Check(SelectEdgeClipGeometry(true, true, 144, 197, 268, 17, true).x == 1);
+      Check(SelectEdgeClipGeometry(false, true, 144, 197, 268, 17, true).x ==
+            0);
+      Check(SelectEdgeClipGeometry(true, false, 144, 197, 268, 17, true).x ==
+            0);
+      Check(SelectEdgeClipGeometry(true, true, 144, 197, 268, 17, false).x ==
+            0);
+      const int inputs[][4] = {
+          {96, 197, 268, 17},  {192, 197, 268, 17}, {144, 196, 268, 17},
+          {144, 198, 268, 17}, {144, 197, 267, 17}, {144, 197, 269, 17},
+          {144, 197, 268, 16}, {144, 197, 268, 18}, {144, 0, 268, 17},
+          {144, 197, 0, 17},   {144, -1, -1, -1}};
+      for (const auto& v : inputs) {
+        const auto clip =
+            SelectEdgeClipGeometry(true, true, v[0], v[1], v[2], v[3], true);
+        Check(clip.x == 0 && clip.y == 0 && clip.width == v[1] &&
+              clip.height == v[2] && clip.radius == v[3]);
+      }
+    });
+    Run("edge clip preserves far edges and restores the complete rectangle",
+        [] {
+          using weasel_acrylic::SelectEdgeClipGeometry;
+          const auto applied =
+              SelectEdgeClipGeometry(true, true, 144, 197, 268, 17, true);
+          Check(applied.x == 1 && applied.y == 1 && applied.width == 196 &&
+                applied.height == 267 && applied.radius == 17);
+          Check(applied.x + applied.width == 197 &&
+                applied.y + applied.height == 268);
+          const auto restored =
+              SelectEdgeClipGeometry(true, false, 144, 197, 268, 17, true);
+          Check(restored.x == 0 && restored.y == 0 && restored.width == 197 &&
+                restored.height == 268 && restored.radius == 17);
+          const auto reapplied =
+              SelectEdgeClipGeometry(true, true, 144, 197, 268, 17, true);
+          Check(reapplied.x == applied.x && reapplied.y == applied.y &&
+                reapplied.width == applied.width &&
+                reapplied.height == applied.height);
+        });
+    Run("edge clip readback rejects stale offsets sizes and radii", [] {
+      using weasel_acrylic::EdgeClipReadbackMatches;
+      const auto expected = weasel_acrylic::SelectEdgeClipGeometry(
+          true, true, 144, 197, 268, 17, true);
+      Check(EdgeClipReadbackMatches(expected, 1, 1, 196, 267, 17, 17));
+      const float original[] = {1, 1, 196, 267, 17, 17};
+      for (int changed = 0; changed < 6; ++changed) {
+        float values[6];
+        for (int i = 0; i < 6; ++i)
+          values[i] = original[i];
+        values[changed] += 0.5f;
+        Check(!EdgeClipReadbackMatches(expected, values[0], values[1],
+                                       values[2], values[3], values[4],
+                                       values[5]));
+      }
+      Check(!EdgeClipReadbackMatches(expected, 0, 0, 197, 268, 17, 17));
+    });
     Run("own COM identity and interface closure", [] {
       Fixture f;
       ComPtr<IUnknown> primary, viaObject, viaBackdrop, inner;

@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "WeaselPanel.h"
+#include "../AcrylicAppSdkPoC/EdgeClipDiagnostic.h"
 
 #include <utility>
 #include <ShellScalingApi.h>
@@ -876,6 +877,7 @@ void ClearAcrylicExplicitClip(HWND backdrop, bool redraw) {
   ::RemovePropW(backdrop, kAcrylicLocalClipWidthProperty);
   ::RemovePropW(backdrop, kAcrylicLocalClipHeightProperty);
   ::RemovePropW(backdrop, kAcrylicLocalClipRadiusProperty);
+  ::RemovePropW(backdrop, weasel_acrylic::kEdgeClipSample);
 }
 
 bool AcrylicExplicitClipMatches(HWND backdrop,
@@ -2677,13 +2679,6 @@ void WeaselPanel::_SyncAcrylicBackdrop() {
   // Routine Hide() calls from the server's hidden UI do not revoke the lease.
   if (m_in_server && ExternalBorrowed(m_acrylicBackdrop))
     EndExternalServerLease(m_acrylicBackdrop, ExternalState(m_acrylicBackdrop));
-  _UpdateAcrylicBackdropTheme();
-  // Theme updates can re-enter the host and destroy/recreate this panel.
-  if (localState && !localState->panel)
-    return;
-  if (stopFailedChildClip())
-    return;
-
   const bool explicitClip = AppSdkAcrylicNeedsExplicitClip(m_acrylicBackdrop);
   const int borderPx = explicitClip && COLORNOTTRANSPARENT(m_style.border_color)
                            ? max(0, DPI_SCALE(m_style.border))
@@ -2695,6 +2690,37 @@ void WeaselPanel::_SyncAcrylicBackdrop() {
   const int height = contentHeight + envelope * 2;
   const int radius =
       explicitClip ? max(0, DPI_SCALE(m_style.round_corner_ex) + envelope) : 0;
+
+  // Publish current style eligibility before helper calls can re-enter. The
+  // helper independently checks the live host dimensions and DPI as well.
+  if (::GetPropW(m_acrylicBackdrop, weasel_acrylic::kEdgeClipEnabled)) {
+    const bool sample = weasel_acrylic::IsMeasuredEdgeClipSample(
+        static_cast<int>(dpi), contentWidth, contentHeight, borderPx,
+        (m_style.border_color >> 24) & 255, DPI_SCALE(m_style.round_corner_ex),
+        envelope, !IsDarkColor(m_style.back_color),
+        m_style.layout_type == UIStyle::LAYOUT_VERTICAL);
+    const HANDLE wanted = sample ? reinterpret_cast<HANDLE>(1) : nullptr;
+    if (::GetPropW(m_acrylicBackdrop, weasel_acrylic::kEdgeClipSample) !=
+        wanted) {
+      if (sample)
+        ::SetPropW(m_acrylicBackdrop, weasel_acrylic::kEdgeClipSample, wanted);
+      else
+        ::RemovePropW(m_acrylicBackdrop, weasel_acrylic::kEdgeClipSample);
+      if (::GetPropW(m_acrylicBackdrop, weasel_acrylic::kEdgeClipSample) !=
+          wanted) {
+        // Never keep a previous sample qualification after a publication error.
+        _DestroyAcrylicBackdrop();
+        RedrawWindow();
+        return;
+      }
+    }
+  }
+  _UpdateAcrylicBackdropTheme();
+  // Theme updates can re-enter the host and destroy/recreate this panel.
+  if (localState && !localState->panel)
+    return;
+  if (stopFailedChildClip())
+    return;
 
   const bool geometryMatches = LocalAcrylicGeometryMatches(
       m_acrylicBackdrop, m_hWnd, x, y, width, height);

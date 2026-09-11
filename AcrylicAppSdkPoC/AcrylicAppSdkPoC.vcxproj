@@ -121,6 +121,7 @@
     <ClInclude Include="WeaselGaussianBlurEffect.h" />
     <ClInclude Include="RootClipDiagnosticState.h" />
     <ClInclude Include="ChildBackdropTarget.h" />
+    <ClInclude Include="EdgeClipDiagnostic.h" />
     <None Include="AcrylicAppSdkPoC.x86.def" />
   </ItemGroup>
 

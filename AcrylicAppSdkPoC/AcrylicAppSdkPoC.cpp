@@ -26,6 +26,7 @@
 #include "WeaselGaussianBlurEffect.h"
 #include "RootClipDiagnosticState.h"
 #include "ChildBackdropTarget.h"
+#include "EdgeClipDiagnostic.h"
 
 #pragma comment(lib, "Dwmapi.lib")
 #pragma comment(lib, "CoreMessaging.lib")
@@ -33,6 +34,11 @@
 #pragma comment(lib, "OneCoreUAP.lib")
 
 namespace {
+
+using weasel_acrylic::kEdgeClipApplied;
+using weasel_acrylic::kEdgeClipEnabled;
+using weasel_acrylic::kEdgeClipEnvironment;
+using weasel_acrylic::kEdgeClipSample;
 
 // Policy v3: process-wide explicit bootstrap, thread-owned queues, HWND-owned
 // targets. No WinRT object has a static/TLS destructor that runs in DllMain.
@@ -55,6 +61,10 @@ constexpr wchar_t kAppSdkRootClipActive[] =
 constexpr wchar_t kAppSdkRootClipWidth[] = L"WeaselAcrylicAppSdkRootClipWidth";
 constexpr wchar_t kAppSdkRootClipHeight[] =
     L"WeaselAcrylicAppSdkRootClipHeight";
+constexpr wchar_t kAppSdkRootClipOffsetX[] =
+    L"WeaselAcrylicAppSdkRootClipOffsetX";
+constexpr wchar_t kAppSdkRootClipOffsetY[] =
+    L"WeaselAcrylicAppSdkRootClipOffsetY";
 constexpr wchar_t kAppSdkRootClipRadius[] =
     L"WeaselAcrylicAppSdkRootClipRadius";
 constexpr wchar_t kForceSystemCompositionEnvironment[] =
@@ -106,7 +116,8 @@ constexpr UINT kChildClipFailedMessage = WM_APP + 0x526;
 constexpr const wchar_t* kChildClipProperties[] = {
     kChildClipEnabled, kChildClipReady,        kChildClipFailed,
     kChildClipHresult, kChildClipPublications, kChildClipSetterHr,
-    kChildClipThread,  kChildClipCandidate};
+    kChildClipThread,  kChildClipCandidate,    kEdgeClipEnabled,
+    kEdgeClipSample,   kEdgeClipApplied};
 void CALLBACK ChildClipTimerProc(HWND, UINT, UINT_PTR, DWORD) noexcept;
 thread_local LONG t_lastStage = 0;
 thread_local HRESULT t_lastHresult = S_OK;
@@ -230,6 +241,7 @@ struct Target {
       nullptr};
   winrt::Windows::UI::Composition::ContainerVisual root{nullptr};
   bool childClipTest = false;
+  bool edgeClipTest = false;
   bool childClipFailed = false;
   bool childClipTimer = false;
   bool childRegionRemoved = false;
@@ -305,6 +317,8 @@ struct Target {
       ::RemovePropW(hwnd, kAppSdkRootClipWidth);
       ::RemovePropW(hwnd, kAppSdkRootClipHeight);
       ::RemovePropW(hwnd, kAppSdkRootClipRadius);
+      ::RemovePropW(hwnd, kAppSdkRootClipOffsetX);
+      ::RemovePropW(hwnd, kAppSdkRootClipOffsetY);
       ::RemovePropW(hwnd, kForcedSystemCompositionActive);
       ::RemovePropW(hwnd, kForcedSystemCompositionClipWidth);
       ::RemovePropW(hwnd, kForcedSystemCompositionClipHeight);
@@ -531,6 +545,7 @@ void ClearAppSdkRootClip(Target& target) {
   if (target.childClipTest) {
     target.childVisual.IsVisible(false);
     ::RemovePropW(target.hwnd, kChildClipReady);
+    ::RemovePropW(target.hwnd, kEdgeClipApplied);
     // Preserve the last clip while geometry is incomplete. Clearing it would
     // expose a rectangular child on the region-free desktop target.
   }
@@ -545,6 +560,8 @@ void ClearAppSdkRootClip(Target& target) {
   ::RemovePropW(target.hwnd, kAppSdkRootClipWidth);
   ::RemovePropW(target.hwnd, kAppSdkRootClipHeight);
   ::RemovePropW(target.hwnd, kAppSdkRootClipRadius);
+  ::RemovePropW(target.hwnd, kAppSdkRootClipOffsetX);
+  ::RemovePropW(target.hwnd, kAppSdkRootClipOffsetY);
 }
 
 void FailChildClip(Target& target, HRESULT hr) noexcept {
@@ -556,6 +573,7 @@ void FailChildClip(Target& target, HRESULT hr) noexcept {
       target.hwnd, kChildClipHresult,
       reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(static_cast<DWORD>(hr))));
   ::RemovePropW(target.hwnd, kChildClipReady);
+  ::RemovePropW(target.hwnd, kEdgeClipApplied);
   if (target.childClipTimer) {
     ::KillTimer(target.hwnd, kChildClipTimer);
     target.childClipTimer = false;
@@ -593,7 +611,36 @@ void FailChildClip(Target& target, HRESULT hr) noexcept {
   // optional background and repaints the configured foreground skin.
 }
 
-void ObserveChildClip(Target& target, int width, int height, int radius) {
+weasel_acrylic::EdgeClipGeometry ReadEdgeClipGeometry(Target& target,
+                                                      int width,
+                                                      int height,
+                                                      int radius) {
+  return weasel_acrylic::SelectEdgeClipGeometry(
+      target.edgeClipTest,
+      ::GetPropW(target.hwnd, kEdgeClipSample) == reinterpret_cast<HANDLE>(1),
+      target.edgeClipTest ? static_cast<int>(::GetDpiForWindow(target.hwnd))
+                          : 0,
+      width, height, radius, !target.dark);
+}
+
+bool EdgeClipInputsStillMatch(
+    Target& target,
+    int width,
+    int height,
+    int radius,
+    const weasel_acrylic::EdgeClipGeometry& observed) {
+  const auto current = ReadEdgeClipGeometry(target, width, height, radius);
+  return weasel_acrylic::EdgeClipReadbackMatches(
+      current, static_cast<float>(observed.x), static_cast<float>(observed.y),
+      static_cast<float>(observed.width), static_cast<float>(observed.height),
+      static_cast<float>(observed.radius), static_cast<float>(observed.radius));
+}
+
+void ObserveChildClip(Target& target,
+                      int width,
+                      int height,
+                      int radius,
+                      const weasel_acrylic::EdgeClipGeometry& expected) {
   const auto sameObject = [](const auto& a, const auto& b) {
     return a && b &&
            a.template as<::IUnknown>().get() ==
@@ -603,6 +650,7 @@ void ObserveChildClip(Target& target, int width, int height, int radius) {
   winrt::check_hresult(target.childTarget->VerifyNativeSlotEmpty());
   target.childVisual.Size(
       {static_cast<float>(width), static_cast<float>(height)});
+  const auto offset = target.clipGeometry.Offset();
   const auto size = target.clipGeometry.Size();
   const auto corner = target.clipGeometry.CornerRadius();
   const auto childSize = target.childVisual.Size();
@@ -613,9 +661,10 @@ void ObserveChildClip(Target& target, int width, int height, int radius) {
       !sameObject(target.root.Clip(), target.roundedClip) ||
       !sameObject(target.roundedClip.Geometry(), target.clipGeometry) ||
       !sameObject(target.childVisual.Parent(), target.root) ||
-      size.x != width || size.y != height || corner.x != radius ||
-      corner.y != radius || childSize.x != width || childSize.y != height ||
-      childOffset.x != 0 || childOffset.y != 0 || childOffset.z != 0)
+      !weasel_acrylic::EdgeClipReadbackMatches(
+          expected, offset.x, offset.y, size.x, size.y, corner.x, corner.y) ||
+      childSize.x != width || childSize.y != height || childOffset.x != 0 ||
+      childOffset.y != 0 || childOffset.z != 0)
     winrt::throw_hresult(E_UNEXPECTED);
 
   // Recheck HWND geometry after COM calls that can re-enter the UI thread.
@@ -624,7 +673,8 @@ void ObserveChildClip(Target& target, int width, int height, int radius) {
       client.right != width || client.bottom != height ||
       DecodeEncodedIntProperty(target.hwnd, kLocalClipWidth) != width ||
       DecodeEncodedIntProperty(target.hwnd, kLocalClipHeight) != height ||
-      DecodeEncodedIntProperty(target.hwnd, kLocalClipRadius) != radius)
+      DecodeEncodedIntProperty(target.hwnd, kLocalClipRadius) != radius ||
+      !EdgeClipInputsStillMatch(target, width, height, radius, expected))
     winrt::throw_hresult(E_UNEXPECTED);
   HRGN region = ::CreateRectRgn(0, 0, 0, 0);
   if (!region)
@@ -646,9 +696,19 @@ void ObserveChildClip(Target& target, int width, int height, int radius) {
       client.bottom != height ||
       DecodeEncodedIntProperty(target.hwnd, kLocalClipWidth) != width ||
       DecodeEncodedIntProperty(target.hwnd, kLocalClipHeight) != height ||
-      DecodeEncodedIntProperty(target.hwnd, kLocalClipRadius) != radius)
+      DecodeEncodedIntProperty(target.hwnd, kLocalClipRadius) != radius ||
+      !EdgeClipInputsStillMatch(target, width, height, radius, expected))
     winrt::throw_hresult(E_UNEXPECTED);
   target.childVisual.IsVisible(true);
+  // The final visibility setter is also a COM re-entry boundary. Do not
+  // publish Applied/Ready for inputs that changed while making it visible.
+  if (target.pendingDetach || !::GetClientRect(target.hwnd, &client) ||
+      client.right != width || client.bottom != height ||
+      DecodeEncodedIntProperty(target.hwnd, kLocalClipWidth) != width ||
+      DecodeEncodedIntProperty(target.hwnd, kLocalClipHeight) != height ||
+      DecodeEncodedIntProperty(target.hwnd, kLocalClipRadius) != radius ||
+      !EdgeClipInputsStillMatch(target, width, height, radius, expected))
+    winrt::throw_hresult(E_UNEXPECTED);
   ::SetPropW(target.hwnd, kChildClipPublications,
              reinterpret_cast<HANDLE>(
                  static_cast<ULONG_PTR>(target.childTarget->Publications())));
@@ -673,6 +733,7 @@ void UpdateAppSdkRootClip(Target& target) {
     if (!::IsWindowVisible(target.hwnd)) {
       target.childVisual.IsVisible(false);
       ::RemovePropW(target.hwnd, kChildClipReady);
+      ::RemovePropW(target.hwnd, kEdgeClipApplied);
       return;
     }
   }
@@ -706,20 +767,25 @@ void UpdateAppSdkRootClip(Target& target) {
       FailRootClipTest(target, E_UNEXPECTED);
     }
   }
+  auto effectiveClip = ReadEdgeClipGeometry(target, width, height, radius);
+  if (!target.childClipTest)
+    effectiveClip.width = clipWidth;
   if (!target.clipGeometry) {
     target.clipGeometry = target.compositor.CreateRoundedRectangleGeometry();
     target.roundedClip =
         target.compositor.CreateGeometricClip(target.clipGeometry);
   }
 
-  target.clipGeometry.Size(
-      {static_cast<float>(clipWidth), static_cast<float>(height)});
+  target.clipGeometry.Offset({static_cast<float>(effectiveClip.x),
+                              static_cast<float>(effectiveClip.y)});
+  target.clipGeometry.Size({static_cast<float>(effectiveClip.width),
+                            static_cast<float>(effectiveClip.height)});
   target.clipGeometry.CornerRadius(
       {static_cast<float>(radius), static_cast<float>(radius)});
   target.root.Clip(target.roundedClip);
 
   if (target.childClipTest)
-    ObserveChildClip(target, width, height, radius);
+    ObserveChildClip(target, width, height, radius, effectiveClip);
 
   if (target.rootClipTest && !target.rootClipTestFailed) {
     try {
@@ -732,6 +798,7 @@ void UpdateAppSdkRootClip(Target& target) {
   }
   if (target.rootClipTestFailed) {
     clipWidth = width;
+    effectiveClip.width = width;
     target.clipGeometry.Size(
         {static_cast<float>(width), static_cast<float>(height)});
     ::SetPropW(target.hwnd, kRootClipTestMode,
@@ -741,22 +808,33 @@ void UpdateAppSdkRootClip(Target& target) {
   ::SetPropW(target.hwnd, kAppSdkRootClipActive,
              reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(1)));
   ::SetPropW(target.hwnd, kAppSdkRootClipWidth,
-             reinterpret_cast<HANDLE>(
-                 static_cast<ULONG_PTR>(static_cast<unsigned>(clipWidth) + 1)));
+             reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(
+                 static_cast<unsigned>(effectiveClip.width) + 1)));
   ::SetPropW(target.hwnd, kAppSdkRootClipHeight,
-             reinterpret_cast<HANDLE>(
-                 static_cast<ULONG_PTR>(static_cast<unsigned>(height) + 1)));
+             reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(
+                 static_cast<unsigned>(effectiveClip.height) + 1)));
   ::SetPropW(target.hwnd, kAppSdkRootClipRadius,
              reinterpret_cast<HANDLE>(
                  static_cast<ULONG_PTR>(static_cast<unsigned>(radius) + 1)));
+  ::SetPropW(
+      target.hwnd, kAppSdkRootClipOffsetX,
+      reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(effectiveClip.x + 1)));
+  ::SetPropW(
+      target.hwnd, kAppSdkRootClipOffsetY,
+      reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(effectiveClip.y + 1)));
   if (target.rootClipTest && !target.rootClipTestFailed) {
     // Publish last, after effective dimensions. This is actual object/value
     // readback only; the screen marker is the separate presentation gate.
     ::SetPropW(target.hwnd, kRootClipTestReadback,
                reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(1)));
   }
-  if (target.childClipTest)
+  if (target.childClipTest) {
+    if (effectiveClip.x == 1)
+      ::SetPropW(target.hwnd, kEdgeClipApplied, reinterpret_cast<HANDLE>(1));
+    else
+      ::RemovePropW(target.hwnd, kEdgeClipApplied);
     ::SetPropW(target.hwnd, kChildClipReady, reinterpret_cast<HANDLE>(1));
+  }
 }
 
 struct ThreadState {
@@ -893,6 +971,13 @@ bool EnableRootClipDiagnostic() noexcept {
     return false;
   const wchar_t* file = wcsrchr(image, L'\\');
   return _wcsicmp(file ? file + 1 : image, L"WINWORD.EXE") == 0;
+}
+
+bool EnableEdgeClipDiagnostic() noexcept {
+  wchar_t value[2] = {};
+  return ::GetEnvironmentVariableW(kEdgeClipEnvironment, value,
+                                   _countof(value)) == 1 &&
+         value[0] == L'1';
 }
 
 bool EnableChildClipDiagnostic() noexcept {
@@ -1364,6 +1449,7 @@ WeaselAcrylicAppSdkAttach(HWND hwnd, BOOL darkMode) {
     target->mode = TargetMode::AppSdkAcrylic;
     target->rootClipTest = EnableRootClipDiagnostic();
     target->childClipTest = EnableChildClipDiagnostic();
+    target->edgeClipTest = target->childClipTest && EnableEdgeClipDiagnostic();
     Diagnose(40);
     target->compositor = winrt::Windows::UI::Composition::Compositor();
     Diagnose(50);
@@ -1386,6 +1472,8 @@ WeaselAcrylicAppSdkAttach(HWND hwnd, BOOL darkMode) {
           &target->childTarget, target->desktop.as<::IUnknown>().get(),
           target->childVisual.as<::IUnknown>().get()));
       ::SetPropW(hwnd, kChildClipEnabled, reinterpret_cast<HANDLE>(1));
+      if (target->edgeClipTest)
+        ::SetPropW(hwnd, kEdgeClipEnabled, reinterpret_cast<HANDLE>(1));
     }
     Diagnose(70);
     target->configuration =
