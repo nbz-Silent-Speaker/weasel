@@ -6,33 +6,10 @@
 #include "LanguageBar.h"
 #include "CandidateList.h"
 #include <WeaselUtility.h>
+#include <WeaselUserSettings.h>
+#include <WeaselMenu.h>
 
 static const DWORD LANGBARITEMSINK_COOKIE = 0x42424242;
-
-static void HMENU2ITfMenu(HMENU hMenu, ITfMenu* pTfMenu) {
-  /* NOTE: Only limited functions are supported */
-  int N = GetMenuItemCount(hMenu);
-  for (int i = 0; i < N; i++) {
-    MENUITEMINFO mii;
-    mii.cbSize = sizeof(MENUITEMINFO);
-    mii.fMask = MIIM_FTYPE | MIIM_ID | MIIM_STRING;
-    mii.dwTypeData = NULL;
-    if (GetMenuItemInfo(hMenu, i, TRUE, &mii)) {
-      UINT id = mii.wID;
-      if (mii.fType == MFT_SEPARATOR)
-        pTfMenu->AddMenuItem(id, TF_LBMENUF_SEPARATOR, NULL, NULL, NULL, 0,
-                             NULL);
-      else if (mii.fType == MFT_STRING) {
-        mii.dwTypeData = (LPWSTR)malloc(sizeof(WCHAR) * (mii.cch + 1));
-        mii.cch++;
-        if (GetMenuItemInfo(hMenu, i, TRUE, &mii))
-          pTfMenu->AddMenuItem(id, 0, NULL, NULL, mii.dwTypeData, mii.cch,
-                               NULL);
-        free(mii.dwTypeData);
-      }
-    }
-  }
-}
 
 static LPCWSTR GetWeaselRegName() {
   LPCWSTR WEASEL_REG_NAME_;
@@ -172,6 +149,8 @@ STDMETHODIMP CLangBarItemButton::OnClick(TfLBIClick click,
         menu = LoadMenuW(g_hInst, MAKEINTRESOURCE(IDR_MENU_POPUP));
       }
       HMENU popupMenu = GetSubMenu(menu, 0);
+      weasel::SetMenuCommandChecked(popupMenu, ID_WEASELTRAY_ACRYLIC,
+                                    weasel::UserSettings::Load().acrylic);
       UINT wID = TrackPopupMenuEx(
           popupMenu, TPM_NONOTIFY | TPM_RETURNCMD | TPM_HORPOSANIMATION, pt.x,
           pt.y, hwnd, NULL);
@@ -185,9 +164,11 @@ STDMETHODIMP CLangBarItemButton::OnClick(TfLBIClick click,
 STDMETHODIMP CLangBarItemButton::InitMenu(ITfMenu* pMenu) {
   HMENU menu = LoadMenuW(g_hInst, MAKEINTRESOURCE(IDR_MENU_POPUP));
   HMENU popupMenu = GetSubMenu(menu, 0);
-  HMENU2ITfMenu(popupMenu, pMenu);
+  weasel::SetMenuCommandChecked(popupMenu, ID_WEASELTRAY_ACRYLIC,
+                                weasel::UserSettings::Load().acrylic);
+  const HRESULT result = weasel::CopyMenuToTfMenu(popupMenu, pMenu);
   DestroyMenu(menu);
-  return S_OK;
+  return result;
 }
 
 STDMETHODIMP CLangBarItemButton::OnMenuSelect(UINT wID) {

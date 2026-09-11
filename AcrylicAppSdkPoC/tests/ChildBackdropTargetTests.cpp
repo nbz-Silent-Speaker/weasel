@@ -2,6 +2,7 @@
 #include "../EdgeClipDiagnostic.h"
 #include "../AlignedAcrylicClip.h"
 #include "../../include/WeaselUserSettings.h"
+#include "../../include/WeaselMenu.h"
 
 #include <functional>
 #include <iostream>
@@ -20,6 +21,59 @@ using weasel_acrylic::ChildBackdropTarget;
 
 int liveNatives = 0;
 int liveBrushes = 0;
+int liveMenus = 0;
+
+struct MenuItem {
+  UINT command;
+  DWORD flags;
+  std::wstring text;
+  ComPtr<ITfMenu> child;
+};
+
+class Menu final
+    : public Microsoft::WRL::RuntimeClass<
+          Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>,
+          ITfMenu> {
+ public:
+  std::vector<MenuItem> items;
+  UINT failCommand = 0;
+  bool omitChild = false;
+  Menu() { ++liveMenus; }
+  ~Menu() { --liveMenus; }
+  HRESULT STDMETHODCALLTYPE AddMenuItem(UINT command,
+                                        DWORD flags,
+                                        HBITMAP,
+                                        HBITMAP,
+                                        const WCHAR* text,
+                                        ULONG length,
+                                        ITfMenu** child) override {
+    if (failCommand && command == failCommand)
+      return E_ACCESSDENIED;
+    if ((flags & TF_LBMENUF_SUBMENU) ? (!child || *child) : child != nullptr)
+      return E_INVALIDARG;
+    MenuItem item{command, flags, text ? std::wstring(text, length) : L"", {}};
+    if (child && !omitChild) {
+      auto nested = Make<Menu>();
+      if (!nested)
+        return E_OUTOFMEMORY;
+      nested->failCommand = failCommand;
+      item.child = nested;
+      const HRESULT result = item.child.CopyTo(child);
+      if (FAILED(result))
+        return result;
+    }
+    items.push_back(std::move(item));
+    return S_OK;
+  }
+};
+
+struct MenuFixture {
+  HMENU root = ::CreatePopupMenu();
+  HMENU settings = ::CreatePopupMenu();
+  HMENU future = ::CreatePopupMenu();
+  MenuFixture();
+  ~MenuFixture() { ::DestroyMenu(root); }
+};
 
 class Brush final
     : public Microsoft::WRL::RuntimeClass<
@@ -123,6 +177,20 @@ void Check(bool value) {
     throw std::runtime_error("contract assertion failed");
 }
 
+MenuFixture::MenuFixture() {
+  Check(root && settings && future);
+  Check(::AppendMenuW(root, MF_STRING, 40008, L"Original settings (&S)"));
+  Check(::AppendMenuW(root, MF_POPUP, reinterpret_cast<UINT_PTR>(settings),
+                      L"Additional settings (&X)"));
+  Check(::AppendMenuW(settings, MF_STRING, 40017, L"Acrylic effect (&A)"));
+  Check(::AppendMenuW(settings, MF_SEPARATOR, 0, nullptr));
+  Check(::AppendMenuW(settings, MF_POPUP, reinterpret_cast<UINT_PTR>(future),
+                      L"Future group"));
+  Check(::AppendMenuW(future, MF_STRING | MF_GRAYED | MF_CHECKED, 45000,
+                      L"Future option"));
+  Check(::AppendMenuW(root, MF_STRING, 40015, L"Restart (&E)"));
+}
+
 struct SettingsFixture {
   std::wstring path = L"Software\\WeaselSettingsTests-" +
                       std::to_wstring(::GetCurrentProcessId()) + L"-" +
@@ -166,7 +234,7 @@ struct Fixture {
 
 void Run(const char* name, const std::function<void()>& test) {
   test();
-  Check(liveNatives == 0 && liveBrushes == 0);
+  Check(liveNatives == 0 && liveBrushes == 0 && liveMenus == 0);
   std::cout << "PASS " << name << '\n';
 }
 
@@ -178,6 +246,57 @@ int main() {
     return 2;
   int result = 0;
   try {
+    Run("language bar retains nested settings original commands and states",
+        [] {
+          MenuFixture f;
+          for (bool enabled : {true, false, true}) {
+            Check(weasel::SetMenuCommandChecked(f.root, 40017, enabled));
+            auto menu = Make<Menu>();
+            Check(menu && weasel::CopyMenuToTfMenu(f.root, menu.Get()) == S_OK);
+            Check(menu->items.size() == 3);
+            Check(menu->items[0].command == 40008 &&
+                  menu->items[0].text == L"Original settings (&S)");
+            Check(menu->items[2].command == 40015 &&
+                  menu->items[2].text == L"Restart (&E)");
+            Check(menu->items[1].flags == TF_LBMENUF_SUBMENU &&
+                  menu->items[1].text == L"Additional settings (&X)");
+            auto settings = static_cast<Menu*>(menu->items[1].child.Get());
+            Check(settings && settings->items.size() == 3);
+            Check(settings->items[0].command == 40017 &&
+                  settings->items[0].text == L"Acrylic effect (&A)" &&
+                  settings->items[0].flags ==
+                      (enabled ? TF_LBMENUF_CHECKED : 0));
+            Check(settings->items[1].flags == TF_LBMENUF_SEPARATOR &&
+                  settings->items[1].text.empty());
+            auto future = static_cast<Menu*>(settings->items[2].child.Get());
+            Check(future && future->items.size() == 1);
+            Check(future->items[0].command == 45000 &&
+                  future->items[0].flags ==
+                      (TF_LBMENUF_GRAYED | TF_LBMENUF_CHECKED));
+          }
+          Check(!weasel::SetMenuCommandChecked(f.root, 49999, true));
+        });
+    Run("language bar reports nested menu failures and releases returned "
+        "objects",
+        [] {
+          MenuFixture f;
+          auto menu = Make<Menu>();
+          Check(menu != nullptr);
+          menu->failCommand = 45000;
+          Check(weasel::CopyMenuToTfMenu(f.root, menu.Get()) == E_ACCESSDENIED);
+          Check(menu->items.size() == 2);
+          menu.Reset();
+          Check(liveMenus == 0);
+        });
+    Run("language bar rejects missing menus and missing submenu objects", [] {
+      MenuFixture f;
+      auto menu = Make<Menu>();
+      Check(menu != nullptr);
+      Check(weasel::CopyMenuToTfMenu(f.root, nullptr) == E_POINTER);
+      Check(weasel::CopyMenuToTfMenu(nullptr, menu.Get()) == E_INVALIDARG);
+      menu->omitChild = true;
+      Check(weasel::CopyMenuToTfMenu(f.root, menu.Get()) == E_UNEXPECTED);
+    });
     Run("aligned clip defaults to ordinary hosts and preserves compatibility "
         "routes",
         [] {

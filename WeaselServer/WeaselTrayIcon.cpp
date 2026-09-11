@@ -2,6 +2,7 @@
 #include "WeaselTrayIcon.h"
 #include <atlstr.h>
 #include <WeaselUserSettings.h>
+#include <WeaselMenu.h>
 
 // nasty
 #include <resource.h>
@@ -19,14 +20,8 @@ WeaselTrayIcon::WeaselTrayIcon(weasel::UI& ui)
       m_disabled(false) {}
 
 void WeaselTrayIcon::CustomizeMenu(HMENU hMenu) {
-  for (int i = 0; i < ::GetMenuItemCount(hMenu); ++i) {
-    if (HMENU submenu = ::GetSubMenu(hMenu, i))
-      CustomizeMenu(submenu);
-  }
-  ::CheckMenuItem(
-      hMenu, ID_WEASELTRAY_ACRYLIC,
-      MF_BYCOMMAND |
-          (weasel::UserSettings::Load().acrylic ? MF_CHECKED : MF_UNCHECKED));
+  weasel::SetMenuCommandChecked(hMenu, ID_WEASELTRAY_ACRYLIC,
+                                weasel::UserSettings::Load().acrylic);
 }
 
 BOOL WeaselTrayIcon::Create(HWND hTargetWnd) {
