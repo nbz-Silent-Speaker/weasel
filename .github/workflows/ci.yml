@@ -142,6 +142,25 @@ jobs:
           msbuild .\AcrylicAppSdkPoC\AcrylicAppSdkPoC.vcxproj /m /p:Configuration=Release /p:Platform=x64
           if ($LASTEXITCODE -ne 0) { throw 'Acrylic x64 helper build failed' }
 
+      - name: Test synchronous Acrylic child target (x64 and x86)
+        if: matrix.variant == 'xmake'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($testPlatform in @('x64', 'Win32')) {
+            msbuild .\AcrylicAppSdkPoC\tests\ChildBackdropTargetTests.vcxproj /m /p:Configuration=Release "/p:Platform=$testPlatform"
+            if ($LASTEXITCODE -ne 0) { throw "Child target tests failed to build: $testPlatform" }
+            $testDirectory = Join-Path $PWD "AcrylicAppSdkPoC\tests\bin\$testPlatform"
+            $testProcess = Start-Process -FilePath (Join-Path $testDirectory 'ChildBackdropTargetTests.exe') -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $testDirectory 'stdout.txt') -RedirectStandardError (Join-Path $testDirectory 'stderr.txt')
+            if (-not $testProcess.WaitForExit(20000)) {
+              $testProcess.Kill()
+              $testProcess.WaitForExit()
+              throw "Child target tests timed out: $testPlatform"
+            }
+            Get-Content -LiteralPath (Join-Path $testDirectory 'stdout.txt'), (Join-Path $testDirectory 'stderr.txt')
+            if ($testProcess.ExitCode -ne 0) { throw "Child target tests failed: $testPlatform" }
+          }
+
       - name: Prepare and verify Acrylic runtime pair (x64)
         if: matrix.variant == 'xmake'
         shell: pwsh

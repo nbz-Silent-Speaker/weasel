@@ -64,6 +64,11 @@ bool HasVisibleCandidateSurface(bool inlinePreedit,
 
 constexpr wchar_t kWeaselAcrylicBackdropClass[] = L"WeaselAcrylicBackdropHost";
 constexpr wchar_t kAcrylicNativeDwmProperty[] = L"WeaselAcrylicNativeDwm";
+constexpr wchar_t kAcrylicChildClipFailedProperty[] =
+    L"WeaselAcrylicChildClipFailed";
+constexpr wchar_t kAcrylicChildClipCandidateProperty[] =
+    L"WeaselAcrylicChildClipCandidate";
+constexpr UINT kAcrylicChildClipFailedMessage = WM_APP + 0x526;
 constexpr wchar_t kAcrylicNativeDwmPaintsProperty[] =
     L"WeaselAcrylicNativeDwmPaints";
 constexpr wchar_t kAcrylicUiProbeClass[] = L"WeaselAcrylicUiProbe";
@@ -415,6 +420,14 @@ LRESULT CALLBACK LocalAcrylicGeometryProc(HWND hwnd,
     ::RemovePropW(hwnd, kCandidatePlacementSessionEndedProperty);
     DetachLocalAcrylicGeometry(state, true);
     return ::DefSubclassProc(hwnd, message, wParam, lParam);
+  }
+
+  if (message == kAcrylicChildClipFailedMessage) {
+    const HWND backdrop = reinterpret_cast<HWND>(wParam);
+    if (::GetPropW(backdrop, kAcrylicChildClipCandidateProperty) == hwnd &&
+        ::GetPropW(backdrop, kAcrylicChildClipFailedProperty))
+      RequestLocalAcrylicGeometry(state);
+    return 0;
   }
 
   if (message == WM_TIMER && wParam == kCandidateAnchorStabilizationTimer) {
@@ -2510,6 +2523,9 @@ bool WeaselPanel::_CreateAcrylicBackdrop() {
   // Failure restores the skin and retains diagnostics on a hidden host.
   if (!searchLocal && g_acrylicAppSdkBridge.TryInitialize(
                           m_acrylicBackdrop, useDarkMode, m_in_server)) {
+    if (::GetPropW(m_acrylicBackdrop, L"WeaselAcrylicChildClipEnabled"))
+      ::SetPropW(m_acrylicBackdrop, kAcrylicChildClipCandidateProperty,
+                 reinterpret_cast<HANDLE>(m_hWnd));
     ::SetPropW(m_acrylicBackdrop, kWeaselAcrylicAppSdkActiveProperty,
                reinterpret_cast<HANDLE>(static_cast<INT_PTR>(1)));
     m_acrylicBackdropEnabled = true;
@@ -2614,6 +2630,21 @@ void WeaselPanel::_SyncAcrylicBackdrop() {
   LocalAcrylicGeometryRef lifetime(localState);
   if (DeferLocalAcrylicGeometry(m_hWnd))
     return;
+  const auto stopFailedChildClip = [&]() {
+    if (!m_acrylicBackdrop ||
+        !::GetPropW(m_acrylicBackdrop, kAcrylicChildClipFailedProperty))
+      return false;
+    const bool repaint = m_acrylicBackdropEnabled;
+    m_acrylicBackdropEnabled = false;
+    HideAcrylicBackdrop();
+    // Repaint once using the existing non-Acrylic skin. A nested Sync sees
+    // enabled=false and cannot recursively request another repaint.
+    if (repaint)
+      RedrawWindow();
+    return true;
+  };
+  if (stopFailedChildClip())
+    return;
   if (!_ShouldShowAcrylicBackdrop() || !::IsWindowVisible(m_hWnd)) {
     HideAcrylicBackdrop();
     return;
@@ -2649,6 +2680,8 @@ void WeaselPanel::_SyncAcrylicBackdrop() {
   _UpdateAcrylicBackdropTheme();
   // Theme updates can re-enter the host and destroy/recreate this panel.
   if (localState && !localState->panel)
+    return;
+  if (stopFailedChildClip())
     return;
 
   const bool explicitClip = AppSdkAcrylicNeedsExplicitClip(m_acrylicBackdrop);
@@ -2706,6 +2739,9 @@ void WeaselPanel::_SyncAcrylicBackdrop() {
     // Refresh after publication, including radius-only changes and fallback.
     g_acrylicAppSdkBridge.SetDarkMode(
         m_acrylicBackdrop, IsDarkColor(m_style.back_color) ? TRUE : FALSE);
+    if (localState && !localState->panel)
+      return;
+    stopFailedChildClip();
     return;
   }
 
