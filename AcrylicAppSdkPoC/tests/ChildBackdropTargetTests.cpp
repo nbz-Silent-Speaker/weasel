@@ -3,6 +3,7 @@
 #include "../AlignedAcrylicClip.h"
 #include "../../include/WeaselUserSettings.h"
 #include "../../include/WeaselMenu.h"
+#include "ModeColorSchemeTests.h"
 
 #include <functional>
 #include <iostream>
@@ -247,6 +248,77 @@ int main() {
     return 2;
   int result = 0;
   try {
+    Run("mode palettes independently resolve real YAML without changing legacy "
+        "keys",
+        [] {
+          ModeSchemeConfig f;
+          Check(f.Open());
+          Check(f.api->config_load_string(&f.config, R"(
+style:
+  color_scheme: daylight
+  color_scheme_dark: midnight
+  color_scheme_acrylic: glass
+  color_scheme_acrylic_dark: glass_dark
+  color_scheme_normal: solid
+  color_scheme_normal_dark: solid_dark
+preset_color_schemes:
+  glass: {back_color: 0x112233}
+  glass_dark: {back_color: 0x223344}
+  solid: {back_color: 0x445566}
+  solid_dark: {back_color: 0x556677}
+)"));
+          for (bool dark : {false, true, false}) {
+            for (bool acrylic : {true, false, true})
+              Check(weasel::ModeColorScheme(f.api, &f.config, acrylic, dark) ==
+                    (acrylic ? (dark ? "glass_dark" : "glass")
+                             : (dark ? "solid_dark" : "solid")));
+          }
+          Check(std::string(f.api->config_get_cstring(
+                    &f.config, "style/color_scheme")) == "daylight");
+          Check(std::string(f.api->config_get_cstring(
+                    &f.config, "style/color_scheme_dark")) == "midnight");
+          Check(f.api->config_set_string(
+              &f.config, "style/color_scheme_acrylic", "solid"));
+          Check(weasel::ModeColorScheme(f.api, &f.config, true, false) ==
+                "solid");
+          Check(weasel::ModeColorScheme(f.api, &f.config, false, false) ==
+                "solid");
+          Check(weasel::ModeColorScheme(f.api, &f.config, true, true) ==
+                "glass_dark");
+          Check(weasel::ModeColorScheme(f.api, &f.config, false, true) ==
+                "solid_dark");
+        });
+    Run("missing empty and invalid mode palettes preserve legacy fallback", [] {
+      ModeSchemeConfig f;
+      Check(f.Open());
+      Check(f.api->config_load_string(&f.config, R"(
+style:
+  color_scheme: original
+  color_scheme_normal: solid
+preset_color_schemes:
+  solid: {back_color: 0x445566}
+  malformed: scalar
+)"));
+      Check(weasel::ModeColorScheme(f.api, &f.config, true, false).empty());
+      Check(weasel::ModeColorScheme(f.api, &f.config, false, true).empty());
+      for (const char* value : {"", "missing", "malformed"}) {
+        Check(f.api->config_set_string(&f.config, "style/color_scheme_acrylic",
+                                       value));
+        Check(f.api->config_set_string(
+            &f.config, "style/color_scheme_acrylic_dark", value));
+        Check(weasel::ModeColorScheme(f.api, &f.config, true, false).empty());
+        Check(weasel::ModeColorScheme(f.api, &f.config, true, true).empty());
+        Check(weasel::ModeColorScheme(f.api, &f.config, false, false) ==
+              "solid");
+        Check(weasel::ModeColorScheme(f.api, &f.config, false, true).empty());
+      }
+      Check(f.api->config_load_string(&f.config,
+                                      "style: {color_scheme_acrylic: [bad]}"));
+      for (bool dark : {false, true}) {
+        Check(weasel::ModeColorScheme(f.api, &f.config, true, dark).empty());
+        Check(weasel::ModeColorScheme(f.api, &f.config, false, dark).empty());
+      }
+    });
     Run("language bar retains nested settings original commands and states",
         [] {
           MenuFixture f;

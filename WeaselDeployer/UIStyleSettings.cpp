@@ -2,9 +2,14 @@
 #include <WeaselUtility.h>
 #include "UIStyleSettings.h"
 
-UIStyleSettings::UIStyleSettings() {
+UIStyleSettings::UIStyleSettings(weasel::ColorSchemeTarget target)
+    : target_(target) {
   api_ = (RimeLeversApi*)rime_get_api()->find_module("levers")->get_api();
   settings_ = api_->custom_settings_init("weasel", "Weasel::UIStyleSettings");
+}
+
+UIStyleSettings::~UIStyleSettings() {
+  api_->custom_settings_destroy(settings_);
 }
 
 bool UIStyleSettings::GetPresetColorSchemes(
@@ -20,21 +25,24 @@ bool UIStyleSettings::GetPresetColorSchemes(
     return false;
   }
   while (rime->config_next(&preset)) {
+    RimeConfigIterator scheme = {0};
+    if (!rime->config_begin_map(&scheme, &config, preset.path))
+      continue;
+    rime->config_end(&scheme);
     std::string name_key(preset.path);
     name_key += "/name";
     const char* name = rime->config_get_cstring(&config, name_key.c_str());
     std::string author_key(preset.path);
     author_key += "/author";
     const char* author = rime->config_get_cstring(&config, author_key.c_str());
-    if (!name)
-      continue;
     ColorSchemeInfo info;
     info.color_scheme_id = preset.key;
-    info.name = name;
+    info.name = name ? name : preset.key;
     if (author)
       info.author = author;
     result->push_back(info);
   }
+  rime->config_end(&preset);
   return true;
 }
 
@@ -48,6 +56,8 @@ static inline bool IfFileExist(std::string filename) {
 // get preview image from user dir first, then shared_dir
 std::string UIStyleSettings::GetColorSchemePreview(
     const std::string& color_scheme_id) {
+  if (color_scheme_id.empty())
+    return {};
   std::string shared_dir = rime_get_api()->get_shared_data_dir();
   std::string user_dir = rime_get_api()->get_user_data_dir();
   std::string filename =
@@ -61,15 +71,15 @@ std::string UIStyleSettings::GetColorSchemePreview(
 std::string UIStyleSettings::GetActiveColorScheme() {
   RimeConfig config = {0};
   api_->settings_get_config(settings_, &config);
-  const char* value =
-      rime_get_api()->config_get_cstring(&config, "style/color_scheme");
+  const char* value = rime_get_api()->config_get_cstring(
+      &config, weasel::ColorSchemeConfigKey(target_));
   if (!value)
     return std::string();
   return std::string(value);
 }
 
 bool UIStyleSettings::SelectColorScheme(const std::string& color_scheme_id) {
-  api_->customize_string(settings_, "style/color_scheme",
-                         color_scheme_id.c_str());
-  return true;
+  return !!api_->customize_string(settings_,
+                                  weasel::ColorSchemeConfigKey(target_),
+                                  color_scheme_id.c_str());
 }

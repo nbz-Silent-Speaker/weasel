@@ -4,6 +4,8 @@
 #include <StringAlgorithm.hpp>
 #include <WeaselConstants.h>
 #include <WeaselUtility.h>
+#include <WeaselUserSettings.h>
+#include <WeaselColorScheme.h>
 
 #include <filesystem>
 #include <map>
@@ -133,6 +135,11 @@ void RimeWithWeaselHandler::Initialize() {
         }
       }
       m_base_style = m_ui->style();
+      m_current_acrylic = UserSettings::Load().acrylic;
+      m_mode_color_scheme = ModeColorScheme(
+          rime_api, &config, m_current_acrylic, m_current_dark_mode);
+      if (!m_mode_color_scheme.empty())
+        _UpdateUIStyleColor(&config, m_ui->style(), m_mode_color_scheme);
     }
     Bool global_ascii = false;
     if (rime_api->config_get_bool(&config, "global_ascii", &global_ascii))
@@ -228,6 +235,8 @@ DWORD RimeWithWeaselHandler::RemoveSession(WeaselSessionId ipc_id) {
 }
 
 void RimeWithWeaselHandler::UpdateColorTheme(BOOL darkMode) {
+  if (m_disabled || !m_ui)
+    return;
   RimeConfig config = {NULL};
   if (rime_api->config_open("weasel", &config)) {
     if (m_ui) {
@@ -243,8 +252,13 @@ void RimeWithWeaselHandler::UpdateColorTheme(BOOL darkMode) {
         }
       }
       m_base_style = m_ui->style();
+      m_current_acrylic = UserSettings::Load().acrylic;
+      m_mode_color_scheme = ModeColorScheme(
+          rime_api, &config, m_current_acrylic, m_current_dark_mode);
     }
     rime_api->config_close(&config);
+  } else {
+    return;
   }
 
   for (auto& pair : m_session_status_map) {
@@ -258,7 +272,28 @@ void RimeWithWeaselHandler::UpdateColorTheme(BOOL darkMode) {
       rime_api->free_status(&status);
     }
   }
-  m_ui->style() = get_session_status(m_active_session).style;
+  const auto active = m_session_status_map.find(m_active_session);
+  if (active != m_session_status_map.end()) {
+    m_ui->style() = active->second.style;
+  } else {
+    m_ui->style() = m_base_style;
+    _ApplyModeColorScheme(m_ui->style());
+  }
+}
+
+void RimeWithWeaselHandler::RefreshUserSettings() {
+  if (!m_disabled && UserSettings::Load().acrylic != m_current_acrylic)
+    UpdateColorTheme(m_current_dark_mode);
+}
+
+void RimeWithWeaselHandler::_ApplyModeColorScheme(UIStyle& style) {
+  if (m_mode_color_scheme.empty())
+    return;
+  RimeConfig config = {NULL};
+  if (rime_api->config_open("weasel", &config)) {
+    _UpdateUIStyleColor(&config, style, m_mode_color_scheme);
+    rime_api->config_close(&config);
+  }
 }
 
 BOOL RimeWithWeaselHandler::ProcessKeyEvent(KeyEvent keyEvent,
@@ -560,13 +595,16 @@ void RimeWithWeaselHandler::_LoadSchemaSpecificSettings(
     const std::string& schema_id) {
   if (!m_ui)
     return;
+  SessionStatus& session_status = get_session_status(ipc_id);
+  session_status.style = m_base_style;
   RimeConfig config;
-  if (!rime_api->schema_open(schema_id.c_str(), &config))
+  if (!rime_api->schema_open(schema_id.c_str(), &config)) {
+    _ApplyModeColorScheme(session_status.style);
     return;
+  }
   _UpdateShowNotifications(&config);
   m_ui->style() = m_base_style;
   _UpdateUIStyle(&config, m_ui, false);
-  SessionStatus& session_status = get_session_status(ipc_id);
   session_status.style = m_ui->style();
   UIStyle& style = session_status.style;
   // load schema color style config
@@ -591,6 +629,7 @@ void RimeWithWeaselHandler::_LoadSchemaSpecificSettings(
       m_current_dark_mode ? "style/color_scheme_dark" : "style/color_scheme";
   if (rime_api->config_get_string(&config, key, buffer, BUF_SIZE))
     update_color_scheme();
+  _ApplyModeColorScheme(style);
   // load schema icon start
   {
     const auto load_icon = [](RimeConfig& config, const char* key1,

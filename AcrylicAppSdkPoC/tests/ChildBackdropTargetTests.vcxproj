@@ -29,6 +29,7 @@
       <ExceptionHandling>Sync</ExceptionHandling>
       <ConformanceMode>true</ConformanceMode>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalIncludeDirectories>$(MSBuildThisFileDirectory)..\..\include;$(MSBuildThisFileDirectory)..\..\librime\src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
@@ -42,6 +43,8 @@
     <ClInclude Include="..\AlignedAcrylicClip.h" />
     <ClInclude Include="..\..\include\WeaselUserSettings.h" />
     <ClInclude Include="..\..\include\WeaselMenu.h" />
+    <ClInclude Include="..\..\include\WeaselColorScheme.h" />
+    <ClInclude Include="ModeColorSchemeTests.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

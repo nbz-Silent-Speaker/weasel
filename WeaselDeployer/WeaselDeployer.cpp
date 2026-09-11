@@ -2,6 +2,7 @@
 //
 #include "stdafx.h"
 #include <WeaselUtility.h>
+#include <WeaselColorScheme.h>
 #include <fstream>
 #include "WeaselDeployer.h"
 #include "Configurator.h"
@@ -70,6 +71,10 @@ static int Run(LPTSTR lpCmdLine) {
     } else {
       MessageBox(NULL,
                  L"Usage: WeaselDeployer.exe [options]\n"
+                 L"/acrylic-color - Set Acrylic color scheme\n"
+                 L"/acrylic-color-dark - Set dark Acrylic color scheme\n"
+                 L"/normal-color - Set normal color scheme\n"
+                 L"/normal-color-dark - Set dark normal color scheme\n"
                  L"/? or /help		- Show this help message\n"
                  L"/deploy		- Update Workspace\n"
                  L"/dict		- Manage dictionary\n"
@@ -79,6 +84,18 @@ static int Run(LPTSTR lpCmdLine) {
     }
     return 0;
   }
+
+  if (!wcscmp(L"/acrylic-color", lpCmdLine))
+    return configurator.ConfigureColorScheme(
+        weasel::ColorSchemeTarget::Acrylic);
+  if (!wcscmp(L"/acrylic-color-dark", lpCmdLine))
+    return configurator.ConfigureColorScheme(
+        weasel::ColorSchemeTarget::AcrylicDark);
+  if (!wcscmp(L"/normal-color-dark", lpCmdLine))
+    return configurator.ConfigureColorScheme(
+        weasel::ColorSchemeTarget::NormalDark);
+  if (!wcscmp(L"/normal-color", lpCmdLine))
+    return configurator.ConfigureColorScheme(weasel::ColorSchemeTarget::Normal);
 
   bool deployment_scheduled = !wcscmp(L"/deploy", lpCmdLine);
   if (deployment_scheduled) {

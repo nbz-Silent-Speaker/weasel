@@ -6,7 +6,27 @@
 
 选择自动保存，重新启动后继续生效。本 Acrylic 分支首次使用、尚未保存选择时保持磨砂开启。菜单切换会通知当前候选窗口刷新；未收到通知的应用会在下一次候选框刷新时读取新设置。无需为这个开关重新部署词库。
 
-偏好保存在当前用户的 `Software\Rime\Weasel\UserSettings`，`AcrylicEnabled` 为 DWORD 0/1。32 位和 64 位组件使用相同的 64 位注册表视图。不会改写 `weasel.custom.yaml`、皮肤或词典文件。保存失败时显示错误，不发送切换通知；读取异常时关闭可选磨砂材质。
+开关偏好保存在当前用户的 `Software\Rime\Weasel\UserSettings`，`AcrylicEnabled` 为 DWORD 0/1。32 位和 64 位组件使用相同的 64 位注册表视图。单独切换开关不会改写 `weasel.custom.yaml`、皮肤或词典文件。保存失败时显示错误，不发送切换通知；读取异常时关闭可选磨砂材质。
+
+## 两种模式分别指定浅色和深色配色
+
+在 `weasel.custom.yaml` 已有的 `patch:` 下添加（不要重复建立 `patch:`）：
+
+```yaml
+patch:
+  "style/color_scheme_acrylic": Fluent_light
+  "style/color_scheme_acrylic_dark": Fluent_dark
+  "style/color_scheme_normal": Fluent_light
+  "style/color_scheme_normal_dark": Fluent_dark
+```
+
+以上是示例，四项可以填写不同的 scheme，名称应为 `preset_color_schemes` 中已定义的标识。手动修改后重新部署：磨砂开关决定使用 acrylic 或 normal；Windows 应用浅色/深色模式决定使用无后缀项或 `_dark` 项，与原有小狼毫深浅色判断一致。有效的显式选择优先于对应的原有配色和 schema 配色，只覆盖 scheme 的颜色；字体、布局、圆角等配置继续沿用原值。磨砂开启时仍会采用材质需要的背景透明度及阴影处理，并非所有颜色均与普通实色时完全相同。
+
+四项相互独立，可以只指定其中一项。某项未填写、设为空字符串 `""`、或指定的 scheme 不存在时，该组合沿用原来的 `color_scheme`／`color_scheme_dark` 和 schema 配色优先级。例如仅配置磨砂浅色、未配置磨砂深色时，Windows 深色模式沿用原深色配色，不把磨砂浅色强行带入深色。
+
+也可从“扩展设置 → 磨砂模式配色 / 普通模式配色 → 浅色配色… / 深色配色…”打开对应选择器。列表来自已部署配置的 `preset_color_schemes`，包括已部署的自定义配色；没有名称的配色显示其标识。“跟随原配置”保存该项的空字符串。点击确定时使用小狼毫原有配置保存和部署流程更新对应的 custom 项；关闭对话框或按 Esc 不保存。若正在编辑未部署的配置，请先保存并重新部署，再从菜单选择。
+
+菜单与手动配置使用相同的四个键，没有另一套注册表配色覆盖层。配色保存需要部署；日常切换磨砂开关或 Windows 深浅色不需要再次部署。切换后下一次输入响应会下发新配色到已有应用会话，不必为了切配色重新启动 Word。
 
 `include/WeaselUserSettings.h` 集中管理偏好默认值、读写和变更通知。后续设置可在“扩展设置”下新增条目或分组，并增加独立的偏好值；不要为每个选项另设顶层菜单或复用已有菜单命令编号。两个图标共用命令与偏好；`include/WeaselMenu.h` 保留语言栏的多级分组、勾选和禁用状态。“扩展设置”使用 X 快捷键，原有重启菜单的 E 保留。
 

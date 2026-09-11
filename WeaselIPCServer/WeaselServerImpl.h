@@ -1,6 +1,7 @@
 #pragma once
 #include <WeaselIPC.h>
 #include <map>
+#include <atomic>
 #include <Winnt.h>   // for security attributes constants
 #include <aclapi.h>  // for ACL
 #include <boost/thread.hpp>
@@ -107,6 +108,7 @@ class ServerImpl : public CWindowImpl<ServerImpl, CWindow, ServerWinTraits>
   HMODULE m_hUser32Module;
   SecurityAttribute sa;
   BOOL m_darkMode;
+  std::atomic<bool> m_colorThemeChanged{false};
 };
 
 }  // namespace weasel

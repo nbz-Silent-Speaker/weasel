@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include <rime_levers_api.h>
+#include <WeaselColorScheme.h>
 
 struct ColorSchemeInfo {
   std::string color_scheme_id;
@@ -12,7 +13,12 @@ struct ColorSchemeInfo {
 
 class UIStyleSettings {
  public:
-  UIStyleSettings();
+  explicit UIStyleSettings(
+      weasel::ColorSchemeTarget target = weasel::ColorSchemeTarget::Default);
+  ~UIStyleSettings();
+  UIStyleSettings(const UIStyleSettings&) = delete;
+  UIStyleSettings& operator=(const UIStyleSettings&) = delete;
+  weasel::ColorSchemeTarget target() const { return target_; }
 
   bool GetPresetColorSchemes(std::vector<ColorSchemeInfo>* result);
   std::string GetColorSchemePreview(const std::string& color_scheme_id);
@@ -24,4 +30,5 @@ class UIStyleSettings {
  private:
   RimeLeversApi* api_;
   RimeCustomSettings* settings_;
+  weasel::ColorSchemeTarget target_;
 };

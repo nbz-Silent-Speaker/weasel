@@ -59,7 +59,8 @@ LRESULT ServerImpl::OnColorChange(UINT uMsg,
                                   BOOL& bHandled) {
   if (IsUserDarkMode() != m_darkMode) {
     m_darkMode = IsUserDarkMode();
-    m_pRequestHandler->UpdateColorTheme(m_darkMode);
+    // Palette/session updates are serialized with input on the pipe worker.
+    m_colorThemeChanged.store(true);
   }
   return 0;
 }
@@ -389,6 +390,13 @@ DWORD ServerImpl::OnChangePage(WEASEL_IPC_COMMAND uMsg,
 
 template <typename _Resp>
 void ServerImpl::HandlePipeMessage(PipeMessage pipe_msg, _Resp resp) {
+  // Already serialized by g_api_mutex. Refresh before processing input so the
+  // same response can carry the new palette to an existing frontend session.
+  if (m_pRequestHandler) {
+    if (m_colorThemeChanged.exchange(false))
+      m_pRequestHandler->UpdateColorTheme(IsUserDarkMode());
+    m_pRequestHandler->RefreshUserSettings();
+  }
   DWORD result;
 
   MAP_PIPE_MSG_HANDLE(pipe_msg.Msg, pipe_msg.wParam, pipe_msg.lParam)

@@ -85,6 +85,7 @@ struct RequestHandler {
   virtual void EndMaintenance() {}
   virtual void SetOption(DWORD session_id, const std::string& opt, bool val) {}
   virtual void UpdateColorTheme(BOOL darkMode) {}
+  virtual void RefreshUserSettings() {}
 };
 
 // 處理server端回應之物件

@@ -113,6 +113,30 @@ int Configurator::Run(bool installing) {
   return 0;
 }
 
+int Configurator::ConfigureColorScheme(weasel::ColorSchemeTarget target) {
+  RimeModule* levers = rime_get_api()->find_module("levers");
+  if (!levers)
+    return 1;
+  auto api = (RimeLeversApi*)levers->get_api();
+  if (!api)
+    return 1;
+  UIStyleSettings settings(target);
+  if (!api->load_settings(settings.settings())) {
+    MSG_BY_IDS(IDS_STR_SCHEME_SAVE_FAILED, IDS_STR_WEASEL,
+               MB_OK | MB_ICONERROR);
+    return 1;
+  }
+  UIStyleSettingsDialog dialog(&settings);
+  if (dialog.DoModal() != IDOK)
+    return 0;
+  if (!api->save_settings(settings.settings())) {
+    MSG_BY_IDS(IDS_STR_SCHEME_SAVE_FAILED, IDS_STR_WEASEL,
+               MB_OK | MB_ICONERROR);
+    return 1;
+  }
+  return UpdateWorkspace(true);
+}
+
 int Configurator::UpdateWorkspace(bool report_errors) {
   HANDLE hMutex = CreateMutex(NULL, TRUE, L"WeaselDeployerMutex");
   if (!hMutex) {

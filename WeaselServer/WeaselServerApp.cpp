@@ -86,6 +86,18 @@ void WeaselServerApp::SetupMenuHandlers() {
     return true;
   });
   m_server.AddMenuHandler(ID_WEASELTRAY_CHECKUPDATE, check_update);
+  m_server.AddMenuHandler(ID_WEASELTRAY_ACRYLIC_COLOR,
+                          std::bind(execute, dir / L"WeaselDeployer.exe",
+                                    std::wstring(L"/acrylic-color")));
+  m_server.AddMenuHandler(ID_WEASELTRAY_NORMAL_COLOR,
+                          std::bind(execute, dir / L"WeaselDeployer.exe",
+                                    std::wstring(L"/normal-color")));
+  m_server.AddMenuHandler(ID_WEASELTRAY_ACRYLIC_COLOR_DARK,
+                          std::bind(execute, dir / L"WeaselDeployer.exe",
+                                    std::wstring(L"/acrylic-color-dark")));
+  m_server.AddMenuHandler(ID_WEASELTRAY_NORMAL_COLOR_DARK,
+                          std::bind(execute, dir / L"WeaselDeployer.exe",
+                                    std::wstring(L"/normal-color-dark")));
   m_server.AddMenuHandler(ID_WEASELTRAY_INSTALLDIR, std::bind(explore, dir));
   m_server.AddMenuHandler(ID_WEASELTRAY_USERCONFIG,
                           std::bind(explore, WeaselUserDataPath()));
