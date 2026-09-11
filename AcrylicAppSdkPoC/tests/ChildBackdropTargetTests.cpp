@@ -233,6 +233,7 @@ struct Fixture {
 };
 
 void Run(const char* name, const std::function<void()>& test) {
+  std::cout << "RUN " << name << '\n';
   test();
   Check(liveNatives == 0 && liveBrushes == 0 && liveMenus == 0);
   std::cout << "PASS " << name << '\n';
@@ -266,7 +267,8 @@ int main() {
                   settings->items[0].text == L"Acrylic effect (&A)" &&
                   settings->items[0].flags ==
                       (enabled ? TF_LBMENUF_CHECKED : 0));
-            Check(settings->items[1].flags == TF_LBMENUF_SEPARATOR &&
+            Check(settings->items[1].flags ==
+                      (TF_LBMENUF_SEPARATOR | TF_LBMENUF_GRAYED) &&
                   settings->items[1].text.empty());
             auto future = static_cast<Menu*>(settings->items[2].child.Get());
             Check(future && future->items.size() == 1);
