@@ -1,5 +1,6 @@
 #pragma once
 
+#include <windows.h>
 #include <d2d1effects.h>
 #include <windows.graphics.effects.interop.h>
 
