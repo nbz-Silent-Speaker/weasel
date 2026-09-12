@@ -32,3 +32,17 @@ $taskCandidateParts = @(
 )
 [IO.File]::WriteAllText((Join-Path $taskDirectory 'candidate-under-test.inc'), ($taskCandidateParts -join "`r`n"), (New-Object Text.UTF8Encoding($false)))
 Write-Output 'Prepared production UI lifecycle routines for recovery tests'
+
+# Keep placement tests tied to the production state and both callback paths.
+# Only the clock, accessibility provider, and host edit-session dispatch are
+# controlled by the harness; no positioning algorithm is copied into it.
+$taskHeader = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\WeaselTSF.h') -Raw
+$taskPlacementParts = @(
+    (Get-Section $taskSource 'constexpr DWORD kR21MotionGateMs' 'bool R21ReadMsaaCaret('),
+    (Get-Section $taskSource 'RECT R21TranslateRect(' '}  // namespace'),
+    (Get-Section $taskSource 'void WeaselTSF::_R21ResetPlacementFollow()' 'void WeaselTSF::_R19PublishPlacementProbeDiagnostics('),
+    (Get-Section $taskSource 'void WeaselTSF::_SetCompositionPosition(' '/* Inline Preedit */')
+)
+[IO.File]::WriteAllText((Join-Path $taskDirectory 'placement-under-test.inc'), ($taskPlacementParts -join "`r`n"), (New-Object Text.UTF8Encoding($false)))
+[IO.File]::WriteAllText((Join-Path $taskDirectory 'placement-state.inc'), (Get-Section $taskHeader '  DWORD _r20SamplesCompleted' '  /* Weasel Related */'), (New-Object Text.UTF8Encoding($false)))
+Write-Output 'Prepared production placement routines and state for scroll/move tests'

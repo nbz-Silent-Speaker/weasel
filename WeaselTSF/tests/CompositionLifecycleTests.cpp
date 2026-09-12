@@ -153,6 +153,7 @@ void Check(bool condition, const char* message) {
 }
 
 #include "CandidateLifecycleTests.h"
+#include "PlacementFollowTests.h"
 struct Fixture {
   com_ptr<WeaselTSF> service = new WeaselTSF;
   com_ptr<ITfContext> context = new ITfContext;
@@ -253,6 +254,8 @@ int main() {
     std::cout << "PASS: rejected cleanup retains the active composition\n";
     candidate_recovery::Run();
     Check(liveObjects == 0, "candidate lifecycle tests leaked references");
+    placement_follow::Run();
+    Check(liveObjects == 0, "placement tests leaked references");
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "FAIL: " << error.what() << '\n';

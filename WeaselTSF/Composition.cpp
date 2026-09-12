@@ -19,6 +19,27 @@ bool R21SuccessfulRect(bool hasRect, HRESULT hr) {
   return hasRect && SUCCEEDED(hr);
 }
 
+bool R21TranslatedTogether(const RECT& oldStart,
+                           const RECT& newStart,
+                           const RECT& oldEnd,
+                           const RECT& newEnd) {
+  const LONGLONG dx = static_cast<LONGLONG>(newStart.left) - oldStart.left;
+  const LONGLONG dy = static_cast<LONGLONG>(newStart.top) - oldStart.top;
+  const auto translated = [dx, dy](const RECT& oldRect, const RECT& newRect) {
+    // Physical TSF edges round independently: the captured move alternates
+    // 30/31-pixel heights and 94/95-pixel START-to-END distances. A one-pixel
+    // edge discrepancy is rounding, not proof that the viewport is refreshed.
+    const auto rounded = [](LONGLONG delta, LONGLONG expected) {
+      return delta >= expected - 1 && delta <= expected + 1;
+    };
+    return rounded(static_cast<LONGLONG>(newRect.left) - oldRect.left, dx) &&
+           rounded(static_cast<LONGLONG>(newRect.right) - oldRect.right, dx) &&
+           rounded(static_cast<LONGLONG>(newRect.top) - oldRect.top, dy) &&
+           rounded(static_cast<LONGLONG>(newRect.bottom) - oldRect.bottom, dy);
+  };
+  return translated(oldStart, newStart) && translated(oldEnd, newEnd);
+}
+
 bool R21ReadMsaaCaret(HWND expectedView,
                       RECT& caretRect,
                       HWND& focus,
@@ -630,6 +651,26 @@ void WeaselTSF::_R21PlacementFollowTick(com_ptr<ITfContext> pContext) {
   const bool endUsable = R21SuccessfulRect(_r20CompositionEndHasRect,
                                            _r20CompositionEndLastTextExtHr);
 
+  const bool hadPair = _r21HaveTsfPair;
+  const bool pairStartChanged =
+      hadPair && !R21SameRect(_r21PairStart, _r20CompositionStartLastRect);
+  const bool pairEndChanged =
+      hadPair && !R21SameRect(_r21PairEnd, _r20CompositionEndLastRect);
+  const bool pairChanged = !hadPair || pairStartChanged || pairEndChanged;
+  RECT msaa = {};
+  HWND focus = nullptr;
+  HWND root = nullptr;
+  const bool haveMsaa = R21ReadMsaaCaret(_r19ProbeViewHwnd, msaa, focus, root);
+  // A translated TSF pair need not include the earlier viewport scroll. Keep
+  // its motion witness; _SetCompositionPosition rebases it when the normal
+  // source arrives, regardless of the two edit-session callbacks' order.
+  const bool translatedPair =
+      startUsable && endUsable && pairStartChanged && _r21HaveMsaaBaseline &&
+      haveMsaa && focus == _r21BaselineFocus && root == _r21BaselineRoot &&
+      (now - _r21LastTextActivityTick) >= kR21MotionGateMs &&
+      R21TranslatedTogether(_r21PairStart, _r20CompositionStartLastRect,
+                            _r21PairEnd, _r20CompositionEndLastRect);
+
   if (newSample && startUsable) {
     if (!_r21HaveAuthoritativeStart) {
       _r21AuthoritativeStart = _r20CompositionStartLastRect;
@@ -637,12 +678,14 @@ void WeaselTSF::_R21PlacementFollowTick(com_ptr<ITfContext> pContext) {
     } else if (!R21SameRect(_r21AuthoritativeStart,
                             _r20CompositionStartLastRect)) {
       _r21AuthoritativeStart = _r20CompositionStartLastRect;
-      _r21CorrectionX = 0;
-      _r21CorrectionY = 0;
-      _r21CorrectionActive = false;
-      _r21MotionProvisional = false;
-      _r21MotionActive = false;
-      _r21HaveMsaaBaseline = false;
+      if (!translatedPair) {
+        _r21CorrectionX = 0;
+        _r21CorrectionY = 0;
+        _r21CorrectionActive = false;
+        _r21MotionProvisional = false;
+        _r21MotionActive = false;
+        _r21HaveMsaaBaseline = false;
+      }
       ++_r21AuthoritativeRequeries;
       if (pContext)
         _UpdateCompositionWindow(pContext);
@@ -655,17 +698,6 @@ void WeaselTSF::_R21PlacementFollowTick(com_ptr<ITfContext> pContext) {
   if (!startUsable || !endUsable)
     return;
 
-  const bool hadPair = _r21HaveTsfPair;
-  const bool pairStartChanged =
-      hadPair && !R21SameRect(_r21PairStart, _r20CompositionStartLastRect);
-  const bool pairEndChanged =
-      hadPair && !R21SameRect(_r21PairEnd, _r20CompositionEndLastRect);
-  const bool pairChanged = !hadPair || pairStartChanged || pairEndChanged;
-
-  RECT msaa = {};
-  HWND focus = nullptr;
-  HWND root = nullptr;
-  const bool haveMsaa = R21ReadMsaaCaret(_r19ProbeViewHwnd, msaa, focus, root);
   if (!haveMsaa) {
     ++_r21MsaaUnavailable;
     _r21MotionProvisional = false;
@@ -677,10 +709,12 @@ void WeaselTSF::_R21PlacementFollowTick(com_ptr<ITfContext> pContext) {
     _r21PairStart = _r20CompositionStartLastRect;
     _r21PairEnd = _r20CompositionEndLastRect;
     _r21HaveTsfPair = true;
+  }
 
-    // A START change is authoritative and resets the correction above. An
-    // END-only change is typing/caret motion inside the same composition; keep
-    // the already-proven viewport correction and only rebase its MSAA witness.
+  if (pairChanged && !translatedPair) {
+    // END-only changes are typing/caret motion, so rebase the witness. For a
+    // rigid translation continue below instead: rebasing here would swallow
+    // the window motion before it can update the existing scroll correction.
     _r21BaselineMsaa = msaa;
     _r21BaselineFocus = focus;
     _r21BaselineRoot = root;
@@ -919,17 +953,40 @@ void WeaselTSF::_SetCompositionPosition(const RECT& rc) {
 
   const bool normalChanged =
       _r21HaveNormalPosition && !R21SameRect(_r21LastNormalPosition, rc);
-  if (_r21CorrectionActive && normalChanged) {
-    // The normal TSF path itself has obtained a new anchor. Prefer it
-    // immediately and discard the accessibility correction rather than
-    // translating an already-fresh position twice.
-    _r21CorrectionX = 0;
-    _r21CorrectionY = 0;
-    _r21CorrectionActive = false;
-    _r21MotionProvisional = false;
-    _r21MotionActive = false;
-    _r21HaveMsaaBaseline = false;
-    ++_r21GuardResets;
+  if ((_r21HaveMsaaBaseline || _r21CorrectionActive) && normalChanged) {
+    RECT msaa = {};
+    HWND focus = nullptr;
+    HWND root = nullptr;
+    const bool translatedSource =
+        _r21HaveMsaaBaseline &&
+        (::GetTickCount() - _r21LastTextActivityTick) >= kR21MotionGateMs &&
+        R21TranslatedTogether(_r21LastNormalPosition, rc,
+                              _r21LastNormalPosition, rc) &&
+        R21ReadMsaaCaret(_r19ProbeViewHwnd, msaa, focus, root) &&
+        focus == _r21BaselineFocus && root == _r21BaselineRoot;
+    if (translatedSource) {
+      // Express the same witness relative to the new TSF source. Subtract
+      // source motion, then add observed caret motion exactly once. This also
+      // removes the correction if TSF catches up with the viewport itself.
+      // Rebase even when the current correction is zero (plain window move).
+      _r21BaselineCorrectionX -= rc.left - _r21LastNormalPosition.left;
+      _r21BaselineCorrectionY -= rc.top - _r21LastNormalPosition.top;
+      _r21CorrectionX =
+          _r21BaselineCorrectionX + msaa.left - _r21BaselineMsaa.left;
+      _r21CorrectionY =
+          _r21BaselineCorrectionY + msaa.top - _r21BaselineMsaa.top;
+      _r21CorrectionActive = _r21CorrectionX != 0 || _r21CorrectionY != 0;
+    } else {
+      // Changed geometry, recent typing, or a missing/foreign witness cannot
+      // justify keeping a viewport correction. Use the normal TSF anchor.
+      _r21CorrectionX = 0;
+      _r21CorrectionY = 0;
+      _r21CorrectionActive = false;
+      _r21MotionProvisional = false;
+      _r21MotionActive = false;
+      _r21HaveMsaaBaseline = false;
+      ++_r21GuardResets;
+    }
   }
 
   _r21LastNormalPosition = rc;
