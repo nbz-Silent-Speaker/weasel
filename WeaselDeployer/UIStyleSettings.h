@@ -6,21 +6,10 @@
 #include <set>
 #include <rime_levers_api.h>
 #include <WeaselColorScheme.h>
+#include <WeaselPaletteCatalog.h>
 
-struct ColorSchemeInfo {
-  std::string color_scheme_id;
-  std::string name;
-  std::string author;
-  bool custom = false;
-  std::string variant;
-};
-
-struct ColorSchemeGroup {
-  std::string name;
-  std::string light;
-  std::string dark;
-  bool custom = false;
-};
+using ColorSchemeInfo = weasel::PaletteScheme;
+using ColorSchemeGroup = weasel::PaletteGroup;
 
 class UIStyleSettings {
  public:
@@ -39,8 +28,12 @@ class UIStyleSettings {
   std::array<std::string, 4> ActiveAppearance();
   bool SaveAppearance(const std::array<std::string, 4>& colors);
   bool configuration_changed() const { return configuration_changed_; }
-  const std::vector<ColorSchemeInfo>& schemes() const { return schemes_; }
-  const std::vector<ColorSchemeGroup>& groups() const { return groups_; }
+  const std::vector<ColorSchemeInfo>& schemes() const {
+    return palettes_.schemes();
+  }
+  const std::vector<ColorSchemeGroup>& groups() const {
+    return palettes_.groups();
+  }
   COLORREF PreviewColor(const std::string& id,
                         const char* key,
                         COLORREF fallback);
@@ -52,12 +45,11 @@ class UIStyleSettings {
   RimeLeversApi* api_;
   RimeCustomSettings* settings_;
   weasel::ColorSchemeTarget target_;
-  RimeConfig catalog_{nullptr};
+  weasel::PaletteCatalog palettes_;
   RimeConfig original_{nullptr};
   RimeConfig custom_{nullptr};
-  std::vector<ColorSchemeInfo> schemes_;
-  std::vector<ColorSchemeGroup> groups_;
-  std::set<std::string> custom_ids_;
   std::string original_bytes_;
+  std::string shared_bytes_;
+  std::string base_bytes_;
   bool configuration_changed_ = false;
 };

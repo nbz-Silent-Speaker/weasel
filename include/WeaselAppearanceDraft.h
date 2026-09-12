@@ -31,7 +31,7 @@ class AppearanceDraft {
   void SelectSingle(bool dark, const std::string& scheme) {
     colors_[offset() + (dark ? 1 : 0)] = scheme;
   }
-  void ResetCurrent() { SelectPair("Fluent_light", "Fluent_dark"); }
+  void ResetCurrent() { SelectPair("base:Fluent_light", "base:Fluent_dark"); }
   bool changed() const {
     return acrylic_ != saved_acrylic_ || colors_ != saved_colors_;
   }

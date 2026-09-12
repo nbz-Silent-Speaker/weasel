@@ -6,6 +6,7 @@
 #include <mutex>
 
 #include <rime_api.h>
+#include <WeaselPaletteCatalog.h>
 
 struct CaseInsensitiveCompare {
   bool operator()(const std::string& str1, const std::string& str2) const {
@@ -71,6 +72,7 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   bool _IsDeployerRunning();
   void _UpdateUI(WeaselSessionId ipc_id);
   void _ApplyModeColorScheme(weasel::UIStyle& style);
+  void _LoadPaletteSources(RimeConfig* config);
   void _LoadSchemaSpecificSettings(WeaselSessionId ipc_id,
                                    const std::string& schema_id);
   void _LoadAppInlinePreeditSet(WeaselSessionId ipc_id,
@@ -121,6 +123,8 @@ class RimeWithWeaselHandler : public weasel::RequestHandler {
   bool m_current_dark_mode;
   bool m_current_acrylic = true;
   std::string m_mode_color_scheme;
+  std::string m_mode_palette_source;
+  weasel::PaletteCatalog m_palette_catalog;
   bool m_global_ascii_mode;
   int m_show_notifications_time;
   DWORD m_pid;

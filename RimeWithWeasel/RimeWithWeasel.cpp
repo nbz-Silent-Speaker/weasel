@@ -134,12 +134,10 @@ void RimeWithWeaselHandler::Initialize() {
           _UpdateUIStyleColor(&config, m_ui->style(), color_name);
         }
       }
-      m_base_style = m_ui->style();
       m_current_acrylic = UserSettings::Load().acrylic;
-      m_mode_color_scheme = ModeColorScheme(
-          rime_api, &config, m_current_acrylic, m_current_dark_mode);
-      if (!m_mode_color_scheme.empty())
-        _UpdateUIStyleColor(&config, m_ui->style(), m_mode_color_scheme);
+      _LoadPaletteSources(&config);
+      m_base_style = m_ui->style();
+      _ApplyModeColorScheme(m_ui->style());
     }
     Bool global_ascii = false;
     if (rime_api->config_get_bool(&config, "global_ascii", &global_ascii))
@@ -158,6 +156,7 @@ void RimeWithWeaselHandler::Finalize() {
   m_disabled = true;
   m_session_status_map.clear();
   LOG(INFO) << "Finalizing la rime.";
+  m_palette_catalog.Clear();
   rime_api->finalize();
 }
 
@@ -251,10 +250,9 @@ void RimeWithWeaselHandler::UpdateColorTheme(BOOL darkMode) {
           _UpdateUIStyleColor(&config, m_ui->style(), color_name);
         }
       }
-      m_base_style = m_ui->style();
       m_current_acrylic = UserSettings::Load().acrylic;
-      m_mode_color_scheme = ModeColorScheme(
-          rime_api, &config, m_current_acrylic, m_current_dark_mode);
+      _LoadPaletteSources(&config);
+      m_base_style = m_ui->style();
     }
     rime_api->config_close(&config);
   } else {
@@ -286,7 +284,30 @@ void RimeWithWeaselHandler::RefreshUserSettings() {
     UpdateColorTheme(m_current_dark_mode);
 }
 
+void RimeWithWeaselHandler::_LoadPaletteSources(RimeConfig* config) {
+  m_palette_catalog.LoadFiles(rime_api, WeaselSharedDataPath(),
+                              WeaselUserDataPath());
+  // Normal palettes remain the global base; schema-specific choices keep
+  // their original precedence. Acrylic is applied after schema styling.
+  const auto normal =
+      m_palette_catalog.ExplicitSelection(config, m_current_dark_mode ? 3 : 2);
+  if (auto* colors = m_palette_catalog.Config(normal))
+    _UpdateUIStyleColor(colors, m_ui->style(), PaletteId(normal));
+  m_mode_color_scheme =
+      ModeColorScheme(rime_api, config, m_current_acrylic, m_current_dark_mode);
+  m_mode_palette_source = m_current_acrylic
+                              ? m_palette_catalog.ExplicitSelection(
+                                    config, m_current_dark_mode ? 1 : 0)
+                              : std::string();
+  if (!m_mode_palette_source.empty())
+    m_mode_color_scheme = PaletteId(m_mode_palette_source);
+}
+
 void RimeWithWeaselHandler::_ApplyModeColorScheme(UIStyle& style) {
+  if (auto* source = m_palette_catalog.Config(m_mode_palette_source)) {
+    _UpdateUIStyleColor(source, style, PaletteId(m_mode_palette_source));
+    return;
+  }
   if (m_mode_color_scheme.empty())
     return;
   RimeConfig config = {NULL};

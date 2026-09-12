@@ -25,6 +25,15 @@ LRESULT UIStyleSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   }
   draft_.Load(settings_->ActiveAppearance(),
               weasel::UserSettings::Load().acrylic);
+  for (size_t mode = 0; mode < single_.size(); ++mode) {
+    const auto& colors = draft_.colors();
+    single_[mode] =
+        !std::any_of(settings_->groups().begin(), settings_->groups().end(),
+                     [&](const auto& group) {
+                       return group.light == colors[mode * 2] &&
+                              group.dark == colors[mode * 2 + 1];
+                     });
+  }
   LOGFONTW heading{};
   ::GetObjectW(GetFont(), sizeof(heading), &heading);
   heading.lfHeight = heading.lfHeight * 4 / 3;
@@ -95,22 +104,38 @@ void UIStyleSettingsDialog::FillSingles() {
     CComboBox combo(GetDlgItem(IDC_COLOR_LIGHT + dark));
     combo.ResetContent();
     singles_[dark].clear();
-    AddEntry(combo, {Text(IDS_STR_SCHEME_FOLLOW_CONFIG), -1});
-    int selected = 0;
+    int selected = -1;
+    const auto current = draft_.current(dark != 0);
     for (bool custom : {false, true}) {
       bool first = true;
       for (size_t i = 0; i < settings_->schemes().size(); ++i) {
         const auto& scheme = settings_->schemes()[i];
-        if (scheme.custom != custom)
+        const bool isCurrent = scheme.color_scheme_id == current;
+        const bool matches =
+            weasel::PaletteMatchesTheme(scheme.theme, dark != 0);
+        if (scheme.custom != custom || (!matches && !isCurrent))
           continue;
-        if (scheme.color_scheme_id == draft_.current(dark != 0))
+        if (isCurrent)
           selected = static_cast<int>(singles_[dark].size());
+        CString label(u8tow(scheme.name).c_str());
+        if (!matches)
+          label += Text(scheme.theme == weasel::PaletteTheme::Dark
+                            ? IDS_PALETTE_CURRENT_DARK
+                            : IDS_PALETTE_CURRENT_LIGHT);
         AddEntry(combo,
-                 {CString(u8tow(scheme.name).c_str()), static_cast<int>(i),
+                 {label, static_cast<int>(i),
                   first ? (custom ? IDS_APPEARANCE_CUSTOM : IDS_APPEARANCE_BASE)
                         : 0});
         first = false;
       }
+    }
+    if (selected < 0) {
+      selected = static_cast<int>(singles_[dark].size());
+      CString label = current.empty()
+                          ? Text(IDS_PALETTE_CHOOSE)
+                          : CString(u8tow(weasel::PaletteId(current)).c_str()) +
+                                Text(IDS_PALETTE_UNAVAILABLE);
+      AddEntry(combo, {label, -1});
     }
     combo.SetCurSel(selected);
   }
@@ -122,50 +147,41 @@ void UIStyleSettingsDialog::RefreshMode() {
   SetDlgItemText(IDC_MATERIAL_HINT,
                  Text(draft_.acrylic() ? IDS_APPEARANCE_ACRYLIC_HINT
                                        : IDS_APPEARANCE_NORMAL_HINT));
-  SetDlgItemText(
-      IDC_PALETTE_LABEL,
-      Text(draft_.acrylic() ? IDS_APPEARANCE_ACRYLIC : IDS_APPEARANCE_NORMAL));
   SetDlgItemText(IDC_PREVIEW_HINT,
                  Text(draft_.acrylic() ? IDS_APPEARANCE_ACRYLIC_PREVIEW
                                        : IDS_APPEARANCE_NORMAL_PREVIEW));
   FillGroups();
   FillSingles();
-  ShowAdvanced(advanced_[draft_.acrylic() ? 0 : 1]);
+  ShowEditor(single_[draft_.acrylic() ? 0 : 1]);
   RefreshPreview();
 }
 
-void UIStyleSettingsDialog::ShowAdvanced(bool show) {
-  advanced_[draft_.acrylic() ? 0 : 1] = show;
-  CString caption(show ? L"\u25be  " : L"\u25b8  ");
-  caption += Text(IDS_APPEARANCE_ADVANCED);
-  SetDlgItemText(IDC_ADVANCED_COLORS, caption);
+void UIStyleSettingsDialog::ShowEditor(bool single) {
+  single_[draft_.acrylic() ? 0 : 1] = single;
+  CheckDlgButton(IDC_EDIT_GROUP, single ? BST_UNCHECKED : BST_CHECKED);
+  CheckDlgButton(IDC_EDIT_SINGLE, single ? BST_CHECKED : BST_UNCHECKED);
+  ::ShowWindow(GetDlgItem(IDC_COLOR_FAMILY), single ? SW_HIDE : SW_SHOW);
   for (int id :
        {IDC_COLOR_LIGHT, IDC_COLOR_DARK, IDC_LIGHT_LABEL, IDC_DARK_LABEL})
-    ::ShowWindow(GetDlgItem(id), show ? SW_SHOW : SW_HIDE);
-  if (show == expanded_)
-    return;
-  RECT delta{0, 0, 0, 40};
-  MapDialogRect(&delta);
-  const int shift = show ? delta.bottom : -delta.bottom;
-  for (int id : {IDC_SETTINGS_DIVIDER, IDC_RESTORE_APPEARANCE, IDC_APPLY, IDOK,
-                 IDCANCEL}) {
-    RECT rect{};
-    HWND control = GetDlgItem(id);
-    ::GetWindowRect(control, &rect);
-    ::MapWindowPoints(nullptr, m_hWnd, reinterpret_cast<POINT*>(&rect), 2);
-    ::SetWindowPos(control, nullptr, rect.left, rect.top + shift, 0, 0,
-                   SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-  }
-  RECT window{};
-  GetWindowRect(&window);
-  SetWindowPos(nullptr, 0, 0, window.right - window.left,
-               window.bottom - window.top + shift,
-               SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
-  expanded_ = show;
-  Invalidate();
+    ::ShowWindow(GetDlgItem(id), single ? SW_SHOW : SW_HIDE);
+  SetDlgItemText(IDC_EDITOR_HINT, Text(single ? IDS_PALETTE_SINGLE_HINT
+                                              : IDS_PALETTE_GROUP_HINT));
+  RefreshPreview();
 }
-
 void UIStyleSettingsDialog::RefreshPreview() {
+  bool mismatch = false;
+  for (bool dark : {false, true}) {
+    const auto current = draft_.current(dark);
+    for (const auto& scheme : settings_->schemes()) {
+      if (scheme.color_scheme_id == current &&
+          !weasel::PaletteMatchesTheme(scheme.theme, dark))
+        mismatch = true;
+    }
+  }
+  CString message;
+  if (mismatch)
+    message = Text(IDS_PALETTE_MISMATCH);
+  SetDlgItemText(IDC_SELECTION_HINT, message);
   ::EnableWindow(GetDlgItem(IDC_APPLY), draft_.changed());
   ::InvalidateRect(GetDlgItem(IDC_PREVIEW_LIGHT), nullptr, FALSE);
   ::InvalidateRect(GetDlgItem(IDC_PREVIEW_DARK), nullptr, FALSE);
@@ -187,7 +203,7 @@ LRESULT UIStyleSettingsDialog::OnGroup(WORD, WORD, HWND, BOOL&) {
     return 0;
   const int index = groups_[selected].index;
   if (index < 0) {
-    ShowAdvanced(true);
+    ShowEditor(true);
     return 0;
   }
   const auto& group = settings_->groups()[index];
@@ -210,16 +226,18 @@ LRESULT UIStyleSettingsDialog::OnSingle(WORD notification,
   if (selected < 0 || static_cast<size_t>(selected) >= entries.size())
     return 0;
   const int index = entries[selected].index;
-  draft_.SelectSingle(
-      id == IDC_COLOR_DARK,
-      index < 0 ? "" : settings_->schemes()[index].color_scheme_id);
+  if (index < 0)
+    return 0;
+  draft_.SelectSingle(id == IDC_COLOR_DARK,
+                      settings_->schemes()[index].color_scheme_id);
   FillGroups();
+  FillSingles();
   RefreshPreview();
   return 0;
 }
 
-LRESULT UIStyleSettingsDialog::OnAdvanced(WORD, WORD, HWND, BOOL&) {
-  ShowAdvanced(!expanded_);
+LRESULT UIStyleSettingsDialog::OnEditor(WORD, WORD id, HWND, BOOL&) {
+  ShowEditor(id == IDC_EDIT_SINGLE);
   return 0;
 }
 
@@ -308,6 +326,22 @@ LRESULT UIStyleSettingsDialog::OnMeasureItem(UINT,
       measure->itemID < entries.size() && entries[measure->itemID].heading != 0;
   measure->itemHeight = item_height_ * (heading ? 2 : 1);
   return TRUE;
+}
+
+LRESULT UIStyleSettingsDialog::OnStaticColor(UINT,
+                                             WPARAM dc,
+                                             LPARAM window,
+                                             BOOL& handled) {
+  const int id = ::GetDlgCtrlID(reinterpret_cast<HWND>(window));
+  if (id != IDC_MATERIAL_HINT && id != IDC_EDITOR_HINT &&
+      id != IDC_PREVIEW_HINT && id != IDC_SELECTION_HINT) {
+    handled = FALSE;
+    return 0;
+  }
+  const auto context = reinterpret_cast<HDC>(dc);
+  ::SetTextColor(context, ::GetSysColor(COLOR_GRAYTEXT));
+  ::SetBkColor(context, ::GetSysColor(COLOR_BTNFACE));
+  return reinterpret_cast<LRESULT>(::GetSysColorBrush(COLOR_BTNFACE));
 }
 
 void UIStyleSettingsDialog::DrawCombo(const DRAWITEMSTRUCT& draw) {

@@ -10,14 +10,21 @@ struct ModeSchemeConfig {
   RimeApi* api = nullptr;
   RimeConfig config = {nullptr};
 
-  bool Open() {
+  static std::filesystem::path RepositoryRoot() {
     wchar_t executable[32768] = {};
     const DWORD length = ::GetModuleFileNameW(nullptr, executable, 32768);
     if (!length || length == 32768)
-      return false;
+      return {};
     auto root = std::filesystem::path(executable);
     for (int i = 0; i < 5; ++i)
       root = root.parent_path();
+    return root;
+  }
+
+  bool Open() {
+    auto root = RepositoryRoot();
+    if (root.empty())
+      return false;
     auto library = root / L"output";
 #ifndef _WIN64
     library /= L"Win32";

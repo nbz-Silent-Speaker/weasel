@@ -6,6 +6,7 @@
 #include "ModeColorSchemeTests.h"
 #include "../../include/WeaselMenuPlacement.h"
 #include "../../include/WeaselAppearanceDraft.h"
+#include "../../include/WeaselPaletteCatalog.h"
 #include "../../WeaselDeployer/AppearancePreview.h"
 
 #include <functional>
@@ -302,23 +303,154 @@ int main() {
                  false);
       draft.ResetCurrent();
       Check(!draft.acrylic());
-      Check(draft.colors() ==
-            weasel::AppearanceDraft::Colors{"glass_day", "glass_night",
-                                            "Fluent_light", "Fluent_dark"});
+      Check(draft.colors() == weasel::AppearanceDraft::Colors{
+                                  "glass_day", "glass_night",
+                                  "base:Fluent_light", "base:Fluent_dark"});
       Check(draft.changed());
       const auto applied = draft.colors();
       draft.Load(applied, false);
       Check(!draft.changed());
       draft.SetAcrylic(true);
       draft.ResetCurrent();
-      Check(draft.colors()[2] == "Fluent_light" &&
-            draft.colors()[3] == "Fluent_dark");
+      Check(draft.colors()[2] == "base:Fluent_light" &&
+            draft.colors()[3] == "base:Fluent_dark");
       Check(draft.changed());
       draft.Load(applied, false);
-      Check(!draft.changed() && draft.current(false) == "Fluent_light");
+      Check(!draft.changed() && draft.current(false) == "base:Fluent_light");
       draft.SetAcrylic(true);
       Check(draft.current(false) == "glass_day");
     });
+    Run("source palettes keep duplicate IDs and raw custom path patches "
+        "separate",
+        [] {
+          ModeSchemeConfig f;
+          Check(f.Open());
+          weasel::PaletteCatalog catalog;
+          Check(catalog.Load(
+              f.api,
+              "preset_color_schemes:\n  Fluent_light: {back_color: 1, name: "
+              "Base}\n  Fluent_dark: {back_color: 2}\n",
+              "preset_color_schemes:\n  legacy: {back_color: 3}\n  "
+              "Fluent_light: {back_color: 4, name: User Base}\n",
+              "patch:\n  preset_color_schemes:\n    Fluent_light: {back_color: "
+              "10}\n  preset_color_schemes/Fluent_light/name: Custom\n  "
+              "preset_color_schemes/Fluent_dark: {back_color: 20}\n  "
+              "preset_color_schemes/+:\n    extra_light: {back_color: 30}\n"
+              "    extra_dark: {back_color: 40}\n"));
+          Check(catalog.schemes().size() == 7 && catalog.groups().size() == 3);
+          Check(catalog.Find("base:Fluent_light")->name == "User Base");
+          Check(catalog.Find("custom:Fluent_light")->name == "Custom");
+          Check(weasel::PaletteValue(
+                    f.api, catalog.Config("base:Fluent_light"),
+                    "preset_color_schemes/Fluent_light/back_color") == "4");
+          Check(weasel::PaletteValue(
+                    f.api, catalog.Config("custom:Fluent_light"),
+                    "preset_color_schemes/Fluent_light/back_color") == "10");
+          Check(catalog.Find("custom:extra_light") &&
+                catalog.Find("custom:extra_dark"));
+          Check(catalog.Resolve("Fluent_light", "base") == "base:Fluent_light");
+          Check(catalog.Resolve("Fluent_light", "custom") ==
+                "custom:Fluent_light");
+          Check(catalog.Resolve("Fluent_light", "") == "custom:Fluent_light");
+          for (const auto& pair : catalog.groups())
+            Check(weasel::PaletteSource(pair.light) ==
+                  weasel::PaletteSource(pair.dark));
+        });
+    Run("palette theme filters use metadata then exact suffixes and retain "
+        "unknown themes",
+        [] {
+          ModeSchemeConfig f;
+          Check(f.Open());
+          weasel::PaletteCatalog catalog;
+          Check(catalog.Load(
+              f.api,
+              "preset_color_schemes:\n  named_dark: {}\n  named_light: {}\n  "
+              "tagged: {variant: dark}\n  plain: {}\n  orphan_light: {}\n  "
+              "Daylight: {}\n  night: {}\ncolor_scheme_groups:\n  reversed:\n  "
+              "  name: Declared\n    light: named_dark\n    dark: "
+              "named_light\n",
+              "", "patch:\n  preset_color_schemes/custom_dark: {}\n"));
+          using Theme = weasel::PaletteTheme;
+          Check(catalog.Find("base:named_dark")->theme == Theme::Light);
+          Check(catalog.Find("base:named_light")->theme == Theme::Dark);
+          Check(catalog.Find("base:tagged")->theme == Theme::Dark);
+          Check(catalog.Find("base:orphan_light")->theme == Theme::Light);
+          Check(catalog.Find("base:Daylight")->theme == Theme::Unspecified);
+          Check(catalog.Find("base:night")->theme == Theme::Unspecified);
+          Check(catalog.groups().size() == 1);
+          Check(weasel::PaletteMatchesTheme(Theme::Unspecified, false) &&
+                weasel::PaletteMatchesTheme(Theme::Unspecified, true));
+          Check(!weasel::PaletteMatchesTheme(Theme::Dark, false) &&
+                !weasel::PaletteMatchesTheme(Theme::Light, true));
+        });
+    Run("palette refresh replaces cached schemes and keeps raw style changes",
+        [] {
+          ModeSchemeConfig f;
+          Check(f.Open());
+          weasel::PaletteCatalog catalog;
+          Check(catalog.Load(f.api, "preset_color_schemes:\n  old: {}\n", "",
+                             ""));
+          Check(catalog.Find("base:old") != nullptr);
+          Check(catalog.Load(
+              f.api,
+              "style: {color_scheme: fresh}\npreset_color_schemes:\n  fresh: "
+              "{}\n",
+              "",
+              "patch:\n  style/color_scheme: selected\n  "
+              "preset_color_schemes/selected: {back_color: 44}\n"));
+          Check(!catalog.Find("base:old") && catalog.Find("base:fresh"));
+          Check(f.api->config_init(&f.config));
+          catalog.ReadStyle(&f.config);
+          Check(weasel::PaletteValue(f.api, &f.config, "style/color_scheme") ==
+                "selected");
+          Check(catalog.Resolve("removed", "base") == "base:removed");
+          Check(!catalog.Load(f.api, "invalid: [", "", ""));
+          Check(catalog.schemes().empty() && catalog.groups().empty());
+        });
+    Run("shipped palette file exposes every base scheme", [] {
+      ModeSchemeConfig f;
+      Check(f.Open());
+      weasel::PaletteCatalog catalog;
+      const auto root = ModeSchemeConfig::RepositoryRoot();
+      Check(catalog.LoadFiles(f.api, root / L"data",
+                              root / L"missing-palette-user"));
+      Check(catalog.schemes().size() >= 30);
+      Check(catalog.Find("base:Fluent_light") != nullptr);
+      Check(catalog.Find("base:Fluent_dark") != nullptr);
+      Check(std::any_of(catalog.groups().begin(), catalog.groups().end(),
+                        [](const auto& group) {
+                          return group.light == "base:Fluent_light" &&
+                                 group.dark == "base:Fluent_dark";
+                        }));
+    });
+    Run("runtime source choice changes actual colors without copying over "
+        "definitions",
+        [] {
+          ModeSchemeConfig f;
+          Check(f.Open());
+          weasel::PaletteCatalog catalog;
+          Check(catalog.Load(
+              f.api, "preset_color_schemes:\n  same: {back_color: 100}\n", "",
+              "patch:\n  preset_color_schemes/same: {back_color: 200}\n"));
+          Check(f.api->config_load_string(
+              &f.config,
+              "style:\n  color_scheme: same\n  color_scheme_source: base\n  "
+              "color_scheme_acrylic: same\n  color_scheme_acrylic_source: "
+              "custom\n"));
+          const auto normal = catalog.ExplicitSelection(&f.config, 2);
+          const auto acrylic = catalog.ExplicitSelection(&f.config, 0);
+          Check(normal == "base:same" && acrylic == "custom:same");
+          Check(weasel::PaletteValue(f.api, catalog.Config(normal),
+                                     "preset_color_schemes/same/back_color") ==
+                "100");
+          Check(weasel::PaletteValue(f.api, catalog.Config(acrylic),
+                                     "preset_color_schemes/same/back_color") ==
+                "200");
+          Check(catalog.ExplicitSelection(&f.config, 1).empty());
+          Check(f.api->config_set_string(&f.config, "style/color_scheme_source",
+                                         "unknown"));
+          Check(catalog.ExplicitSelection(&f.config, 2).empty());
+        });
     Run("appearance preview draws rounded opaque and translucent candidates",
         [] {
           struct PreviewFixture {

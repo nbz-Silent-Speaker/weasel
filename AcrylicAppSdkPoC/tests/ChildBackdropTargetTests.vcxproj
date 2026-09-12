@@ -33,11 +33,15 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <AdditionalDependencies>RuntimeObject.lib;Ole32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>RuntimeObject.lib;Ole32.lib;rime.lib;delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalOptions>/DELAYLOAD:rime.dll %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalLibraryDirectories Condition="'$(Platform)'=='x64'">$(SolutionDir)lib64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories Condition="'$(Platform)'=='Win32'">$(SolutionDir)lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="ChildBackdropTargetTests.cpp" />
+    <ClCompile Include="..\..\RimeWithWeasel\WeaselPaletteCatalog.cpp" />
     <ClInclude Include="..\ChildBackdropTarget.h" />
     <ClInclude Include="..\EdgeClipDiagnostic.h" />
     <ClInclude Include="..\AlignedAcrylicClip.h" />
@@ -45,6 +49,7 @@
     <ClInclude Include="..\..\include\WeaselMenu.h" />
     <ClInclude Include="..\..\include\WeaselMenuPlacement.h" />
     <ClInclude Include="..\..\include\WeaselAppearanceDraft.h" />
+    <ClInclude Include="..\..\include\WeaselPaletteCatalog.h" />
     <ClInclude Include="..\..\WeaselDeployer\AppearancePreview.h" />
     <ClInclude Include="..\..\include\WeaselColorScheme.h" />
     <ClInclude Include="ModeColorSchemeTests.h" />
