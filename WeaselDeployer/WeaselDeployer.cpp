@@ -6,6 +6,7 @@
 #include <fstream>
 #include "WeaselDeployer.h"
 #include "Configurator.h"
+#include "WanxiangModelManager.h"
 
 CAppModule _Module;
 
@@ -61,6 +62,51 @@ int APIENTRY _tWinMain(HINSTANCE hInstance,
 static int Run(LPTSTR lpCmdLine) {
   Configurator configurator;
   configurator.Initialize();
+
+  if (!wcscmp(L"/model-download-complete", lpCmdLine)) {
+    WanxiangModelManager model_manager;
+    const auto progress = model_manager.GetProgress();
+    if (progress.state != WanxiangModelManager::State::Transferred) {
+      LOG(ERROR)
+          << "Wanxiang model completion invoked without a transferred job.";
+      return 1;
+    }
+    std::wstring error;
+    if (!model_manager.CompleteAndInstall(&error)) {
+      LOG(ERROR) << "Failed to install Wanxiang model: " << wtou8(error);
+      return 1;
+    }
+    if (configurator.UpdateWorkspace(false) != 0) {
+      std::wstring rollback_error;
+      const bool file_restored = model_manager.Rollback(&rollback_error);
+      if (!file_restored) {
+        LOG(ERROR) << "Failed to roll back Wanxiang model: "
+                   << wtou8(rollback_error);
+      } else if (configurator.UpdateWorkspace(false) != 0) {
+        LOG(ERROR)
+            << "Wanxiang model was restored, but redeploying the previous "
+               "state also failed.";
+      }
+      return 1;
+    }
+    std::wstring commit_error;
+    if (!model_manager.Commit(&commit_error)) {
+      LOG(ERROR) << "Failed to finalize Wanxiang model install: "
+                 << wtou8(commit_error);
+      std::wstring rollback_error;
+      const bool file_restored = model_manager.Rollback(&rollback_error);
+      if (!file_restored) {
+        LOG(ERROR) << "Failed to roll back Wanxiang model: "
+                   << wtou8(rollback_error);
+      } else if (configurator.UpdateWorkspace(false) != 0) {
+        LOG(ERROR)
+            << "Wanxiang model was restored, but redeploying the previous "
+               "state also failed.";
+      }
+      return 1;
+    }
+    return 0;
+  }
 
   if (!wcscmp(L"/?", lpCmdLine) || !wcscmp(L"/help", lpCmdLine)) {
     WCHAR msg[1024] = {0};

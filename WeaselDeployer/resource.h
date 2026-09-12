@@ -48,6 +48,28 @@
 #define IDC_SCHEMA_DESCRIPTION          1001
 #define IDC_GET_SCHEMATA                1002
 #define IDC_HOTKEYS                     1003
+#define IDC_SCHEMA_SEARCH               1140
+#define IDC_SCHEMA_DETAIL_NAME          1141
+#define IDC_SCHEMA_DETAIL_STATUS        1142
+#define IDC_SCHEMA_DETAIL_VERSION       1143
+#define IDC_SCHEMA_DETAIL_SOURCE        1144
+#define IDC_SCHEMA_DETAIL_UPDATE        1145
+#define IDC_SCHEMA_UPDATE_SETTINGS      1146
+#define IDC_SCHEMA_RESTORE_PACKAGE      1147
+#define IDC_MODEL_GROUP                 1148
+#define IDC_MODEL_NAME                  1149
+#define IDC_MODEL_DESCRIPTION           1150
+#define IDC_MODEL_SOURCE                1151
+#define IDC_MODEL_NOTE                  1152
+#define IDC_MODEL_DOWNLOAD              1153
+#define IDC_MODEL_SECONDARY             1154
+#define IDC_MODEL_PROGRESS              1155
+#define IDC_MODEL_PROGRESS_TEXT         1156
+#define IDC_AUTO_SCHEME_UPDATES         1157
+#define IDC_CHECK_SCHEME_UPDATES        1158
+#define IDC_IMPORT_SCHEME               1159
+#define IDC_ADD_SCHEME_URL              1160
+#define IDC_SCHEMA_DETAIL_GROUP         1161
 #define IDC_COLOR_SCHEME                1004
 #define IDC_SELECT_FONT                 1005
 #define IDC_PREVIEW                     1006
@@ -59,13 +81,13 @@
 #define IDC_STATIC1                     -1
 
 // Next default values for new objects
-// 
+//
 #ifdef APSTUDIO_INVOKED
 #ifndef APSTUDIO_READONLY_SYMBOLS
 #define _APS_NO_MFC                     1
 #define _APS_NEXT_RESOURCE_VALUE        206
 #define _APS_NEXT_COMMAND_VALUE         32771
-#define _APS_NEXT_CONTROL_VALUE         1140
+#define _APS_NEXT_CONTROL_VALUE         1162
 #define _APS_NEXT_SYMED_VALUE           110
 #endif
 #endif

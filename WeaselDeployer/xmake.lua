@@ -22,3 +22,4 @@ target("WeaselDeployer")
       os.cp(path.join(target:targetdir(), "WeaselDeployer.pdb"), "$(projectdir)/output")
     end
   end)
+  add_syslinks("bcrypt")
