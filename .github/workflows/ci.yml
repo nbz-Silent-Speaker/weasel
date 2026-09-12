@@ -118,9 +118,25 @@ jobs:
 
       - name: Get Rime files
         shell: pwsh
+        env:
+          RIME_GITHUB_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
+          $global:authorization = $env:RIME_GITHUB_TOKEN
           .\get-rime.ps1 -use dev
+
+      - name: Verify Rime development files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($requiredFile in @('include\rime_api.h', 'include\rime_levers_api.h', 'lib\rime.lib', 'lib64\rime.lib', 'output\Win32\rime.dll', 'output\rime.dll')) {
+            if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
+              throw "Rime dependency download incomplete: missing $requiredFile"
+            }
+            if ((Get-Item -LiteralPath $requiredFile).Length -eq 0) {
+              throw "Rime dependency download incomplete: empty $requiredFile"
+            }
+          }
 
       - name: Build data
         shell: pwsh
