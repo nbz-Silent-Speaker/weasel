@@ -41,6 +41,17 @@ same pixels. It also instantiates the graph with the real system compositor and
 checks source brushes retain identity while colors change. CI executes x64 and
 Win32 builds. The existing child-target suite checks routing exclusions.
 
+The WARP adapter translates Composition's reversed Color/Luminosity blend
+semantics to native Direct2D modes. WinUI's
+`CombineNoiseWithTintEffect_Luminosity` explicitly documents the reversal;
+its effect wrapper passes enum values and input order through unchanged.
+Passing those values straight to native Direct2D instead gave light red
+backdrop pixels of 94,69,69,255 in CI 78, failing the unchanged brightness
+assertion. The translation is test-only; the production Composition recipe
+retains Microsoft's mode selection. This is a semantic reference test, not a
+readback of pixels rendered by the real compositor; compositor graph acceptance
+and brush identity are checked separately below the pixel checks.
+
 After installation, compare Codex and Word over the same colored background in
 both themes, including candidate hide/show. User visual acceptance is separate
 from the automated pixel tests. Download and installation are user-managed.

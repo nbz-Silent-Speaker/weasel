@@ -75,7 +75,17 @@ struct Renderer {
         const float scalar = value.GetSingle();
         check_hresult(effect->SetValue(i, scalar));
       } else {
-        const UINT32 enumeration = value.GetUInt32();
+        UINT32 enumeration = value.GetUInt32();
+        // Composition's Color/Luminosity names are reversed, as documented
+        // by WinUI's CombineNoiseWithTintEffect_Luminosity. Native D2D does
+        // not have that reversal. Translate only in this WARP adapter so
+        // it renders the production Composition graph with the same meaning.
+        if (id == CLSID_D2D1Blend && i == D2D1_BLEND_PROP_MODE) {
+          if (enumeration == D2D1_BLEND_MODE_COLOR)
+            enumeration = D2D1_BLEND_MODE_LUMINOSITY;
+          else if (enumeration == D2D1_BLEND_MODE_LUMINOSITY)
+            enumeration = D2D1_BLEND_MODE_COLOR;
+        }
         check_hresult(effect->SetValue(
             i, D2D1_PROPERTY_TYPE_ENUM,
             reinterpret_cast<const BYTE*>(&enumeration), sizeof(enumeration)));
