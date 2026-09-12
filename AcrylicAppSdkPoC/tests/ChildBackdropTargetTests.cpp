@@ -1,6 +1,7 @@
 #include "../ChildBackdropTarget.h"
 #include "../EdgeClipDiagnostic.h"
 #include "../AlignedAcrylicClip.h"
+#include "../AcrylicFallbackPolicy.h"
 #include "../../include/WeaselUserSettings.h"
 #include "../../include/WeaselMenu.h"
 #include "ModeColorSchemeTests.h"
@@ -805,6 +806,17 @@ preset_color_schemes:
           !IsMeasuredEdgeClipSample(144, 195, 266, 1, 255, 16, 1, false, true));
       Check(
           !IsMeasuredEdgeClipSample(144, 195, 266, 1, 255, 16, 1, true, false));
+    });
+    Run("packaged fallback is opt-in without changing established routes", [] {
+      using weasel_acrylic::AllowPackagedSystemCompositionFallback;
+      using weasel_acrylic::RequestPackagedSystemCompositionFallback;
+      Check(RequestPackagedSystemCompositionFallback(false, 0));
+      Check(!RequestPackagedSystemCompositionFallback(true, 0));
+      Check(!RequestPackagedSystemCompositionFallback(false, 1));
+      Check(!AllowPackagedSystemCompositionFallback(1, false, true));
+      Check(AllowPackagedSystemCompositionFallback(2, true, false));
+      Check(AllowPackagedSystemCompositionFallback(2, false, true));
+      Check(!AllowPackagedSystemCompositionFallback(2, false, false));
     });
     Run("edge clip requires opt-in and matching live host", [] {
       using weasel_acrylic::SelectEdgeClipGeometry;

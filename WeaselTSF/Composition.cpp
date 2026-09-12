@@ -233,6 +233,12 @@ void WeaselTSF::_EndComposition(com_ptr<ITfContext> pContext,
 
   if (endUI)
     _cand->EndUI();
+  // RequestEditSession may defer the old composition's cleanup. Stop treating
+  // it as the current composition before queuing that work so input resumed
+  // after a focus change can create a fresh TSF composition and candidate UI.
+  // The edit session retains pComposition and still clears/ends the old range.
+  if (_IsCurrentComposition(pComposition))
+    _FinalizeComposition();
   if ((pEditSession = new CEndCompositionEditSession(
            this, pContext, pComposition, clear)) != NULL) {
     pContext->RequestEditSession(_tfClientId, pEditSession,

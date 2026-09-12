@@ -28,6 +28,7 @@
 #include "ChildBackdropTarget.h"
 #include "EdgeClipDiagnostic.h"
 #include "AlignedAcrylicClip.h"
+#include "AcrylicFallbackPolicy.h"
 
 #pragma comment(lib, "Dwmapi.lib")
 #pragma comment(lib, "CoreMessaging.lib")
@@ -78,6 +79,8 @@ constexpr wchar_t kForcedSystemCompositionClipHeight[] =
     L"WeaselAcrylicForcedSystemCompositionClipHeight";
 constexpr wchar_t kForcedSystemCompositionClipRadius[] =
     L"WeaselAcrylicForcedSystemCompositionClipRadius";
+constexpr wchar_t kPackagedSystemCompositionFallback[] =
+    L"WeaselAcrylicPackagedSystemCompositionFallback";
 constexpr wchar_t kAppSdkFailureStage[] = L"WeaselAcrylicAppSdkFailureStage";
 constexpr wchar_t kAppSdkFailureHresult[] =
     L"WeaselAcrylicAppSdkFailureHresult";
@@ -956,6 +959,12 @@ bool IsWeaselServerProcess() noexcept {
   return _wcsicmp(file, L"WeaselServer.exe") == 0;
 }
 
+bool AllowPackagedSystemCompositionFallback(HWND hwnd) noexcept {
+  return weasel_acrylic::AllowPackagedSystemCompositionFallback(
+      g_runtimeRoute, IsSearchHostProcess(),
+      ::GetPropW(hwnd, kPackagedSystemCompositionFallback) != nullptr);
+}
+
 bool ForceOrdinarySystemCompositionDiagnostic() noexcept {
   // R22 is off by default. Only an exact process-environment value of "1"
   // enables B at target creation; restart the test host without it for A.
@@ -1422,7 +1431,7 @@ WeaselAcrylicAppSdkAttach(HWND hwnd, BOOL darkMode) {
       ::SetPropW(hwnd, kAppSdkFailureHresult,
                  reinterpret_cast<HANDLE>(
                      static_cast<ULONG_PTR>(static_cast<DWORD>(prepared))));
-      if (g_runtimeRoute == 2 && IsSearchHostProcess())
+      if (AllowPackagedSystemCompositionFallback(hwnd))
         return TryAttachSystemComposition(state, hwnd, darkMode);
       return FALSE;
     }
@@ -1557,7 +1566,7 @@ WeaselAcrylicAppSdkAttach(HWND hwnd, BOOL darkMode) {
   ::SetPropW(hwnd, kAppSdkFailureHresult,
              reinterpret_cast<HANDLE>(
                  static_cast<ULONG_PTR>(static_cast<DWORD>(appHr))));
-  if (g_runtimeRoute == 2 && IsSearchHostProcess())
+  if (AllowPackagedSystemCompositionFallback(hwnd))
     return TryAttachSystemComposition(state, hwnd, darkMode);
   return FALSE;
 }

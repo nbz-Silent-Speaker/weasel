@@ -123,6 +123,7 @@
     <ClInclude Include="ChildBackdropTarget.h" />
     <ClInclude Include="EdgeClipDiagnostic.h" />
     <ClInclude Include="AlignedAcrylicClip.h" />
+    <ClInclude Include="AcrylicFallbackPolicy.h" />
     <None Include="AcrylicAppSdkPoC.x86.def" />
   </ItemGroup>
 

@@ -45,6 +45,7 @@
     <ClInclude Include="..\ChildBackdropTarget.h" />
     <ClInclude Include="..\EdgeClipDiagnostic.h" />
     <ClInclude Include="..\AlignedAcrylicClip.h" />
+    <ClInclude Include="..\AcrylicFallbackPolicy.h" />
     <ClInclude Include="..\..\include\WeaselUserSettings.h" />
     <ClInclude Include="..\..\include\WeaselMenu.h" />
     <ClInclude Include="..\..\include\WeaselMenuPlacement.h" />

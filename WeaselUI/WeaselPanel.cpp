@@ -2,6 +2,7 @@
 #include "WeaselPanel.h"
 #include "../AcrylicAppSdkPoC/EdgeClipDiagnostic.h"
 #include "../AcrylicAppSdkPoC/AlignedAcrylicClip.h"
+#include "../AcrylicAppSdkPoC/AcrylicFallbackPolicy.h"
 
 #include <utility>
 #include <ShellScalingApi.h>
@@ -627,6 +628,8 @@ constexpr wchar_t kWeaselAcrylicSystemCompositionActiveProperty[] =
     L"WeaselAcrylicSystemCompositionActive";
 constexpr wchar_t kWeaselAcrylicForcedSystemCompositionActiveProperty[] =
     L"WeaselAcrylicForcedSystemCompositionActive";
+constexpr wchar_t kWeaselAcrylicPackagedSystemCompositionFallbackProperty[] =
+    L"WeaselAcrylicPackagedSystemCompositionFallback";
 constexpr wchar_t kWeaselAcrylicSystemCompositionCornerRadiusProperty[] =
     L"WeaselAcrylicSystemCompositionCornerRadius";
 constexpr wchar_t kAcrylicLocalClipWidthProperty[] =
@@ -2495,6 +2498,17 @@ bool WeaselPanel::_CreateAcrylicBackdrop() {
   const BOOL useDarkMode = IsDarkColor(m_style.back_color) ? TRUE : FALSE;
   const bool searchLocal = !m_in_server && SearchUsesLocalNativeDwmFallback();
 
+  // A generic packaged TSF host may not carry the Windows App SDK activation
+  // classes. Permit the helper's system-composition fallback only for that
+  // unclassified in-process route. Known restricted clients keep their
+  // existing coordinator policies, and unpackaged hosts ignore this marker.
+  if (weasel_acrylic::RequestPackagedSystemCompositionFallback(
+          m_in_server, static_cast<unsigned>(CurrentExternalKind()))) {
+    ::SetPropW(m_acrylicBackdrop,
+               kWeaselAcrylicPackagedSystemCompositionFallbackProperty,
+               reinterpret_cast<HANDLE>(static_cast<INT_PTR>(1)));
+  }
+
   // Search's system Composition path clips its blur visual with the same
   // skin radius used by the layered foreground. Publish that pixel radius
   // before helper Attach; the helper refreshes its clip after each resize.
@@ -2595,10 +2609,13 @@ bool WeaselPanel::_CreateAcrylicBackdrop() {
     ::SetPropW(m_acrylicBackdrop, kWeaselAcrylicAppSdkActiveProperty,
                reinterpret_cast<HANDLE>(static_cast<INT_PTR>(1)));
     m_acrylicBackdropEnabled = true;
+    const bool systemComposition =
+        ::GetPropW(m_acrylicBackdrop,
+                   kWeaselAcrylicSystemCompositionActiveProperty) != nullptr;
     int explicitCorner = kDwmwcpDoNotRound;
     ::DwmSetWindowAttribute(m_acrylicBackdrop, kDwmaWindowCornerPreference,
                             &explicitCorner, sizeof(explicitCorner));
-    SetAcrylicCreationDiagnostic(m_hWnd, 100, S_OK);
+    SetAcrylicCreationDiagnostic(m_hWnd, systemComposition ? 180 : 100, S_OK);
     if (m_in_server)
       PrepareExternalServer(m_acrylicBackdrop);
     return true;
