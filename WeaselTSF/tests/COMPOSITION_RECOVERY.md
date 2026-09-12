@@ -1,5 +1,39 @@
 # Candidate recovery after an interrupted composition
 
+## UI lifecycle follow-up after CI83 failed user validation
+
+The CI83 user video still shows inline letters without a candidate window
+after deleting and retyping. Screenshot capture is only one trigger; recovery
+must work after any interruption that destroys the candidate window.
+
+The previous tests used a counter-only Candidate stub. They missed this valid
+sequence: the host terminates the composition while Rime is composing;
+OnCompositionTerminated drops the composition pointer; a later focus abort
+skips _EndComposition and calls Destroy. Destroy formerly left _uiStarted true,
+so the next StartUI skipped recreating the destroyed window.
+
+Destroy and DestroyAll now end the UI lifecycle as well as destroying its
+window. EndUI also resets local state when the host manager is unavailable.
+The existing captured-range cleanup and BeginUIElement show policy remain.
+
+CandidateLifecycleTests.h executes the extracted production StartUI, EndUI,
+Destroy, DestroyAll, termination, and abort routines against a controlled host.
+The composition-ending branch is explicitly rejected by this fixture; the
+existing composition tests continue to cover it. Window operations and IPC
+remain modeled, so this does not claim full Windows focus integration.
+An additional negative control extracts the unchanged StartUI and Destroy from
+the pinned CI83 commit, renaming only their class qualifier. It must reproduce
+the missing-window state before the new implementation is tested for repeated
+abort/restart, idempotent destruction, missing manager, host-owned presentation,
+and failed-begin retry. Run these tests from a Git checkout containing CI83.
+
+The video's exact internal callback order has not been captured. This repairs
+a demonstrated source-level lifecycle defect consistent with the symptom;
+user-managed installation and generic interruption/retype validation below
+are still required before the reported problem can be marked resolved.
+
+## Composition cleanup shipped in CI83
+
 Baseline: cd02da5 (CI 82). Focus loss ends the candidate UI immediately, while
 TSF may defer ending the composition. Retaining that composition as current
 can prevent the next input from starting its candidate UI.

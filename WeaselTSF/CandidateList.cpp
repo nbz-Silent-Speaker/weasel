@@ -360,13 +360,15 @@ void CCandidateList::UpdateInputPosition(RECT const& rc) {
 }
 
 void CCandidateList::Destroy() {
-  // EndUI();
+  // A host can terminate the TSF composition before focus is lost. End the
+  // UI lifecycle even when there is no composition left for Abort to end.
+  EndUI();
   Show(FALSE);
   _DisposeUIWindow();
 }
 
 void CCandidateList::DestroyAll() {
-  // EndUI();
+  EndUI();
   Show(FALSE);
   _DisposeUIWindowAll();
 }
@@ -460,9 +462,9 @@ void CCandidateList::EndUI() {
   if (pThreadMgr) {
     com_ptr<ITfUIElementMgr> emgr;
     auto hr = pThreadMgr->QueryInterface(&emgr);
-    if (FAILED(hr))
-      return;
-    if (emgr != NULL)
+    // Losing access to the host manager must not leave a destroyed window
+    // marked as started, preventing the next StartUI from recreating it.
+    if (SUCCEEDED(hr) && emgr != NULL)
       emgr->EndUIElement(uiid);
   }
   _uiStarted = false;

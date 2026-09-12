@@ -151,6 +151,8 @@ void Check(bool condition, const char* message) {
   if (!condition)
     throw std::runtime_error(message);
 }
+
+#include "CandidateLifecycleTests.h"
 struct Fixture {
   com_ptr<WeaselTSF> service = new WeaselTSF;
   com_ptr<ITfContext> context = new ITfContext;
@@ -249,6 +251,8 @@ int main() {
     }
     Check(liveObjects == 0, "rejected edit session leaked references");
     std::cout << "PASS: rejected cleanup retains the active composition\n";
+    candidate_recovery::Run();
+    Check(liveObjects == 0, "candidate lifecycle tests leaked references");
     return 0;
   } catch (const std::exception& error) {
     std::cerr << "FAIL: " << error.what() << '\n';
