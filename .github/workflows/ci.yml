@@ -143,6 +143,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           .\build.bat data
+          if ($LASTEXITCODE -ne 0) { throw "Data build failed with exit code $LASTEXITCODE" }
 
       - name: Setup xmake
         if: matrix.variant == 'xmake'
