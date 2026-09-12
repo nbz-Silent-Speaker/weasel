@@ -21,11 +21,10 @@ Destroy, DestroyAll, termination, and abort routines against a controlled host.
 The composition-ending branch is explicitly rejected by this fixture; the
 existing composition tests continue to cover it. Window operations and IPC
 remain modeled, so this does not claim full Windows focus integration.
-An additional negative control extracts the unchanged StartUI and Destroy from
-the pinned CI83 commit, renaming only their class qualifier. It must reproduce
-the missing-window state before the new implementation is tested for repeated
-abort/restart, idempotent destruction, missing manager, host-owned presentation,
-and failed-begin retry. Run these tests from a Git checkout containing CI83.
+Tests cover repeated abort/restart, idempotent destruction, missing manager,
+host-owned presentation, and failed-begin retry. The user confirms older
+versions also had this problem; validation focuses on current recovery behavior
+and does not run comparisons against historical implementations.
 
 The video's exact internal callback order has not been captured. This repairs
 a demonstrated source-level lifecycle defect consistent with the symptom;

@@ -98,27 +98,7 @@ void UpdateAcrylicUiProbe(const void*, DWORD, HRESULT, BOOL) {}
 
 #include "obj/candidate-under-test.inc"
 
-class CLegacyCandidateList : public CCandidateList {
- public:
-  using CCandidateList::CCandidateList;
-  void StartUI();
-  void Destroy();
-};
-#include "obj/candidate-ci83-baseline.inc"
-
 void Run() {
-  {
-    com_ptr<WeaselTSF> service = new WeaselTSF;
-    com_ptr<CLegacyCandidateList> old = new CLegacyCandidateList(service);
-    old->StartUI();
-    old->Destroy();
-    old->StartUI();
-    Check(old->_uiStarted && !old->window.exists && old->window.creates == 1,
-          "CI83 negative control did not reproduce skipped window creation");
-    old->EndUI();
-  }
-  std::cout
-      << "PASS: CI83 negative control reproduces a missing candidate window\n";
   {
     com_ptr<WeaselTSF> service = new WeaselTSF;
     for (int repeat = 0; repeat < 3; ++repeat) {

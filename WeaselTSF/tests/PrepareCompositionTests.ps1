@@ -31,14 +31,4 @@ $taskCandidateParts = @(
     $taskSource.Substring($taskSource.IndexOf('BOOL WeaselTSF::_IsCurrentComposition(', [StringComparison]::Ordinal))
 )
 [IO.File]::WriteAllText((Join-Path $taskDirectory 'candidate-under-test.inc'), ($taskCandidateParts -join "`r`n"), (New-Object Text.UTF8Encoding($false)))
-# Keep a negative control from the shipped CI83 source. Rename only its class
-# qualifier so its unchanged StartUI/Destroy run alongside the corrected ones.
-$taskBaseline = & git -C (Join-Path $PSScriptRoot '..\..') show '093117dbf670aad2081a5cb8b7aa62c0e5228017:WeaselTSF/CandidateList.cpp'
-if ($LASTEXITCODE -ne 0) { throw 'Cannot load pinned CI83 lifecycle baseline' }
-$taskBaseline = $taskBaseline -join "`n"
-$taskLegacyParts = @(
-    (Get-Section $taskBaseline 'void CCandidateList::Destroy()' 'void CCandidateList::DestroyAll()'),
-    (Get-Section $taskBaseline 'void CCandidateList::StartUI()' 'void CCandidateList::EndUI()')
-)
-[IO.File]::WriteAllText((Join-Path $taskDirectory 'candidate-ci83-baseline.inc'), (($taskLegacyParts -join "`r`n").Replace('CCandidateList::', 'CLegacyCandidateList::')), (New-Object Text.UTF8Encoding($false)))
-Write-Output 'Prepared production UI lifecycle routines and pinned CI83 negative control'
+Write-Output 'Prepared production UI lifecycle routines for recovery tests'
