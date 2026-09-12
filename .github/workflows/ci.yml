@@ -177,6 +177,26 @@ jobs:
             if ($testProcess.ExitCode -ne 0) { throw "Child target tests failed: $testPlatform" }
           }
 
+      - name: Test TSF composition cleanup (x64 and x86)
+        if: matrix.variant == 'xmake'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\WeaselTSF\tests\PrepareCompositionTests.ps1
+          foreach ($testPlatform in @('x64', 'Win32')) {
+            msbuild .\WeaselTSF\tests\CompositionLifecycleTests.vcxproj /m /p:Configuration=Release "/p:Platform=$testPlatform"
+            if ($LASTEXITCODE -ne 0) { throw "Composition tests failed to build: $testPlatform" }
+            $testDirectory = Join-Path $PWD "WeaselTSF\tests\bin\$testPlatform"
+            $testProcess = Start-Process -FilePath (Join-Path $testDirectory 'CompositionLifecycleTests.exe') -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $testDirectory 'stdout.txt') -RedirectStandardError (Join-Path $testDirectory 'stderr.txt')
+            if (-not $testProcess.WaitForExit(20000)) {
+              $testProcess.Kill()
+              $testProcess.WaitForExit()
+              throw "Composition tests timed out: $testPlatform"
+            }
+            Get-Content -LiteralPath (Join-Path $testDirectory 'stdout.txt'), (Join-Path $testDirectory 'stderr.txt')
+            if ($testProcess.ExitCode -ne 0) { throw "Composition tests failed: $testPlatform" }
+          }
+
       - name: Test Acrylic material pixels and theme changes (x64 and x86)
         if: matrix.variant == 'xmake'
         shell: pwsh

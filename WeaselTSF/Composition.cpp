@@ -207,11 +207,16 @@ STDMETHODIMP CEndCompositionEditSession::DoEditSession(TfEditCookie ec) {
   if (!_pTextService || !_pContext)
     return S_OK;
 
-  _pTextService->_ClearCompositionDisplayAttributes(ec, _pContext);
-
   com_ptr<ITfRange> pCompositionRange;
-  if (_clear && _pComposition->GetRange(&pCompositionRange) == S_OK)
-    pCompositionRange->SetText(ec, 0, L"", 0);
+  // This session owns the composition being ended. The service may already
+  // have no current composition, or may be composing new text by now.
+  if (_pComposition->GetRange(&pCompositionRange) == S_OK &&
+      pCompositionRange != nullptr) {
+    _pTextService->_ClearCompositionDisplayAttributes(ec, _pContext,
+                                                      pCompositionRange);
+    if (_clear)
+      pCompositionRange->SetText(ec, 0, L"", 0);
+  }
 
   // Drop ownership before EndComposition(). Some applications notify
   // OnCompositionTerminated synchronously while the old composition ends.
@@ -228,15 +233,24 @@ void WeaselTSF::_EndComposition(com_ptr<ITfContext> pContext,
                                 BOOL clear,
                                 BOOL endUI) {
   CEndCompositionEditSession* pEditSession;
-  HRESULT hr;
+  HRESULT hr = E_FAIL;
   com_ptr<ITfComposition> pComposition = _pComposition;
 
   if (endUI)
     _cand->EndUI();
+  if (!pContext || !pComposition)
+    return;
   if ((pEditSession = new CEndCompositionEditSession(
            this, pContext, pComposition, clear)) != NULL) {
-    pContext->RequestEditSession(_tfClientId, pEditSession,
-                                 TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
+    const HRESULT requestHr = pContext->RequestEditSession(
+        _tfClientId, pEditSession, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
+    // Once TSF accepts cleanup, stop blocking fresh input on the old object.
+    // A synchronous session already finalized it; a deferred session owns
+    // its own object and cleans only the captured range, even if a newer
+    // composition has since started. A rejected request retains ownership.
+    if (SUCCEEDED(requestHr) && SUCCEEDED(hr) &&
+        _IsCurrentComposition(pComposition))
+      _FinalizeComposition();
     pEditSession->Release();
   }
 }
