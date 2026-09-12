@@ -296,6 +296,8 @@ rem ---------------------------------------------------------------------------
   if errorlevel 1 goto error
   copy /y "%WEASEL_ROOT%\data\weasel.yaml" "%WEASEL_ROOT%\output\data\weasel.yaml"
   if errorlevel 1 goto error
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%WEASEL_ROOT%\prepare-wanxiang-lite.ps1" -Destination "%WEASEL_ROOT%\output\data"
+  if errorlevel 1 goto error
   exit /b
 
 rem ---------------------------------------------------------------------------

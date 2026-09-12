@@ -1,0 +1,14 @@
+Wanxiang Pinyin Lite and Wanxiang LTS Language Model
+Copyright (c) amzxyz and contributors
+
+Bundled version: 17.10.0
+Upstream project: https://cnb.cool/amzxyz/rime-wanxiang
+Source archive: https://cnb.cool/amzxyz/rime-wanxiang/-/releases/download/v17.10.0/rime-wanxiang-lite.zip
+Optional model: https://cnb.cool/amzxyz/rime-wanxiang/-/releases/download/model/wanxiang-lts-zh-hans.gram
+
+This distribution includes an unmodified, selected subset of the upstream
+Wanxiang Pinyin Lite package and can download the optional upstream language
+model on request. Files that would replace Weasel global or user configuration
+are intentionally excluded. The included and downloadable works are licensed
+under Creative Commons Attribution 4.0 International. See CC-BY-4.0.txt.
+

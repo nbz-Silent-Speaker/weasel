@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://weasel.im/schemas/package-content-manifest-v1.json",
+  "title": "Weasel exact package content manifest",
+  "description": "Exact normalized paths and hashes produced only after the source archive has passed archive-level verification.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format_version",
+    "package_id",
+    "package_version",
+    "source_archive_sha256",
+    "path_rules",
+    "default_conflict_policy",
+    "files"
+  ],
+  "properties": {
+    "format_version": { "const": 1 },
+    "package_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+    "package_version": { "type": "string", "minLength": 1 },
+    "source_archive_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "path_rules": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["separator", "case_comparison", "reject_parent_segments", "reject_absolute_paths"],
+      "properties": {
+        "separator": { "const": "/" },
+        "case_comparison": { "const": "windows_ordinal_ignore_case" },
+        "reject_parent_segments": { "const": true },
+        "reject_absolute_paths": { "const": true }
+      }
+    },
+    "default_conflict_policy": { "const": "share_if_identical_otherwise_block" },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["relative_path", "size", "sha256", "role", "sharing"],
+        "properties": {
+          "relative_path": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?![A-Za-z]:)(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+          },
+          "size": { "type": "integer", "minimum": 0 },
+          "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "role": {
+            "enum": ["schema", "dictionary", "lua", "configuration", "data", "model", "license", "metadata"]
+          },
+          "sharing": { "enum": ["exclusive", "identical_only", "declared_shared_component"] },
+          "shared_component_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+          "protected": { "type": "boolean" }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "sharing": { "const": "declared_shared_component" } } },
+            "then": { "required": ["shared_component_id"] }
+          }
+        ]
+      }
+    }
+  }
+}

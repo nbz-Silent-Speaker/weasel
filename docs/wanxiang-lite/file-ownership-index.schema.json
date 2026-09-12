@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://weasel.im/schemas/file-ownership-index-v1.json",
+  "title": "Weasel managed file ownership index",
+  "description": "Local reverse index used to make installs, updates, restores, and removals conflict-safe.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format_version", "updated_at", "path_rules", "entries"],
+  "properties": {
+    "format_version": { "const": 1 },
+    "updated_at": { "type": "string", "format": "date-time" },
+    "path_rules": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["separator", "case_comparison"],
+      "properties": {
+        "separator": { "const": "/" },
+        "case_comparison": { "const": "windows_ordinal_ignore_case" }
+      }
+    },
+    "entries": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "relative_path",
+          "active_sha256",
+          "active_size",
+          "origin",
+          "user_modified",
+          "owners"
+        ],
+        "properties": {
+          "relative_path": { "type": "string", "minLength": 1 },
+          "active_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "active_size": { "type": "integer", "minimum": 0 },
+          "origin": { "enum": ["builtin", "managed", "preexisting_user_file"] },
+          "user_modified": { "type": "boolean" },
+          "last_verified_at": { "type": "string", "format": "date-time" },
+          "owners": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["package_id", "package_version", "expected_sha256", "relationship"],
+              "properties": {
+                "package_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+                "package_version": { "type": "string", "minLength": 1 },
+                "expected_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+                "relationship": { "enum": ["exclusive", "shared_identical", "shadowing_builtin"] }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

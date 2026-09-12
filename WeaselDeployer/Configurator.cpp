@@ -67,18 +67,36 @@ static bool configure_switcher(RimeLeversApi* api,
   return false;
 }
 
-static bool configure_ui(RimeLeversApi* api,
-                         UIStyleSettings* ui_style_settings,
-                         bool* deployed) {
-  RimeCustomSettings* settings = ui_style_settings->settings();
+static bool configure_first_run_schema(RimeLeversApi* api,
+                                       RimeSwitcherSettings* switcher_settings,
+                                       bool* reconfigured) {
+  RimeCustomSettings* settings =
+      reinterpret_cast<RimeCustomSettings*>(switcher_settings);
   if (!api->load_settings(settings))
     return false;
-  UIStyleSettingsDialog dialog(ui_style_settings);
-  // The appearance page handles Apply/save/deploy as one operation.
-  // A cancelled page must not discard an earlier successful Apply.
-  const int result = dialog.DoModal();
-  *deployed = dialog.deployed();
-  return result == IDOK || dialog.saved();
+
+  constexpr const char* kDefaultSchema = "wanxiang_lite";
+  RimeSchemaList available = {0};
+  api->get_available_schema_list(switcher_settings, &available);
+  bool found = false;
+  for (size_t i = 0; i < available.size; ++i) {
+    if (available.list[i].schema_id &&
+        !strcmp(available.list[i].schema_id, kDefaultSchema)) {
+      found = true;
+      break;
+    }
+  }
+  if (!found) {
+    LOG(ERROR) << "Bundled default schema is unavailable: " << kDefaultSchema;
+    return false;
+  }
+
+  const char* selection[] = {kDefaultSchema};
+  api->select_schemas(switcher_settings, selection, 1);
+  if (!api->save_settings(settings))
+    return false;
+  *reconfigured = true;
+  return true;
 }
 
 int Configurator::Run(bool installing) {
@@ -90,24 +108,25 @@ int Configurator::Run(bool installing) {
     return 1;
 
   bool reconfigured = false;
-  bool appearance_deployed = false;
-
   RimeSwitcherSettings* switcher_settings = api->switcher_settings_init();
-  UIStyleSettings ui_style_settings;
 
-  bool skip_switcher_settings =
-      installing && !api->is_first_run((RimeCustomSettings*)switcher_settings);
-  bool skip_ui_style_settings =
-      installing;  // Shipped Fluent defaults work without a first-run picker.
+  const bool first_run =
+      installing && api->is_first_run((RimeCustomSettings*)switcher_settings);
 
-  (skip_switcher_settings ||
-   configure_switcher(api, switcher_settings, &reconfigured)) &&
-      (skip_ui_style_settings ||
-       configure_ui(api, &ui_style_settings, &appearance_deployed));
-
+  bool switcher_configured = true;
+  if (first_run) {
+    switcher_configured =
+        configure_first_run_schema(api, switcher_settings, &reconfigured);
+  } else if (!installing) {
+    switcher_configured =
+        configure_switcher(api, switcher_settings, &reconfigured);
+  }
   api->custom_settings_destroy((RimeCustomSettings*)switcher_settings);
 
-  if ((installing || reconfigured) && !appearance_deployed) {
+  if (first_run && !switcher_configured)
+    return 1;
+
+  if (installing || reconfigured) {
     return UpdateWorkspace(reconfigured);
   }
   return 0;

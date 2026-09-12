@@ -1,0 +1,213 @@
+{
+  "$schema": "./scheme-catalog.schema.json",
+  "format_version": 1,
+  "catalog": {
+    "id": "weasel-cn-curated",
+    "revision": "2026-09-12.1",
+    "generated_at": "2026-09-12T21:00:00+08:00",
+    "minimum_weasel_version": "0.17.4",
+    "download_policy": {
+      "https_only": true,
+      "curated_domains": [
+        "cnb.cool"
+      ],
+      "require_verified_digest": true
+    }
+  },
+  "entries": [
+    {
+      "id": "wanxiang-lite",
+      "kind": "input_scheme",
+      "name": {
+        "zh_CN": "万象拼音 Lite",
+        "zh_TW": "萬象拼音 Lite",
+        "en": "Wanxiang Pinyin Lite"
+      },
+      "summary": {
+        "zh_CN": "面向日常使用的轻量万象拼音方案",
+        "en": "Lightweight Wanxiang Pinyin scheme for everyday use"
+      },
+      "version": "17.10.0",
+      "release_sequence": 1,
+      "channel": "stable",
+      "status": "published",
+      "license": {
+        "spdx": "CC-BY-4.0",
+        "author": "amzxyz",
+        "project_url": "https://cnb.cool/amzxyz/rime-wanxiang",
+        "notice_file": "licenses/wanxiang-lite-NOTICE.txt"
+      },
+      "artifact": {
+        "url": "https://cnb.cool/amzxyz/rime-wanxiang/-/releases/download/v17.10.0/rime-wanxiang-lite.zip",
+        "size": 32361764,
+        "verification": {
+          "state": "verified",
+          "sha256": "11fa329c418e02b5204cb061b1ac1b17ec19a11aebb0dd383c8ef0a115dd2b27"
+        },
+        "archive": {
+          "format": "zip",
+          "maximum_files": 128,
+          "maximum_unpacked_size": 134217728
+        },
+        "file_manifest": {
+          "format_version": 1,
+          "mode": "exact_paths_and_sha256",
+          "generation": "during_curated_build"
+        }
+      },
+      "schemas": [
+        {
+          "schema_id": "wanxiang_lite",
+          "role": "primary",
+          "input_method": "full_pinyin",
+          "selectable": true
+        },
+        {
+          "schema_id": "wanxiang_english",
+          "role": "dependency",
+          "input_method": "full_pinyin",
+          "selectable": false
+        },
+        {
+          "schema_id": "wanxiang_mixedcode",
+          "role": "dependency",
+          "input_method": "full_pinyin",
+          "selectable": false
+        }
+      ],
+      "install": {
+        "scope": "shared_builtin",
+        "target": "weasel_shared_data",
+        "include": [
+          "wanxiang_lite.schema.yaml",
+          "wanxiang_lite.dict.yaml",
+          "wanxiang_english.schema.yaml",
+          "wanxiang_english.dict.yaml",
+          "wanxiang_mixedcode.schema.yaml",
+          "wanxiang_mixedcode.dict.yaml",
+          "wanxiang_reverse.schema.yaml",
+          "wanxiang_algebra.yaml",
+          "wanxiang_symbols.yaml",
+          "dicts/**",
+          "lua/**",
+          "custom_phrase.txt"
+        ],
+        "exclude": [
+          "default.yaml",
+          "weasel.yaml",
+          "custom/**",
+          "*t9*.schema.yaml",
+          "*.png",
+          "*.jpg"
+        ],
+        "protected_paths": [
+          "default.yaml",
+          "weasel.yaml",
+          "installation.yaml",
+          "user.yaml",
+          "*.custom.yaml",
+          "*.userdb*",
+          "sync/**"
+        ],
+        "after_install": "redeploy"
+      },
+      "update": {
+        "default_policy": "automatic",
+        "allow_user_override": true,
+        "compatibility": {
+          "minimum_weasel_version": "0.17.4",
+          "compatible_model_versions": [
+            "model"
+          ]
+        },
+        "breaking_change": false
+      },
+      "first_run": {
+        "eligible": true,
+        "default_schema_id": "wanxiang_lite",
+        "existing_users": "preserve"
+      },
+      "recommended_addons": [
+        "wanxiang-lts-zh-hans"
+      ],
+      "capabilities": [
+        "lua",
+        "user_dictionary",
+        "optional_grammar",
+        "full_pinyin",
+        "managed_updates"
+      ]
+    },
+    {
+      "id": "wanxiang-lts-zh-hans",
+      "kind": "language_model",
+      "name": {
+        "zh_CN": "万象简体 LTS 语言模型",
+        "zh_TW": "萬象簡體 LTS 語言模型",
+        "en": "Wanxiang Simplified Chinese LTS Language Model"
+      },
+      "summary": {
+        "zh_CN": "可选的长句与上下文预测模型",
+        "en": "Optional model for long-sentence and contextual prediction"
+      },
+      "version": "model",
+      "release_sequence": 1,
+      "channel": "stable",
+      "status": "published",
+      "license": {
+        "spdx": "CC-BY-4.0",
+        "author": "amzxyz",
+        "project_url": "https://cnb.cool/amzxyz/rime-wanxiang",
+        "notice_file": "licenses/wanxiang-lite-NOTICE.txt"
+      },
+      "artifact": {
+        "url": "https://cnb.cool/amzxyz/rime-wanxiang/-/releases/download/model/wanxiang-lts-zh-hans.gram",
+        "size": 420343852,
+        "verification": {
+          "state": "verified",
+          "sha256": "9f80530f470033cfb6d4b44bb861b540f64100426f92dd0f87140883632a3d93"
+        },
+        "archive": {
+          "format": "raw",
+          "maximum_files": 1,
+          "maximum_unpacked_size": 420343852
+        },
+        "file_manifest": {
+          "format_version": 1,
+          "mode": "exact_paths_and_sha256",
+          "generation": "during_curated_build"
+        }
+      },
+      "for_scheme": "wanxiang-lite",
+      "install": {
+        "scope": "user_managed",
+        "target": "rime_user_root",
+        "include": [
+          "wanxiang-lts-zh-hans.gram"
+        ],
+        "exclude": [],
+        "protected_paths": [
+          "default.yaml",
+          "weasel.yaml",
+          "installation.yaml",
+          "user.yaml",
+          "*.custom.yaml",
+          "*.userdb*",
+          "sync/**"
+        ],
+        "after_install": "redeploy"
+      },
+      "update": {
+        "default_policy": "automatic",
+        "allow_user_override": true,
+        "compatibility": {
+          "minimum_weasel_version": "0.17.4"
+        },
+        "breaking_change": false
+      },
+      "capabilities": [
+        "managed_updates"
+      ]
+    }
+  ]
+}

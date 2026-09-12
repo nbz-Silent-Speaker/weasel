@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://weasel.im/schemas/package-update-feed-v1.json",
+  "title": "Weasel signed package update feed payload",
+  "description": "The exact UTF-8 bytes of this JSON document are verified with a detached signature before any entry is trusted.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format_version",
+    "feed_id",
+    "feed_sequence",
+    "generated_at",
+    "publisher",
+    "signature",
+    "packages"
+  ],
+  "properties": {
+    "format_version": { "const": 1 },
+    "feed_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+    "feed_sequence": { "type": "integer", "minimum": 1 },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "publisher": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "key_id", "public_key_spki_base64", "project_url"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "key_id": { "type": "string", "minLength": 1 },
+        "public_key_spki_base64": { "type": "string", "minLength": 1 },
+        "project_url": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "next_keys": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["key_id", "public_key_spki_base64", "valid_from_sequence"],
+            "properties": {
+              "key_id": { "type": "string", "minLength": 1 },
+              "public_key_spki_base64": { "type": "string", "minLength": 1 },
+              "valid_from_sequence": { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "detached_file"],
+      "properties": {
+        "algorithm": { "const": "ECDSA_P256_SHA256" },
+        "detached_file": { "type": "string", "minLength": 1 }
+      }
+    },
+    "packages": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "package_id",
+          "kind",
+          "version",
+          "release_sequence",
+          "channel",
+          "artifact_url",
+          "artifact_size",
+          "artifact_sha256",
+          "content_manifest_url",
+          "content_manifest_sha256",
+          "breaking_change"
+        ],
+        "properties": {
+          "package_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+          "kind": { "enum": ["input_scheme", "language_model"] },
+          "version": { "type": "string", "minLength": 1 },
+          "release_sequence": { "type": "integer", "minimum": 1 },
+          "channel": { "enum": ["stable", "preview"] },
+          "artifact_url": { "type": "string", "format": "uri", "pattern": "^https://" },
+          "artifact_size": { "type": "integer", "minimum": 1 },
+          "artifact_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "content_manifest_url": { "type": "string", "format": "uri", "pattern": "^https://" },
+          "content_manifest_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "minimum_weasel_version": { "type": "string", "minLength": 1 },
+          "maximum_weasel_version": { "type": "string", "minLength": 1 },
+          "minimum_librime_version": { "type": "string", "minLength": 1 },
+          "maximum_librime_version": { "type": "string", "minLength": 1 },
+          "breaking_change": { "type": "boolean" },
+          "replaces_package_id": { "type": "string", "minLength": 1 },
+          "release_notes_url": { "type": "string", "format": "uri", "pattern": "^https://" }
+        }
+      }
+    }
+  }
+}

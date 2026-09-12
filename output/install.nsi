@@ -189,6 +189,10 @@ call_uninstaller:
   ; recover back to 32bit view
   SetRegView 32
   ; Remove files and uninstaller
+  RMDir /r "$R1\data\dicts"
+  RMDir /r "$R1\data\lua"
+  RMDir /r "$R1\data\packages"
+  RMDir /r "$R1\data\licenses"
   Delete  "$R1\data\opencc\*.*"
   Delete  "$R1\data\preview\*.*"
   Delete  "$R1\data\*.*"
@@ -306,6 +310,15 @@ program_files:
   File /oname=weasel.yaml "..\data\weasel.yaml"
   File /nonfatal "data\*.txt"
   File /nonfatal "data\*.gram"
+  ; bundled Wanxiang Lite dependencies and package metadata
+  SetOutPath $INSTDIR\data\dicts
+  File /r "data\dicts\*.*"
+  SetOutPath $INSTDIR\data\lua
+  File /r "data\lua\*.*"
+  SetOutPath $INSTDIR\data\packages
+  File "data\packages\*.json"
+  SetOutPath $INSTDIR\data\licenses
+  File "data\licenses\*.*"
   ; opencc data files
   SetOutPath $INSTDIR\data\opencc
   File "data\opencc\*.json"
@@ -418,6 +431,10 @@ Section "Uninstall"
 
   ; Remove files and uninstaller
   SetOutPath $TEMP
+  RMDir /r "$INSTDIR\data\dicts"
+  RMDir /r "$INSTDIR\data\lua"
+  RMDir /r "$INSTDIR\data\packages"
+  RMDir /r "$INSTDIR\data\licenses"
   Delete  "$INSTDIR\data\opencc\*.*"
   Delete  "$INSTDIR\data\preview\*.*"
   Delete  "$INSTDIR\data\*.*"

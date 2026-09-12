@@ -1,0 +1,270 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://weasel.im/schemas/scheme-catalog-v1.json",
+  "title": "Weasel input scheme catalog",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format_version", "catalog", "entries"],
+  "properties": {
+    "format_version": {
+      "const": 1
+    },
+    "catalog": {
+      "$ref": "#/$defs/catalogMetadata"
+    },
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/catalogEntry"
+      }
+    }
+  },
+  "$defs": {
+    "localizedText": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["zh_CN"],
+      "properties": {
+        "zh_CN": { "type": "string", "minLength": 1 },
+        "zh_TW": { "type": "string", "minLength": 1 },
+        "en": { "type": "string", "minLength": 1 }
+      }
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "catalogMetadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "revision", "generated_at", "download_policy"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+        "revision": { "type": "string", "minLength": 1 },
+        "generated_at": { "type": "string", "format": "date-time" },
+        "minimum_weasel_version": { "type": "string", "minLength": 1 },
+        "download_policy": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["https_only", "curated_domains", "require_verified_digest"],
+          "properties": {
+            "https_only": { "const": true },
+            "curated_domains": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string", "format": "hostname" },
+              "uniqueItems": true
+            },
+            "require_verified_digest": { "const": true }
+          }
+        }
+      }
+    },
+    "license": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["spdx", "author", "project_url"],
+      "properties": {
+        "spdx": { "type": "string", "minLength": 1 },
+        "author": { "type": "string", "minLength": 1 },
+        "project_url": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "notice_file": { "type": "string", "minLength": 1 }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "size", "verification", "archive", "file_manifest"],
+      "properties": {
+        "url": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "size": { "type": "integer", "minimum": 1 },
+        "verification": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["state", "sha256"],
+              "properties": {
+                "state": { "const": "verified" },
+                "sha256": { "$ref": "#/$defs/sha256" }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["state", "reason"],
+              "properties": {
+                "state": { "const": "pending" },
+                "sha256": { "type": "null" },
+                "reason": { "type": "string", "minLength": 1 }
+              }
+            }
+          ]
+        },
+        "archive": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["format", "maximum_files", "maximum_unpacked_size"],
+          "properties": {
+            "format": { "enum": ["zip", "raw"] },
+            "maximum_files": { "type": "integer", "minimum": 1 },
+            "maximum_unpacked_size": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "file_manifest": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["format_version", "mode", "generation"],
+          "properties": {
+            "format_version": { "const": 1 },
+            "mode": { "const": "exact_paths_and_sha256" },
+            "generation": { "enum": ["during_curated_build", "provided_and_verified"] },
+            "catalog_path": { "type": "string", "minLength": 1 },
+            "sha256": { "$ref": "#/$defs/sha256" }
+          },
+          "allOf": [
+            {
+              "if": { "properties": { "generation": { "const": "provided_and_verified" } } },
+              "then": { "required": ["catalog_path", "sha256"] }
+            }
+          ]
+        }
+      }
+    },
+    "schemaEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_id", "role", "input_method"],
+      "properties": {
+        "schema_id": { "type": "string", "pattern": "^[A-Za-z0-9_-]+$" },
+        "role": { "enum": ["primary", "dependency", "optional"] },
+        "input_method": { "enum": ["full_pinyin", "double_pinyin", "shape", "mixed", "other"] },
+        "selectable": { "type": "boolean" }
+      }
+    },
+    "updateRules": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["default_policy", "allow_user_override", "compatibility", "breaking_change"],
+      "properties": {
+        "default_policy": { "enum": ["automatic", "notify", "manual", "disabled"] },
+        "allow_user_override": { "type": "boolean" },
+        "compatibility": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "minimum_weasel_version": { "type": "string", "minLength": 1 },
+            "maximum_weasel_version": { "type": "string", "minLength": 1 },
+            "minimum_librime_version": { "type": "string", "minLength": 1 },
+            "maximum_librime_version": { "type": "string", "minLength": 1 },
+            "compatible_model_versions": {
+              "type": "array",
+              "items": { "type": "string", "minLength": 1 },
+              "uniqueItems": true
+            }
+          }
+        },
+        "breaking_change": { "type": "boolean" },
+        "replaces_entry_id": { "type": "string", "minLength": 1 },
+        "retirement_message": { "$ref": "#/$defs/localizedText" }
+      }
+    },
+    "installPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "target", "include", "exclude", "protected_paths", "after_install"],
+      "properties": {
+        "scope": { "enum": ["shared_builtin", "user_managed"] },
+        "target": { "enum": ["weasel_shared_data", "rime_user_root"] },
+        "include": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "exclude": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "protected_paths": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "after_install": { "enum": ["redeploy", "none"] }
+      }
+    },
+    "firstRun": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eligible", "default_schema_id", "existing_users"],
+      "properties": {
+        "eligible": { "type": "boolean" },
+        "default_schema_id": { "type": "string", "minLength": 1 },
+        "existing_users": { "const": "preserve" }
+      }
+    },
+    "catalogEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "name", "version", "release_sequence", "channel", "status", "license", "artifact", "install", "update"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+        "kind": { "enum": ["input_scheme", "language_model"] },
+        "name": { "$ref": "#/$defs/localizedText" },
+        "summary": { "$ref": "#/$defs/localizedText" },
+        "version": { "type": "string", "minLength": 1 },
+        "release_sequence": { "type": "integer", "minimum": 1 },
+        "channel": { "enum": ["stable", "preview"] },
+        "status": { "enum": ["published", "pending_verification", "retired"] },
+        "license": { "$ref": "#/$defs/license" },
+        "artifact": { "$ref": "#/$defs/artifact" },
+        "schemas": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/schemaEntry" }
+        },
+        "install": { "$ref": "#/$defs/installPlan" },
+        "update": { "$ref": "#/$defs/updateRules" },
+        "first_run": { "$ref": "#/$defs/firstRun" },
+        "recommended_addons": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "uniqueItems": true
+        },
+        "for_scheme": { "type": "string", "minLength": 1 },
+        "capabilities": {
+          "type": "array",
+          "items": { "enum": ["lua", "user_dictionary", "optional_grammar", "full_pinyin", "managed_updates"] },
+          "uniqueItems": true
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "input_scheme" } } },
+          "then": { "required": ["schemas", "first_run"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "language_model" } } },
+          "then": { "required": ["for_scheme"] }
+        },
+        {
+          "if": { "properties": { "status": { "const": "published" } } },
+          "then": {
+            "properties": {
+              "artifact": {
+                "properties": {
+                  "verification": {
+                    "properties": { "state": { "const": "verified" } },
+                    "required": ["state", "sha256"]
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
