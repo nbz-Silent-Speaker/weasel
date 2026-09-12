@@ -119,6 +119,7 @@
     <ClCompile Include="AcrylicAppSdkPoC.cpp" />
     <ClCompile Include="tests\RootClipDiagnosticStateTests.cpp" />
     <ClInclude Include="WeaselGaussianBlurEffect.h" />
+    <ClInclude Include="AcrylicMaterial.h" />
     <ClInclude Include="RootClipDiagnosticState.h" />
     <ClInclude Include="ChildBackdropTarget.h" />
     <ClInclude Include="EdgeClipDiagnostic.h" />

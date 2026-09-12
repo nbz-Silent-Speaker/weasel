@@ -24,6 +24,7 @@
 #include <winrt/Windows.UI.Composition.Desktop.h>
 
 #include "WeaselGaussianBlurEffect.h"
+#include "AcrylicMaterial.h"
 #include "RootClipDiagnosticState.h"
 #include "ChildBackdropTarget.h"
 #include "EdgeClipDiagnostic.h"
@@ -265,6 +266,9 @@ struct Target {
   winrt::Windows::UI::Composition::CompositionEffectFactory blurFactory{
       nullptr};
   winrt::Windows::UI::Composition::CompositionEffectBrush blurBrush{nullptr};
+  winrt::Windows::UI::Composition::CompositionColorBrush luminosityBrush{
+      nullptr};
+  winrt::Windows::UI::Composition::CompositionColorBrush tintBrush{nullptr};
   winrt::Windows::UI::Composition::SpriteVisual blurVisual{nullptr};
   winrt::Windows::UI::Composition::CompositionRoundedRectangleGeometry
       clipGeometry{nullptr};
@@ -370,6 +374,8 @@ struct Target {
     clipGeometry = nullptr;
     blurVisual = nullptr;
     blurBrush = nullptr;
+    luminosityBrush = nullptr;
+    tintBrush = nullptr;
     blurFactory = nullptr;
     hostBackdrop = nullptr;
     root = nullptr;
@@ -1095,12 +1101,30 @@ BOOL TryAttachSystemComposition(ThreadState& state,
     blur->Optimization = D2D1_GAUSSIANBLUR_OPTIMIZATION_BALANCED;
     blur->BorderMode = D2D1_BORDER_MODE_HARD;
 
-    target->blurFactory = target->compositor.CreateEffectFactory(*blur);
+    // Complete the generic packaged fallback's material. Keep Search and the
+    // explicitly forced R22 comparison on their existing blur-only recipe.
+    const bool material = weasel_acrylic::UsePackagedAcrylicMaterial(
+        g_runtimeRoute, IsSearchHostProcess(), forced,
+        ::GetPropW(hwnd, kPackagedSystemCompositionFallback) != nullptr);
+    auto effect =
+        material
+            ? weasel_acrylic::BuildAcrylicMaterial(*blur)
+            : blur.as<winrt::Windows::Graphics::Effects::IGraphicsEffect>();
+    target->blurFactory = target->compositor.CreateEffectFactory(effect);
     target->blurBrush = target->blurFactory.CreateBrush();
     target->hostBackdrop = target->compositor.CreateHostBackdropBrush();
     if (!target->hostBackdrop)
       winrt::throw_hresult(E_NOINTERFACE);
     target->blurBrush.SetSourceParameter(L"source", target->hostBackdrop);
+    if (material) {
+      target->luminosityBrush = target->compositor.CreateColorBrush();
+      target->tintBrush = target->compositor.CreateColorBrush();
+      weasel_acrylic::SetAcrylicMaterialColors(
+          target->luminosityBrush, target->tintBrush, darkMode != FALSE);
+      target->blurBrush.SetSourceParameter(L"luminosity",
+                                           target->luminosityBrush);
+      target->blurBrush.SetSourceParameter(L"tint", target->tintBrush);
+    }
 
     Diagnose(170);
     target->blurVisual = target->compositor.CreateSpriteVisual();
@@ -1594,6 +1618,11 @@ WeaselAcrylicAppSdkSetWindowTheme(HWND hwnd, BOOL darkMode) {
   if (it->second->mode == TargetMode::SystemComposition) {
     try {
       UpdateSystemCompositionClip(*it->second);
+      if (it->second->luminosityBrush && it->second->dark != darkMode) {
+        weasel_acrylic::SetAcrylicMaterialColors(it->second->luminosityBrush,
+                                                 it->second->tintBrush,
+                                                 darkMode != FALSE);
+      }
       it->second->dark = darkMode;
     } catch (winrt::hresult_error const& error) {
       Diagnose(75, error.code(), error.message().c_str());

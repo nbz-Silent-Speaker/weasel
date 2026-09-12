@@ -161,6 +161,27 @@ jobs:
             if ($testProcess.ExitCode -ne 0) { throw "Child target tests failed: $testPlatform" }
           }
 
+      - name: Test Acrylic material pixels and theme changes (x64 and x86)
+        if: matrix.variant == 'xmake'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($testPlatform in @('x64', 'Win32')) {
+            msbuild .\AcrylicAppSdkPoC\tests\AcrylicMaterialTests.vcxproj /t:Restore /p:Configuration=Release "/p:Platform=$testPlatform"
+            if ($LASTEXITCODE -ne 0) { throw "Material test restore failed: $testPlatform" }
+            msbuild .\AcrylicAppSdkPoC\tests\AcrylicMaterialTests.vcxproj /m /p:Configuration=Release "/p:Platform=$testPlatform"
+            if ($LASTEXITCODE -ne 0) { throw "Material test build failed: $testPlatform" }
+            $testDirectory = Join-Path $PWD "AcrylicAppSdkPoC\tests\bin\material\$testPlatform"
+            $testProcess = Start-Process -FilePath (Join-Path $testDirectory 'AcrylicMaterialTests.exe') -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $testDirectory 'stdout.txt') -RedirectStandardError (Join-Path $testDirectory 'stderr.txt')
+            if (-not $testProcess.WaitForExit(30000)) {
+              $testProcess.Kill()
+              $testProcess.WaitForExit()
+              throw "Material tests timed out: $testPlatform"
+            }
+            Get-Content -LiteralPath (Join-Path $testDirectory 'stdout.txt'), (Join-Path $testDirectory 'stderr.txt')
+            if ($testProcess.ExitCode -ne 0) { throw "Material tests failed: $testPlatform" }
+          }
+
       - name: Prepare and verify Acrylic runtime pair (x64)
         if: matrix.variant == 'xmake'
         shell: pwsh

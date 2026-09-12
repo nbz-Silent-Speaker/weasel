@@ -2,6 +2,13 @@
 
 namespace weasel_acrylic {
 
+constexpr bool UsePackagedAcrylicMaterial(int runtimeRoute,
+                                          bool searchHost,
+                                          bool forced,
+                                          bool requested) {
+  return runtimeRoute == 2 && !searchHost && !forced && requested;
+}
+
 constexpr bool RequestPackagedSystemCompositionFallback(bool inServer,
                                                         unsigned clientKind) {
   return !inServer && clientKind == 0;

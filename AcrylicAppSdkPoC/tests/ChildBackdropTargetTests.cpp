@@ -818,6 +818,14 @@ preset_color_schemes:
       Check(AllowPackagedSystemCompositionFallback(2, false, true));
       Check(!AllowPackagedSystemCompositionFallback(2, false, false));
     });
+    Run("packaged material preserves native Search and diagnostic routes", [] {
+      using weasel_acrylic::UsePackagedAcrylicMaterial;
+      Check(UsePackagedAcrylicMaterial(2, false, false, true));
+      Check(!UsePackagedAcrylicMaterial(1, false, false, true));
+      Check(!UsePackagedAcrylicMaterial(2, true, false, true));
+      Check(!UsePackagedAcrylicMaterial(2, false, true, true));
+      Check(!UsePackagedAcrylicMaterial(2, false, false, false));
+    });
     Run("edge clip requires opt-in and matching live host", [] {
       using weasel_acrylic::SelectEdgeClipGeometry;
       Check(SelectEdgeClipGeometry(true, true, 144, 197, 268, 17, true).x == 1);
