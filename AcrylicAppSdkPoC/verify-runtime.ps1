@@ -81,9 +81,13 @@ function Check-File([string]$Path, [int]$Machine) {
 if (-not $VerifyInstaller) {
     # This step runs immediately after each platform build, BEFORE restoring
     # the other platform. No parallel writes to the shared native NuGet assets.
-    $files = @(Get-ChildItem -LiteralPath $PSScriptRoot -Filter project.assets.json -Recurse -File)
-    if ($files.Count -ne 1) { throw "Expected one current helper assets file, got $($files.Count)" }
-    $assets = Get-Content -LiteralPath $files[0].FullName -Raw | ConvertFrom-Json
+    # Tests have an independent tests/obj restore. Read only the helper's
+    # native NuGet restore output, as emitted by AcrylicAppSdkPoC.vcxproj.
+    $assetsPath = Join-Path $PSScriptRoot 'obj\project.assets.json'
+    if (-not (Test-Path -LiteralPath $assetsPath -PathType Leaf)) {
+        throw "Missing current helper assets file: $assetsPath"
+    }
+    $assets = Get-Content -LiteralPath $assetsPath -Raw | ConvertFrom-Json
     foreach ($pin in @('Microsoft.WindowsAppSDK/1.8.260804001', 'Microsoft.Windows.CppWinRT/2.0.250303.1')) {
         if (@($assets.libraries.PSObject.Properties.Name) -notcontains $pin) {
             throw "Restore did not contain the pinned dependency: $pin"
