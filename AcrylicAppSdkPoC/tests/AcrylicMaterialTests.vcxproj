@@ -44,7 +44,7 @@
     </ClCompile>
     <Link>
       <SubSystem>Console</SubSystem>
-      <AdditionalDependencies>WindowsApp.lib;D2d1.lib;D3d11.lib;Dxgi.lib;Dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>WindowsApp.lib;CoreMessaging.lib;D2d1.lib;D3d11.lib;Dxgi.lib;Dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>

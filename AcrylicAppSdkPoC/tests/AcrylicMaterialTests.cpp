@@ -3,6 +3,8 @@
 #include <d2d1_1.h>
 #include <d3d11.h>
 #include <dxgi.h>
+#include <dispatcherqueue.h>
+#include <winrt/Windows.System.h>
 #include <array>
 #include <iostream>
 #include <map>
@@ -18,6 +20,50 @@ void Check(bool value) {
   if (!value)
     throw std::runtime_error("Acrylic material check failed");
 }
+
+// Unlike an application host, this console test has no dispatcher queue.
+// Composition requires one even when the test creates no visible window.
+struct TestDispatcherQueue {
+  winrt::Windows::System::DispatcherQueueController controller{nullptr};
+
+  TestDispatcherQueue() {
+    const DispatcherQueueOptions options{
+        sizeof(DispatcherQueueOptions), DQTYPE_THREAD_CURRENT, DQTAT_COM_STA};
+    check_hresult(CreateDispatcherQueueController(
+        options,
+        reinterpret_cast<ABI::Windows::System::IDispatcherQueueController**>(
+            winrt::put_abi(controller))));
+  }
+
+  void Shutdown() {
+    auto action = controller.ShutdownQueueAsync();
+    const auto deadline = GetTickCount64() + 5000;
+    while (action.Status() == wf::AsyncStatus::Started &&
+           GetTickCount64() < deadline) {
+      MSG message{};
+      while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&message);
+        DispatchMessageW(&message);
+      }
+      MsgWaitForMultipleObjectsEx(0, nullptr, 10, QS_ALLINPUT,
+                                  MWMO_INPUTAVAILABLE);
+    }
+    Check(action.Status() == wf::AsyncStatus::Completed);
+    action.GetResults();
+    controller = nullptr;
+  }
+
+  ~TestDispatcherQueue() {
+    if (controller) {
+      try {
+        Shutdown();
+      } catch (...) {
+        // The normal path checks shutdown explicitly; preserve a test error
+        // if stack unwinding also encounters a queue shutdown failure.
+      }
+    }
+  }
+};
 
 // Interpret the production effect descriptions through D2D on WARP. This
 // checks actual blend output, including input order and D2D blend semantics,
@@ -138,6 +184,7 @@ int main() {
   try {
     winrt::init_apartment(winrt::apartment_type::single_threaded);
     {
+      TestDispatcherQueue queue;
       Renderer renderer;
       auto blur = winrt::make_self<GaussianBlurEffect>();
       blur->Source = CompositionEffectSourceParameter(L"source");
@@ -167,27 +214,34 @@ int main() {
         Check(dark ? white[1] < 100 : white[1] > 240);
       }
 
+      std::cout << "PASS: WARP pixels and light-dark-light roundtrip" << std::endl;
       // The real compositor must also accept the production graph and keep
       // source brush identity through a theme change.
-      Compositor compositor;
-      auto factory = compositor.CreateEffectFactory(graph);
-      auto brush = factory.CreateBrush();
-      auto luminosity = compositor.CreateColorBrush();
-      auto tint = compositor.CreateColorBrush();
-      brush.SetSourceParameter(L"source",
-                               compositor.CreateColorBrush({255, 255, 0, 0}));
-      brush.SetSourceParameter(L"luminosity", luminosity);
-      brush.SetSourceParameter(L"tint", tint);
-      for (bool dark : {false, true, false}) {
-        SetAcrylicMaterialColors(luminosity, tint, dark);
-        Check(luminosity.Color() == BaseAcrylicColors(dark).luminosity);
-        Check(tint.Color() == BaseAcrylicColors(dark).tint);
-        Check(brush.GetSourceParameter(L"luminosity") == luminosity);
-        Check(brush.GetSourceParameter(L"tint") == tint);
+      {
+        std::cout << "RUN: compositor creation" << std::endl;
+        Compositor compositor;
+        std::cout << "RUN: production graph acceptance" << std::endl;
+        auto factory = compositor.CreateEffectFactory(graph);
+        auto brush = factory.CreateBrush();
+        auto luminosity = compositor.CreateColorBrush();
+        auto tint = compositor.CreateColorBrush();
+        brush.SetSourceParameter(L"source",
+                                 compositor.CreateColorBrush({255, 255, 0, 0}));
+        brush.SetSourceParameter(L"luminosity", luminosity);
+        brush.SetSourceParameter(L"tint", tint);
+        for (bool dark : {false, true, false}) {
+          SetAcrylicMaterialColors(luminosity, tint, dark);
+          Check(luminosity.Color() == BaseAcrylicColors(dark).luminosity);
+          Check(tint.Color() == BaseAcrylicColors(dark).tint);
+          Check(brush.GetSourceParameter(L"luminosity") == luminosity);
+          Check(brush.GetSourceParameter(L"tint") == tint);
+        }
+        brush.Close();
+        factory.Close();
+        compositor.Close();
       }
-      brush.Close();
-      factory.Close();
-      compositor.Close();
+      std::cout << "RUN: dispatcher queue shutdown" << std::endl;
+      queue.Shutdown();
     }
     winrt::uninit_apartment();
     std::cout << "PASS: WARP pixel output and compositor theme roundtrip\n";

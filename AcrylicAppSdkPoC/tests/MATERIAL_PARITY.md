@@ -52,6 +52,14 @@ retains Microsoft's mode selection. This is a semantic reference test, not a
 readback of pixels rendered by the real compositor; compositor graph acceptance
 and brush identity are checked separately below the pixel checks.
 
+The standalone test initializes a current-thread DispatcherQueue before creating
+the Compositor and pumps messages until queue shutdown completes. CI 79 passed
+the pixel checks (light red 255,214,214; dark red 74,17,17; light restored
+exactly), then failed with 0x80070005 because this initialization was absent.
+A local isolated probe reproduced the missing-queue exception and succeeded
+with a queue, including orderly shutdown. This is test-host setup only; the
+production helper already initializes its own dispatcher queue.
+
 After installation, compare Codex and Word over the same colored background in
 both themes, including candidate hide/show. User visual acceptance is separate
 from the automated pixel tests. Download and installation are user-managed.
