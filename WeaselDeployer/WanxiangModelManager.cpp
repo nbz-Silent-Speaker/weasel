@@ -335,7 +335,7 @@ bool WanxiangModelManager::Start(std::wstring* error) {
       *error = HresultMessage(created);
     return false;
   }
-  HRESULT result = job_->SetPriority(BG_JOB_PRIORITY_BACKGROUND);
+  HRESULT result = job_->SetPriority(BG_JOB_PRIORITY_LOW);
   if (SUCCEEDED(result))
     result = job_->AddFile(kModelUrl, StagingPath().c_str());
   wchar_t executable[MAX_PATH] = {};

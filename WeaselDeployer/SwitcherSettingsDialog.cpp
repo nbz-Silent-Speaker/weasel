@@ -568,7 +568,8 @@ LRESULT SwitcherSettingsDialog::OnOK(WORD, WORD code, HWND, BOOL&) {
                  MB_OK | MB_ICONEXCLAMATION);
       return 0;
     }
-    api_->select_schemas(settings_, selection.data(), selection.size());
+    api_->select_schemas(settings_, selection.data(),
+                         static_cast<int>(selection.size()));
   }
   KillTimer(kModelTimer);
   EndDialog(code);
