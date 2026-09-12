@@ -35,8 +35,8 @@
       <SubSystem>Console</SubSystem>
       <AdditionalDependencies>RuntimeObject.lib;Ole32.lib;rime.lib;delayimp.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <AdditionalOptions>/DELAYLOAD:rime.dll %(AdditionalOptions)</AdditionalOptions>
-      <AdditionalLibraryDirectories Condition="'$(Platform)'=='x64'">$(SolutionDir)lib64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
-      <AdditionalLibraryDirectories Condition="'$(Platform)'=='Win32'">$(SolutionDir)lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories Condition="'$(Platform)'=='x64'">$(MSBuildThisFileDirectory)..\..\lib64;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalLibraryDirectories Condition="'$(Platform)'=='Win32'">$(MSBuildThisFileDirectory)..\..\lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
