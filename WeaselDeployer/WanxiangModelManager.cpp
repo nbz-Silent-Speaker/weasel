@@ -5,7 +5,6 @@
 #include <bits3_0.h>
 #include <ShlObj.h>
 
-#include <array>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -91,7 +90,8 @@ bool Sha256File(const std::filesystem::path& path, std::string* digest) {
     std::ifstream input(path, std::ios::binary);
     if (!input)
       goto done;
-    std::array<char, 1024 * 1024> buffer;
+    // Keep the streaming buffer off the default Windows thread stack.
+    std::vector<char> buffer(1024 * 1024);
     while (input) {
       input.read(buffer.data(), buffer.size());
       const auto count = input.gcount();
