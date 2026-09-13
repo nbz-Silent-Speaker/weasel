@@ -690,11 +690,11 @@ void SwitcherSettingsDialog::ShowDetails(size_t index) {
   ShowModelControls(wanxiang);
   if (wanxiang)
     UpdateModelUi();
-  CRect details;
-  ::GetWindowRect(GetDlgItem(IDC_SCHEMA_DETAIL_GROUP), &details);
-  ::MapWindowPoints(HWND_DESKTOP, m_hWnd, reinterpret_cast<POINT*>(&details),
-                    2);
-  RedrawWindow(&details, nullptr,
+  CRect details_rect;
+  ::GetWindowRect(GetDlgItem(IDC_SCHEMA_DETAIL_GROUP), &details_rect);
+  ::MapWindowPoints(HWND_DESKTOP, m_hWnd,
+                    reinterpret_cast<POINT*>(&details_rect), 2);
+  RedrawWindow(&details_rect, nullptr,
                RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
 }
 
