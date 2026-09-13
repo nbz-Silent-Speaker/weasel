@@ -565,9 +565,8 @@ void SwitcherSettingsDialog::ShowDetails(size_t index) {
   const int version_width = static_cast<int>(version_size.cx);
   const int maximum_name_width = static_cast<int>(
       input_mode_base_rect_.left - name_rect.left - version_width - gap * 2);
-  const int name_width =
-      (std::max)(1, (std::min)(static_cast<int>(name_size.cx),
-                               maximum_name_width));
+  const int name_width = (std::max)(
+      1, (std::min)(static_cast<int>(name_size.cx), maximum_name_width));
   ::SetWindowPos(name_control, nullptr, name_rect.left, name_rect.top,
                  name_width, name_rect.Height(), SWP_NOZORDER | SWP_NOACTIVATE);
   ::SetWindowPos(version_control, nullptr, name_rect.left + name_width + gap,
