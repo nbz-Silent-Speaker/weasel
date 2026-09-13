@@ -999,15 +999,7 @@ bool WanxiangModelManager::LoadLastInstalledTime(SYSTEMTIME* local_time) {
   if (::RegGetValueW(HKEY_CURRENT_USER, kUpdateRegistry, L"LastModelInstalled",
                      RRF_RT_REG_QWORD, nullptr, &value,
                      &size) != ERROR_SUCCESS) {
-    WIN32_FILE_ATTRIBUTE_DATA attributes = {};
-    if (!::GetFileAttributesExW((WeaselUserDataPath() / kModelFileName).c_str(),
-                                GetFileExInfoStandard, &attributes)) {
-      return false;
-    }
-    ULARGE_INTEGER fallback = {};
-    fallback.LowPart = attributes.ftLastWriteTime.dwLowDateTime;
-    fallback.HighPart = attributes.ftLastWriteTime.dwHighDateTime;
-    value = fallback.QuadPart;
+    return false;
   }
   ULARGE_INTEGER packed = {};
   packed.QuadPart = value;

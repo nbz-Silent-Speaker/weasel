@@ -69,6 +69,8 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
   void ShowModelControls(bool show);
   void UpdateModelUi();
   void FinishModelDownload();
+  void FinishApply();
+  void SetApplyingUi(bool applying);
   void FinishUpdateCheck();
   void UpdateCheckButton();
   void UpdateLastCheckText();
@@ -78,6 +80,9 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
   void ApplyControlRounding();
   void ApplyRoundedRegion(HWND control, int radius_dlu);
   bool ApplyChanges();
+  bool HasSchemaSelectionChanges() const;
+  bool HasPendingChanges() const;
+  void UpdateApplyButton();
   bool ConfirmDiscardChanges();
   void DiscardPendingModel();
   bool RestorePersistedSettings();
@@ -112,6 +117,14 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
     std::atomic<bool> done{false};
   };
   std::shared_ptr<UpdateCheck> update_check_;
+  struct ApplyOperation {
+    int result = 1;
+    bool model_install_failed = false;
+    std::wstring model_install_error;
+    std::atomic<bool> done{false};
+  };
+  std::shared_ptr<ApplyOperation> apply_operation_;
+  bool close_after_apply_ = false;
   bool model_install_failed_ = false;
   bool model_update_available_ = false;
   bool scheme_update_available_ = false;
