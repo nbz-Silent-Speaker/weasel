@@ -974,7 +974,7 @@ LRESULT SwitcherSettingsDialog::OnDrawItem(UINT,
   const HGDIOBJ old_brush = ::SelectObject(draw->hDC, brush);
   RECT rounding = {0, 0, panel ? 5 : 4, 0};
   ::MapDialogRect(m_hWnd, &rounding);
-  const int radius = (std::max)(4, rounding.right);
+  const int radius = rounding.right > 4 ? static_cast<int>(rounding.right) : 4;
   ::RoundRect(draw->hDC, rectangle.left, rectangle.top, rectangle.right,
               rectangle.bottom, radius, radius);
   ::SelectObject(draw->hDC, old_brush);
