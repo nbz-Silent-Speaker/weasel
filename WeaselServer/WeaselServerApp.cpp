@@ -38,6 +38,9 @@ int WeaselServerApp::Run() {
   m_server.SetTrayRefreshCallback([this]() { tray_icon.ApplyRefresh(); });
   tray_icon.RequestRefresh();
 
+  execute_hidden(install_dir() / L"WeaselDeployer.exe",
+                 L"/package-update-check");
+
   int ret = m_server.Run();
 
   tray_icon.DisableRefresh();

@@ -256,12 +256,18 @@ WanxiangModelManager::State WanxiangModelManager::InstalledState() const {
   return size == kExpectedSize ? State::Installed : State::Modified;
 }
 
-std::wstring WanxiangModelManager::GetJobError() const {
+std::wstring WanxiangModelManager::GetJobError(HRESULT* error_code) const {
+  if (error_code)
+    *error_code = E_FAIL;
   if (!job_)
     return L"Background download is unavailable.";
   CComPtr<IBackgroundCopyError> error;
   if (FAILED(job_->GetError(&error)) || !error)
     return L"Background download failed.";
+  BG_ERROR_CONTEXT context = BG_ERROR_CONTEXT_NONE;
+  HRESULT code = E_FAIL;
+  if (SUCCEEDED(error->GetError(&context, &code)) && error_code)
+    *error_code = code;
   LPWSTR description = nullptr;
   if (FAILED(error->GetErrorDescription(GetThreadUILanguage(), &description)) ||
       !description)
@@ -286,15 +292,21 @@ WanxiangModelManager::Progress WanxiangModelManager::GetProgress() {
                                                           : progress.BytesTotal;
   }
   BG_JOB_STATE state;
-  if (FAILED(job_->GetState(&state))) {
+  const HRESULT state_result = job_->GetState(&state);
+  if (FAILED(state_result)) {
     result.state = State::Error;
+    result.error_code = state_result;
     result.error = L"Unable to read background download state.";
   } else if (state == BG_JOB_STATE_TRANSFERRED) {
     result.state = State::Transferred;
+  } else if (state == BG_JOB_STATE_TRANSIENT_ERROR) {
+    result.state = State::WaitingRetry;
+    result.error = GetJobError(&result.error_code);
   } else if (state == BG_JOB_STATE_ERROR ||
-             state == BG_JOB_STATE_TRANSIENT_ERROR) {
-    result.state = State::Error;
-    result.error = GetJobError();
+             state == BG_JOB_STATE_SUSPENDED) {
+    result.state = State::Paused;
+    if (state == BG_JOB_STATE_ERROR)
+      result.error = GetJobError(&result.error_code);
   } else if (state == BG_JOB_STATE_CANCELLED ||
              state == BG_JOB_STATE_ACKNOWLEDGED) {
     job_.Release();
@@ -306,8 +318,34 @@ WanxiangModelManager::Progress WanxiangModelManager::GetProgress() {
 }
 
 bool WanxiangModelManager::Start(std::wstring* error) {
-  if (job_)
-    return true;
+  if (job_) {
+    BG_JOB_STATE state = BG_JOB_STATE_ERROR;
+    HRESULT result = job_->GetState(&state);
+    if (SUCCEEDED(result) &&
+        (state == BG_JOB_STATE_CANCELLED ||
+         state == BG_JOB_STATE_ACKNOWLEDGED)) {
+      job_.Release();
+    } else if (SUCCEEDED(result) && state == BG_JOB_STATE_TRANSFERRED) {
+      return true;
+    } else if (SUCCEEDED(result)) {
+      job_->SetPriority(BG_JOB_PRIORITY_FOREGROUND);
+      if (state == BG_JOB_STATE_ERROR ||
+          state == BG_JOB_STATE_TRANSIENT_ERROR ||
+          state == BG_JOB_STATE_SUSPENDED) {
+        result = job_->Resume();
+      }
+      if (FAILED(result)) {
+        if (error)
+          *error = HresultMessage(result);
+        return false;
+      }
+      return true;
+    } else {
+      if (error)
+        *error = HresultMessage(result);
+      return false;
+    }
+  }
   if (!EnsureManager(error))
     return false;
 
@@ -335,7 +373,11 @@ bool WanxiangModelManager::Start(std::wstring* error) {
       *error = HresultMessage(created);
     return false;
   }
-  HRESULT result = job_->SetPriority(BG_JOB_PRIORITY_LOW);
+  HRESULT result = job_->SetPriority(BG_JOB_PRIORITY_FOREGROUND);
+  if (SUCCEEDED(result))
+    result = job_->SetMinimumRetryDelay(60);
+  if (SUCCEEDED(result))
+    result = job_->SetNoProgressTimeout(3600);
   if (SUCCEEDED(result))
     result = job_->AddFile(kModelUrl, StagingPath().c_str());
   wchar_t executable[MAX_PATH] = {};

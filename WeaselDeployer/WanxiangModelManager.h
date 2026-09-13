@@ -12,6 +12,8 @@ class WanxiangModelManager {
     Installed,
     Modified,
     Downloading,
+    WaitingRetry,
+    Paused,
     Transferred,
     Error,
   };
@@ -20,6 +22,7 @@ class WanxiangModelManager {
     State state = State::NotInstalled;
     unsigned long long transferred = 0;
     unsigned long long total = 0;
+    HRESULT error_code = S_OK;
     std::wstring error;
   };
 
@@ -44,7 +47,7 @@ class WanxiangModelManager {
   std::filesystem::path ModelPath() const;
   std::filesystem::path BackupPath() const;
   std::filesystem::path CommitMarkerPath() const;
-  std::wstring GetJobError() const;
+  std::wstring GetJobError(HRESULT* error_code) const;
   bool VerifyStagedFile(std::wstring* error) const;
 
   CComPtr<IBackgroundCopyManager> manager_;

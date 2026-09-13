@@ -7,6 +7,7 @@
 #include "WeaselDeployer.h"
 #include "Configurator.h"
 #include "WanxiangModelManager.h"
+#include "WanxiangUpdateManager.h"
 
 CAppModule _Module;
 
@@ -33,7 +34,7 @@ int APIENTRY _tWinMain(HINSTANCE hInstance,
   // (MSLU) is used
   ::DefWindowProc(NULL, 0, 0, 0L);
 
-  AtlInitCommonControls(ICC_BAR_CLASSES | ICC_TAB_CLASSES);
+  AtlInitCommonControls(ICC_BAR_CLASSES | ICC_TAB_CLASSES | ICC_LINK_CLASS);
 
   hRes = _Module.Init(NULL, hInstance);
   ATLASSERT(SUCCEEDED(hRes));
@@ -104,6 +105,24 @@ static int Run(LPTSTR lpCmdLine) {
                "state also failed.";
       }
       return 1;
+    }
+    return 0;
+  }
+
+  if (!wcscmp(L"/package-update-check", lpCmdLine)) {
+    const auto frequency =
+        WanxiangUpdateManager::LoadFrequency("wanxiang_lite");
+    if (!WanxiangUpdateManager::IsAutomaticCheckDue(frequency))
+      return 0;
+    const auto result = WanxiangUpdateManager::CheckNow();
+    if (!result.success) {
+      LOG(ERROR) << "Automatic Wanxiang update check failed: "
+                 << wtou8(result.error);
+      return 1;
+    }
+    if (result.update_available) {
+      LOG(INFO) << "A newer Wanxiang release is available: "
+                << wtou8(result.latest_tag);
     }
     return 0;
   }

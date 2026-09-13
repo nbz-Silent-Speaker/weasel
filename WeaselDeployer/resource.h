@@ -70,6 +70,9 @@
 #define IDC_IMPORT_SCHEME               1159
 #define IDC_ADD_SCHEME_URL              1160
 #define IDC_SCHEMA_DETAIL_GROUP         1161
+#define IDC_UPDATE_STATUS               1162
+#define IDC_SCHEMA_PROJECT_LINKS        1163
+#define IDC_ADD_SCHEMA_GROUP            1164
 #define IDC_COLOR_SCHEME                1004
 #define IDC_SELECT_FONT                 1005
 #define IDC_PREVIEW                     1006
@@ -87,7 +90,7 @@
 #define _APS_NO_MFC                     1
 #define _APS_NEXT_RESOURCE_VALUE        206
 #define _APS_NEXT_COMMAND_VALUE         32771
-#define _APS_NEXT_CONTROL_VALUE         1162
+#define _APS_NEXT_CONTROL_VALUE         1165
 #define _APS_NEXT_SYMED_VALUE           110
 #endif
 #endif
