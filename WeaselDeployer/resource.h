@@ -88,6 +88,16 @@
 #define IDC_UPDATE_SCHEME_GROUP         1176
 #define IDC_UPDATE_MODEL_GROUP          1177
 #define IDC_SCHEMA_AUTHOR               1178
+#define IDC_SWITCHER_TITLE              1179
+#define IDC_SCHEMA_LIST_PANEL           1180
+#define IDC_SCHEMA_LIST_LABEL           1181
+#define IDC_SCHEMA_DETAIL_LABEL         1182
+#define IDC_SCHEMA_SHORTCUT_DIVIDER     1183
+#define IDC_SCHEMA_FOOTER_DIVIDER       1184
+#define IDC_HOTKEY_PLUS                 1185
+#define IDC_SCHEMA_LAST_CHECK           1186
+#define IDC_SCHEMA_SHORTCUT_LABEL       1187
+#define IDC_MODEL_DOWNLOAD_STATUS       1188
 #define IDC_COLOR_SCHEME                1004
 #define IDC_SELECT_FONT                 1005
 #define IDC_PREVIEW                     1006
@@ -105,7 +115,7 @@
 #define _APS_NO_MFC                     1
 #define _APS_NEXT_RESOURCE_VALUE        207
 #define _APS_NEXT_COMMAND_VALUE         32771
-#define _APS_NEXT_CONTROL_VALUE         1179
+#define _APS_NEXT_CONTROL_VALUE         1189
 #define _APS_NEXT_SYMED_VALUE           110
 #endif
 #endif

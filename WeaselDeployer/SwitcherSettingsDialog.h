@@ -22,6 +22,7 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
   MESSAGE_HANDLER(WM_INITDIALOG, OnInitDialog)
   MESSAGE_HANDLER(WM_CLOSE, OnClose)
   MESSAGE_HANDLER(WM_TIMER, OnTimer)
+  MESSAGE_HANDLER(WM_DRAWITEM, OnDrawItem)
   MESSAGE_HANDLER(WM_CTLCOLORSTATIC, OnCtlColorStatic)
   COMMAND_HANDLER(IDC_CHECK_SCHEME_UPDATES, BN_CLICKED, OnCheckUpdates)
   COMMAND_HANDLER(IDC_SCHEMA_UPDATE_SETTINGS,
@@ -44,6 +45,7 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
   LRESULT OnInitDialog(UINT, WPARAM, LPARAM, BOOL&);
   LRESULT OnClose(UINT, WPARAM, LPARAM, BOOL&);
   LRESULT OnTimer(UINT, WPARAM, LPARAM, BOOL&);
+  LRESULT OnDrawItem(UINT, WPARAM, LPARAM, BOOL&);
   LRESULT OnCtlColorStatic(UINT, WPARAM, LPARAM, BOOL&);
   LRESULT OnCheckUpdates(WORD, WORD, HWND, BOOL&);
   LRESULT OnUpdateSettingsChanged(WORD, WORD, HWND, BOOL&);
@@ -65,6 +67,7 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
   void FinishModelDownload();
   void FinishUpdateCheck();
   void UpdateCheckButton();
+  void UpdateLastCheckText();
   void ShowUpdateList();
   void AdjustInputModeWidth();
   bool ApplyChanges();
@@ -118,6 +121,7 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
   CRect model_primary_rect_;
   CRect model_active_secondary_rect_;
   CRect model_active_primary_rect_;
+  CRect input_mode_base_rect_;
 
   CCheckListViewCtrl schema_list_;
   CEdit description_;
@@ -125,4 +129,6 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
   CComboBox input_mode_;
   CComboBox update_frequency_;
   CToolTipCtrl tooltip_;
+  CFont title_font_;
+  CFont heading_font_;
 };

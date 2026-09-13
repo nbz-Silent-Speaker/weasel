@@ -518,6 +518,9 @@ void SwitcherSettingsDialog::RebuildList() {
     ::SetDlgItemTextW(m_hWnd, IDC_SCHEMA_DESCRIPTION, L"");
     ::SetDlgItemTextW(m_hWnd, IDC_SCHEMA_PROJECT_LINKS, L"");
     ::SetDlgItemTextW(m_hWnd, IDC_SCHEMA_AUTHOR, L"");
+    ::ShowWindow(GetDlgItem(IDC_SCHEMA_DETAIL_VERSION), SW_HIDE);
+    ::ShowWindow(GetDlgItem(IDC_SCHEMA_PROJECT_LINKS), SW_HIDE);
+    ::ShowWindow(GetDlgItem(IDC_SCHEMA_AUTHOR), SW_HIDE);
     ::ShowWindow(GetDlgItem(IDC_SCHEMA_UPDATE_SETTINGS), SW_HIDE);
     ::ShowWindow(GetDlgItem(IDC_SCHEMA_RESTORE_PACKAGE), SW_HIDE);
     ::ShowWindow(GetDlgItem(IDC_INPUT_MODE), SW_HIDE);
@@ -534,6 +537,43 @@ void SwitcherSettingsDialog::ShowDetails(size_t index) {
   ::SetDlgItemTextW(m_hWnd, IDC_SCHEMA_DETAIL_NAME, schema.name.c_str());
   ::SetDlgItemTextW(m_hWnd, IDC_SCHEMA_DETAIL_VERSION,
                     wanxiang ? WanxiangUpdateManager::kInstalledVersion : L"");
+  HWND name_control = GetDlgItem(IDC_SCHEMA_DETAIL_NAME);
+  HWND version_control = GetDlgItem(IDC_SCHEMA_DETAIL_VERSION);
+  CRect name_rect;
+  ::GetWindowRect(name_control, &name_rect);
+  ::MapWindowPoints(HWND_DESKTOP, m_hWnd, reinterpret_cast<POINT*>(&name_rect),
+                    2);
+  HDC header_dc = ::GetDC(name_control);
+  HFONT header_font =
+      reinterpret_cast<HFONT>(::SendMessageW(name_control, WM_GETFONT, 0, 0));
+  const HGDIOBJ old_header_font =
+      header_font ? ::SelectObject(header_dc, header_font) : nullptr;
+  SIZE name_size = {};
+  ::GetTextExtentPoint32W(header_dc, schema.name.c_str(),
+                          static_cast<int>(schema.name.size()), &name_size);
+  SIZE version_size = {};
+  const std::wstring version =
+      wanxiang ? WanxiangUpdateManager::kInstalledVersion : L"";
+  ::GetTextExtentPoint32W(header_dc, version.c_str(),
+                          static_cast<int>(version.size()), &version_size);
+  if (old_header_font)
+    ::SelectObject(header_dc, old_header_font);
+  ::ReleaseDC(name_control, header_dc);
+  RECT spacing = {0, 0, 4, 0};
+  ::MapDialogRect(m_hWnd, &spacing);
+  const int gap = spacing.right;
+  const int version_width = static_cast<int>(version_size.cx);
+  const int maximum_name_width = static_cast<int>(
+      input_mode_base_rect_.left - name_rect.left - version_width - gap * 2);
+  const int name_width =
+      (std::max)(1, (std::min)(static_cast<int>(name_size.cx),
+                               maximum_name_width));
+  ::SetWindowPos(name_control, nullptr, name_rect.left, name_rect.top,
+                 name_width, name_rect.Height(), SWP_NOZORDER | SWP_NOACTIVATE);
+  ::SetWindowPos(version_control, nullptr, name_rect.left + name_width + gap,
+                 name_rect.top, version_width, name_rect.Height(),
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+  ::ShowWindow(version_control, version.empty() ? SW_HIDE : SW_SHOW);
 
   std::string details;
   if (const char* description = api_->get_schema_description(schema.info))
@@ -560,7 +600,7 @@ void SwitcherSettingsDialog::ShowDetails(size_t index) {
   ::SetDlgItemTextW(m_hWnd, IDC_SCHEMA_PROJECT_LINKS, links.c_str());
   ::SetDlgItemTextW(m_hWnd, IDC_SCHEMA_AUTHOR, author.c_str());
   RECT author_rect =
-      links.empty() ? RECT{264, 260, 470, 272} : RECT{366, 260, 468, 272};
+      links.empty() ? RECT{210, 233, 428, 245} : RECT{302, 233, 428, 245};
   ::MapDialogRect(m_hWnd, &author_rect);
   ::SetWindowPos(GetDlgItem(IDC_SCHEMA_AUTHOR), nullptr, author_rect.left,
                  author_rect.top, author_rect.right - author_rect.left,
@@ -589,10 +629,9 @@ void SwitcherSettingsDialog::ShowDetails(size_t index) {
 void SwitcherSettingsDialog::AdjustInputModeWidth() {
   if (!input_mode_.IsWindow())
     return;
-  CRect current;
-  input_mode_.GetWindowRect(&current);
-  ::MapWindowPoints(HWND_DESKTOP, m_hWnd, reinterpret_cast<POINT*>(&current),
-                    2);
+  const int selected = input_mode_.GetCurSel();
+  if (selected == CB_ERR)
+    return;
   CRect available;
   ::GetWindowRect(GetDlgItem(IDC_SCHEMA_DESCRIPTION), &available);
   ::MapWindowPoints(HWND_DESKTOP, m_hWnd, reinterpret_cast<POINT*>(&available),
@@ -601,33 +640,43 @@ void SwitcherSettingsDialog::AdjustInputModeWidth() {
   HFONT font =
       reinterpret_cast<HFONT>(::SendMessageW(input_mode_, WM_GETFONT, 0, 0));
   HGDIOBJ previous = font ? ::SelectObject(dc, font) : nullptr;
-  int widest = 0;
-  for (int index = 0; index < input_mode_.GetCount(); ++index) {
-    const int length = input_mode_.GetLBTextLen(index);
-    std::wstring value(length + 1, L'\0');
-    input_mode_.GetLBText(index, value.data());
-    SIZE extent = {};
-    ::GetTextExtentPoint32W(dc, value.c_str(), length, &extent);
-    widest = (std::max)(widest, static_cast<int>(extent.cx));
-  }
+  const int length = input_mode_.GetLBTextLen(selected);
+  std::wstring value(length + 1, L'\0');
+  input_mode_.GetLBText(selected, value.data());
+  SIZE extent = {};
+  ::GetTextExtentPoint32W(dc, value.c_str(), length, &extent);
   if (previous)
     ::SelectObject(dc, previous);
   ::ReleaseDC(input_mode_, dc);
-  const int desired = widest + ::GetSystemMetrics(SM_CXVSCROLL) + 24;
-  const int current_width = static_cast<int>(current.Width());
-  const int available_width = static_cast<int>(current.right - available.left);
+  const int desired =
+      static_cast<int>(extent.cx) + ::GetSystemMetrics(SM_CXVSCROLL) + 24;
+  const int base_width = static_cast<int>(input_mode_base_rect_.Width());
+  CRect version_rect;
+  ::GetWindowRect(GetDlgItem(IDC_SCHEMA_DETAIL_VERSION), &version_rect);
+  ::MapWindowPoints(HWND_DESKTOP, m_hWnd,
+                    reinterpret_cast<POINT*>(&version_rect), 2);
+  RECT spacing = {0, 0, 4, 0};
+  ::MapDialogRect(m_hWnd, &spacing);
+  const int left_limit =
+      ::IsWindowVisible(GetDlgItem(IDC_SCHEMA_DETAIL_VERSION))
+          ? version_rect.right + spacing.right
+          : available.left;
+  const int available_width =
+      static_cast<int>(input_mode_base_rect_.right - left_limit);
   const int width =
-      (std::min)((std::max)(current_width, desired), available_width);
-  ::SetWindowPos(input_mode_, nullptr, current.right - width, current.top,
-                 width, current.Height(), SWP_NOZORDER | SWP_NOACTIVATE);
+      (std::min)((std::max)(base_width, desired), available_width);
+  ::SetWindowPos(input_mode_, nullptr, input_mode_base_rect_.right - width,
+                 input_mode_base_rect_.top, width,
+                 input_mode_base_rect_.Height(), SWP_NOZORDER | SWP_NOACTIVATE);
   input_mode_.SetDroppedWidth((std::max)(width, desired));
 }
 
 void SwitcherSettingsDialog::ShowModelControls(bool show) {
   constexpr int controls[] = {
-      IDC_MODEL_GROUP,     IDC_MODEL_NAME,     IDC_MODEL_DESCRIPTION,
-      IDC_MODEL_SOURCE,    IDC_MODEL_NOTE,     IDC_MODEL_DOWNLOAD,
-      IDC_MODEL_SECONDARY, IDC_MODEL_PROGRESS, IDC_MODEL_PROGRESS_TEXT,
+      IDC_MODEL_GROUP,           IDC_MODEL_NAME,     IDC_MODEL_DESCRIPTION,
+      IDC_MODEL_SOURCE,          IDC_MODEL_NOTE,     IDC_MODEL_DOWNLOAD,
+      IDC_MODEL_SECONDARY,       IDC_MODEL_PROGRESS, IDC_MODEL_PROGRESS_TEXT,
+      IDC_MODEL_DOWNLOAD_STATUS,
   };
   for (const int control : controls)
     ::ShowWindow(GetDlgItem(control), show ? SW_SHOW : SW_HIDE);
@@ -703,12 +752,13 @@ void SwitcherSettingsDialog::UpdateModelUi() {
                                ? latest_model_size_
                                : WanxiangModelManager::kExpectedSize;
   wchar_t size[96] = {};
-  swprintf_s(size, L"%.1f MB · CNB", target_size / 1000000.0);
+  swprintf_s(size, L" · %.1f MB · CNB", target_size / 1000000.0);
   set_text(IDC_MODEL_SOURCE, size);
   const bool active = state == State::Downloading ||
                       state == State::WaitingRetry || state == State::Paused ||
                       state == State::Transferred || state == State::Error;
-  model_status_active_ = active || state == State::RestartRequired ||
+  model_status_active_ = (active && state != State::Downloading) ||
+                         state == State::RestartRequired ||
                          model_install_failed_ ||
                          (state == State::Modified && !model_update_available_);
   ::ShowWindow(GetDlgItem(IDC_MODEL_PROGRESS), active ? SW_SHOW : SW_HIDE);
@@ -719,11 +769,12 @@ void SwitcherSettingsDialog::UpdateModelUi() {
         1000, progress.transferred * 1000 / total));
     if (model_progress_.GetPos() != value)
       model_progress_.SetPos(value);
-    wchar_t label[32] = {};
-    swprintf_s(label, L"%d%%", value / 10);
+    wchar_t label[96] = {};
+    swprintf_s(label, L"%.1f / %.1f MB · %d%%",
+               progress.transferred / 1000000.0, total / 1000000.0, value / 10);
     set_text(IDC_MODEL_PROGRESS_TEXT, label);
   }
-  std::wstring note, primary, secondary;
+  std::wstring note, download_status, primary, secondary;
   bool enabled = true;
   model_button_accent_ = false;
   if (state != State::Downloading) {
@@ -732,16 +783,20 @@ void SwitcherSettingsDialog::UpdateModelUi() {
   }
   switch (state) {
     case State::Downloading:
-      note = LocalText(L"正在下载…", L"正在下載…", L"Downloading…");
+      note = LocalText(L"下载完成后自动安装、清理缓存并重新部署。",
+                       L"下載完成後自動安裝、清理快取並重新部署。",
+                       L"Installs, clears the cache, and redeploys "
+                       L"automatically after download.");
+      download_status = LocalText(L"正在下载", L"正在下載", L"Downloading");
       if (last_progress_tick_ && progress.transferred >= last_progress_bytes_) {
         const ULONGLONG now = ::GetTickCount64();
         const ULONGLONG elapsed = now - last_progress_tick_;
         if (elapsed) {
           wchar_t speed[48] = {};
-          swprintf_s(speed, L"  %.1f MB/s",
+          swprintf_s(speed, L" · %.1f MB/s",
                      (progress.transferred - last_progress_bytes_) * 1000.0 /
                          elapsed / 1000000.0);
-          note += speed;
+          download_status += speed;
         }
       }
       last_progress_tick_ = ::GetTickCount64();
@@ -796,9 +851,10 @@ void SwitcherSettingsDialog::UpdateModelUi() {
       secondary = LocalText(L"移除模型", L"移除模型", L"Remove model");
       break;
     default:
-      note = LocalText(L"下载完成后自动安装并重新部署。",
-                       L"下載完成後自動安裝並重新部署。",
-                       L"Installs and redeploys automatically after download.");
+      note = LocalText(L"下载完成后自动安装、清理缓存并重新部署。",
+                       L"下載完成後自動安裝、清理快取並重新部署。",
+                       L"Installs, clears the cache, and redeploys "
+                       L"automatically after download.");
       primary = LocalText(L"下载模型", L"下載模型", L"Download model");
       break;
   }
@@ -834,8 +890,11 @@ void SwitcherSettingsDialog::UpdateModelUi() {
     }
   }
   set_text(IDC_MODEL_NOTE, note);
+  set_text(IDC_MODEL_DOWNLOAD_STATUS, download_status);
   set_text(IDC_MODEL_DOWNLOAD, primary);
   set_text(IDC_MODEL_SECONDARY, secondary);
+  ::ShowWindow(GetDlgItem(IDC_MODEL_DOWNLOAD_STATUS),
+               download_status.empty() ? SW_HIDE : SW_SHOW);
   ::EnableWindow(GetDlgItem(IDC_MODEL_DOWNLOAD), enabled);
   const CRect& primary_rect =
       active ? model_active_primary_rect_ : model_primary_rect_;
@@ -857,18 +916,117 @@ void SwitcherSettingsDialog::UpdateModelUi() {
   ::InvalidateRect(GetDlgItem(IDC_MODEL_DOWNLOAD), nullptr, TRUE);
 }
 
+LRESULT SwitcherSettingsDialog::OnDrawItem(UINT,
+                                           WPARAM,
+                                           LPARAM parameter,
+                                           BOOL& handled) {
+  const auto* draw = reinterpret_cast<const DRAWITEMSTRUCT*>(parameter);
+  if (!draw) {
+    handled = FALSE;
+    return 0;
+  }
+  const int id = static_cast<int>(draw->CtlID);
+  const bool panel =
+      id == IDC_SCHEMA_LIST_PANEL || id == IDC_SCHEMA_DETAIL_GROUP;
+  const bool divider = id == IDC_MODEL_GROUP ||
+                       id == IDC_SCHEMA_SHORTCUT_DIVIDER ||
+                       id == IDC_SCHEMA_FOOTER_DIVIDER;
+  const bool key =
+      id == IDC_HOTKEYS || id == IDC_HOTKEY_GRAVE || id == IDC_HOTKEY_F4;
+  if (!panel && !divider && !key) {
+    handled = FALSE;
+    return 0;
+  }
+
+  const auto blend = [](COLORREF base, COLORREF accent, int accent_percent) {
+    const int base_percent = 100 - accent_percent;
+    return RGB(
+        (GetRValue(base) * base_percent + GetRValue(accent) * accent_percent) /
+            100,
+        (GetGValue(base) * base_percent + GetGValue(accent) * accent_percent) /
+            100,
+        (GetBValue(base) * base_percent + GetBValue(accent) * accent_percent) /
+            100);
+  };
+  const COLORREF window_color = ::GetSysColor(COLOR_WINDOW);
+  const COLORREF border_color =
+      blend(window_color, ::GetSysColor(COLOR_3DSHADOW), panel ? 36 : 48);
+  RECT rectangle = draw->rcItem;
+  ::FillRect(draw->hDC, &rectangle,
+             ::GetSysColorBrush(panel ? COLOR_3DFACE : COLOR_WINDOW));
+  if (divider) {
+    const int y = (rectangle.top + rectangle.bottom) / 2;
+    HPEN pen = ::CreatePen(PS_SOLID, 1, border_color);
+    const HGDIOBJ old_pen = ::SelectObject(draw->hDC, pen);
+    ::MoveToEx(draw->hDC, rectangle.left, y, nullptr);
+    ::LineTo(draw->hDC, rectangle.right, y);
+    ::SelectObject(draw->hDC, old_pen);
+    ::DeleteObject(pen);
+    handled = TRUE;
+    return TRUE;
+  }
+
+  rectangle.right -= 1;
+  rectangle.bottom -= 1;
+  HPEN pen = ::CreatePen(PS_SOLID, 1, border_color);
+  HBRUSH brush =
+      ::CreateSolidBrush(::GetSysColor(panel ? COLOR_WINDOW : COLOR_BTNFACE));
+  const HGDIOBJ old_pen = ::SelectObject(draw->hDC, pen);
+  const HGDIOBJ old_brush = ::SelectObject(draw->hDC, brush);
+  RECT rounding = {0, 0, panel ? 5 : 4, 0};
+  ::MapDialogRect(m_hWnd, &rounding);
+  const int radius = (std::max)(4, rounding.right);
+  ::RoundRect(draw->hDC, rectangle.left, rectangle.top, rectangle.right,
+              rectangle.bottom, radius, radius);
+  ::SelectObject(draw->hDC, old_brush);
+  ::SelectObject(draw->hDC, old_pen);
+  ::DeleteObject(brush);
+  ::DeleteObject(pen);
+
+  if (key) {
+    wchar_t label[32] = {};
+    ::GetWindowTextW(draw->hwndItem, label, static_cast<int>(_countof(label)));
+    ::SetBkMode(draw->hDC, TRANSPARENT);
+    ::SetTextColor(draw->hDC, ::IsWindowEnabled(draw->hwndItem)
+                                  ? ::GetSysColor(COLOR_WINDOWTEXT)
+                                  : ::GetSysColor(COLOR_GRAYTEXT));
+    HFONT font = reinterpret_cast<HFONT>(
+        ::SendMessageW(draw->hwndItem, WM_GETFONT, 0, 0));
+    const HGDIOBJ old_font = font ? ::SelectObject(draw->hDC, font) : nullptr;
+    ::DrawTextW(draw->hDC, label, -1, &rectangle,
+                DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    if (old_font)
+      ::SelectObject(draw->hDC, old_font);
+  }
+  handled = TRUE;
+  return TRUE;
+}
+
 LRESULT SwitcherSettingsDialog::OnCtlColorStatic(UINT,
                                                  WPARAM device_context,
                                                  LPARAM control,
                                                  BOOL& handled) {
   const int id = ::GetDlgCtrlID(reinterpret_cast<HWND>(control));
-  if (id == IDC_SCHEMA_DETAIL_VERSION || id == IDC_SCHEMA_AUTHOR ||
-      id == IDC_MODEL_DESCRIPTION || id == IDC_MODEL_SOURCE ||
-      (id == IDC_MODEL_NOTE && !model_status_active_)) {
-    ::SetTextColor(reinterpret_cast<HDC>(device_context),
-                   ::GetSysColor(COLOR_GRAYTEXT));
+  const bool muted =
+      id == IDC_SCHEMA_LAST_CHECK || id == IDC_SCHEMA_DETAIL_VERSION ||
+      id == IDC_SCHEMA_AUTHOR || id == IDC_MODEL_DESCRIPTION ||
+      id == IDC_MODEL_SOURCE || id == IDC_MODEL_DOWNLOAD_STATUS ||
+      (id == IDC_MODEL_NOTE && !model_status_active_);
+  const bool card = id == IDC_SCHEMA_DETAIL_NAME ||
+                    id == IDC_SCHEMA_DETAIL_VERSION || id == IDC_MODEL_NAME ||
+                    id == IDC_MODEL_DESCRIPTION || id == IDC_MODEL_SOURCE ||
+                    id == IDC_MODEL_NOTE || id == IDC_MODEL_DOWNLOAD_STATUS ||
+                    id == IDC_SCHEMA_PROJECT_LINKS || id == IDC_SCHEMA_AUTHOR ||
+                    id == IDC_SCHEMA_SHORTCUT_LABEL || id == IDC_HOTKEY_PLUS ||
+                    id == IDC_HOTKEY_OR;
+  if (muted || card) {
+    if (muted) {
+      ::SetTextColor(reinterpret_cast<HDC>(device_context),
+                     ::GetSysColor(COLOR_GRAYTEXT));
+    }
     ::SetBkMode(reinterpret_cast<HDC>(device_context), TRANSPARENT);
-    return reinterpret_cast<LRESULT>(::GetSysColorBrush(COLOR_3DFACE));
+    return reinterpret_cast<LRESULT>(
+        ::GetSysColorBrush(card ? COLOR_WINDOW : COLOR_3DFACE));
   }
   handled = FALSE;
   return 0;
@@ -981,10 +1139,28 @@ void SwitcherSettingsDialog::FinishModelDownload() {
 }
 
 LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
+  LOGFONTW base_font = {};
+  ::GetObjectW(GetFont(), sizeof(base_font), &base_font);
+  LOGFONTW title = base_font;
+  title.lfHeight = title.lfHeight * 4 / 3;
+  title.lfWeight = FW_SEMIBOLD;
+  if (title_font_.CreateFontIndirect(&title))
+    CWindow(GetDlgItem(IDC_SWITCHER_TITLE)).SetFont(title_font_);
+  LOGFONTW heading = base_font;
+  heading.lfWeight = FW_SEMIBOLD;
+  if (heading_font_.CreateFontIndirect(&heading)) {
+    for (int id : {IDC_SCHEMA_LIST_LABEL, IDC_SCHEMA_DETAIL_LABEL,
+                   IDC_SCHEMA_DETAIL_NAME, IDC_MODEL_NAME}) {
+      CWindow(GetDlgItem(id)).SetFont(heading_font_);
+    }
+  }
+
   schema_list_.SubclassWindow(GetDlgItem(IDC_SCHEMA_LIST));
   schema_list_.SetExtendedListViewStyle(
-      LVS_EX_FULLROWSELECT | LVS_EX_CHECKBOXES,
-      LVS_EX_FULLROWSELECT | LVS_EX_CHECKBOXES);
+      LVS_EX_FULLROWSELECT | LVS_EX_CHECKBOXES | LVS_EX_DOUBLEBUFFER,
+      LVS_EX_FULLROWSELECT | LVS_EX_CHECKBOXES | LVS_EX_DOUBLEBUFFER);
+  schema_list_.SetBkColor(::GetSysColor(COLOR_WINDOW));
+  schema_list_.SetTextBkColor(::GetSysColor(COLOR_WINDOW));
 
   CString schema_name;
   schema_name.LoadStringW(IDS_STR_SCHEMA_NAME);
@@ -1028,8 +1204,9 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   };
   capture_control_rect(IDC_MODEL_SECONDARY, &model_secondary_rect_);
   capture_control_rect(IDC_MODEL_DOWNLOAD, &model_primary_rect_);
-  RECT active_secondary = {444, 218, 514, 236};
-  RECT active_primary = {520, 218, 590, 236};
+  capture_control_rect(IDC_INPUT_MODE, &input_mode_base_rect_);
+  RECT active_secondary = {356, 206, 430, 224};
+  RECT active_primary = {436, 206, 512, 224};
   ::MapDialogRect(m_hWnd, &active_secondary);
   ::MapDialogRect(m_hWnd, &active_primary);
   model_active_secondary_rect_ = active_secondary;
@@ -1065,6 +1242,7 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
     const bool grave = configured.find(L"Control+grave") != std::wstring::npos;
     const bool f4 = configured.find(L"F4") != std::wstring::npos;
     ::ShowWindow(GetDlgItem(IDC_HOTKEYS), grave ? SW_SHOW : SW_HIDE);
+    ::ShowWindow(GetDlgItem(IDC_HOTKEY_PLUS), grave ? SW_SHOW : SW_HIDE);
     ::ShowWindow(GetDlgItem(IDC_HOTKEY_GRAVE), grave ? SW_SHOW : SW_HIDE);
     ::ShowWindow(GetDlgItem(IDC_HOTKEY_OR), grave && f4 ? SW_SHOW : SW_HIDE);
     ::ShowWindow(GetDlgItem(IDC_HOTKEY_F4), f4 ? SW_SHOW : SW_HIDE);
@@ -1080,6 +1258,7 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
                             L"The grave key is below Esc and left of 1.");
   tool.lpszText = const_cast<wchar_t*>(tooltip_text_.c_str());
   tooltip_.AddTool(&tool);
+  UpdateLastCheckText();
   UpdateCheckButton();
   SetTimer(kModelTimer, 500);
 
@@ -1179,6 +1358,7 @@ void SwitcherSettingsDialog::FinishUpdateCheck() {
     }
   }
   UpdateCheckButton();
+  UpdateLastCheckText();
   return;
 }
 
@@ -1204,6 +1384,26 @@ void SwitcherSettingsDialog::UpdateCheckButton() {
   ::SetWindowTextW(button, label.c_str());
   ::EnableWindow(button, TRUE);
   ::InvalidateRect(button, nullptr, TRUE);
+}
+
+void SwitcherSettingsDialog::UpdateLastCheckText() {
+  std::wstring tag;
+  SYSTEMTIME checked = {};
+  HWND label = GetDlgItem(IDC_SCHEMA_LAST_CHECK);
+  if (!WanxiangUpdateManager::LoadLastCheck(&tag, &checked)) {
+    ::ShowWindow(label, SW_HIDE);
+    return;
+  }
+  wchar_t text[96] = {};
+  swprintf_s(text,
+             LocalText(L"上次检查：%04u-%02u-%02u %02u:%02u",
+                       L"上次檢查：%04u-%02u-%02u %02u:%02u",
+                       L"Last checked: %04u-%02u-%02u %02u:%02u")
+                 .c_str(),
+             checked.wYear, checked.wMonth, checked.wDay, checked.wHour,
+             checked.wMinute);
+  ::SetWindowTextW(label, text);
+  ::ShowWindow(label, SW_SHOW);
 }
 
 void SwitcherSettingsDialog::ShowUpdateList() {
@@ -1300,6 +1500,7 @@ LRESULT SwitcherSettingsDialog::OnInputModeChanged(WORD, WORD, HWND, BOOL&) {
     modified_ = true;
     ::EnableWindow(GetDlgItem(IDOK), TRUE);
   }
+  AdjustInputModeWidth();
   return 0;
 }
 
