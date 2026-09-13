@@ -106,11 +106,18 @@ foreach ($source in @($manifest.source, $manifest.model)) {
 $forbiddenFiles = @(
   'default.yaml', 'weasel.yaml', 'installation.yaml', 'user.yaml'
 )
+$allowedTemplates = @(
+  'custom/wanxiang_english.custom.yaml',
+  'custom/wanxiang_lite.custom.yaml',
+  'custom/wanxiang_mixedcode.custom.yaml',
+  'custom/wanxiang_reverse.custom.yaml'
+)
 foreach ($relativePath in $manifest.files) {
   $normalized = ([string]$relativePath).Replace('\', '/')
   $leaf = [IO.Path]::GetFileName($normalized)
   if ($forbiddenFiles -contains $leaf -or
-      $leaf -like '*.custom.yaml' -or
+      ($leaf -like '*.custom.yaml' -and
+       $allowedTemplates -notcontains $normalized) -or
       $normalized -match '(?i)\.userdb(?:/|$)') {
     throw "Protected Rime file must not be bundled from Wanxiang: $relativePath"
   }
@@ -220,7 +227,54 @@ if ($mainSchema -notmatch '(?m)^\s*schema_id:\s*wanxiang_lite\s*(?:#.*)?$' -or
   throw 'Wanxiang Lite no longer matches the verified full-pinyin and model integration contract.'
 }
 
-Enable-WanxiangLiteDefaultSchema (Join-Path $destinationRoot 'default.yaml')
+$templateContracts = @{
+  'custom/wanxiang_lite.custom.yaml' =
+    '(?m)^[ \t]*-[ \t]*wanxiang_algebra:/lite/[^\s#]+'
+  'custom/wanxiang_mixedcode.custom.yaml' =
+    '(?m)^[ \t]*__patch:[ \t]*wanxiang_algebra:/mixed/[^\s#]+'
+  'custom/wanxiang_reverse.custom.yaml' =
+    '(?m)^[ \t]*__include:[ \t]*wanxiang_algebra:/reverse/[^\s#]+'
+  'custom/wanxiang_english.custom.yaml' =
+    '(?m)^[ \t]*__patch:[ \t]*wanxiang_algebra:/english/[^\s#]+'
+}
+foreach ($relativePath in $templateContracts.Keys) {
+  $templatePath = Join-Path $destinationRoot $relativePath.Replace('/', '\')
+  $template = [IO.File]::ReadAllText($templatePath, [Text.Encoding]::UTF8)
+  if ($template -notmatch $templateContracts[$relativePath]) {
+    throw "Wanxiang input-mode template no longer matches the verified contract: $relativePath"
+  }
+}
+
+$defaultConfigPath = Join-Path $destinationRoot 'default.yaml'
+Enable-WanxiangLiteDefaultSchema $defaultConfigPath
+
+$modeScriptPath = Join-Path $destinationRoot 'lua\wanxiang\set_schema.lua'
+$modeScript = [IO.File]::ReadAllText($modeScriptPath, [Text.Encoding]::UTF8)
+$modeScript = $modeScript.Replace(
+  '    for _, name in ipairs(files) do',
+  "    local changed = 0`r`n    for _, name in ipairs(files) do")
+$modeScript = $modeScript.Replace(
+  '            replace_schema(dest, target_schema, profile)',
+  "            if replace_schema(dest, target_schema, profile) then`r`n                changed = changed + 1`r`n            end")
+$successAnchor = '    local msg = main_exists'
+if ($modeScript -notmatch 'local changed = 0' -or
+    ([regex]::Matches($modeScript, 'changed = changed \+ 1')).Count -ne 2 -or
+    -not $modeScript.Contains($successAnchor)) {
+  throw 'Wanxiang mode switcher no longer matches the verified repair contract.'
+}
+$failureCheck = @'
+    if changed ~= #files then
+        yield(Candidate(
+            "switch", seg.start, seg._end,
+            "切换失败：配置模板缺失或用户文件无法写入", ""
+        ))
+        return
+    end
+
+'@
+$modeScript = $modeScript.Replace($successAnchor, $failureCheck + $successAnchor)
+[IO.File]::WriteAllText($modeScriptPath, $modeScript,
+                        [Text.UTF8Encoding]::new($false))
 
 $packageDirectory = Join-Path $destinationRoot 'packages'
 $licenseDirectory = Join-Path $destinationRoot 'licenses'

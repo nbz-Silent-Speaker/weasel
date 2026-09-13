@@ -30,13 +30,13 @@ char FirstByte(const std::filesystem::path& path) {
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
-  if (argc != 2)
+  if (argc != 3)
     return 2;
   ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
   try {
     const std::filesystem::path root(argv[1]);
     test_user_directory = root / L"user";
-    const auto staging = root / L"separate-cache" / L"model.part";
+    const auto staging = std::filesystem::path(argv[2]) / L"model.part";
     const auto model = test_user_directory / L"wanxiang-lts-zh-hans.gram";
     std::wstring error;
 

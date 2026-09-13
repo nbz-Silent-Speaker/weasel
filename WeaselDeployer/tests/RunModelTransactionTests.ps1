@@ -52,8 +52,14 @@ Push-Location $build
 try {
     & cl.exe /nologo /EHsc /std:c++17 /utf-8 /DUNICODE /D_UNICODE /I. WanxiangModelManager.cpp ModelTransactionTests.cpp /Fe:ModelTransactionTests.exe /link ole32.lib shell32.lib bcrypt.lib uuid.lib
     if ($LASTEXITCODE -ne 0) { throw 'Model transaction test build failed' }
-    & .\ModelTransactionTests.exe (Join-Path $build 'fixtures')
-    if ($LASTEXITCODE -ne 0) { throw 'Model transaction tests failed' }
+    # GitHub's workspace is on D: and LocalAppData is on C:, exercising the
+    # same cross-volume copy/rename path used by a custom Rime user folder.
+    $fixtureRoot = if ($env:GITHUB_WORKSPACE) {
+        Join-Path $env:GITHUB_WORKSPACE ('model-test-fixtures-' + [guid]::NewGuid())
+    } else { Join-Path $build 'fixtures' }
+    $cacheRoot = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) ('weasel-model-test-cache-' + [guid]::NewGuid())
+    & .\ModelTransactionTests.exe $fixtureRoot $cacheRoot
+    if ($LASTEXITCODE -ne 0) { throw "Model transaction tests failed (exit $LASTEXITCODE)" }
 } finally {
     Pop-Location
 }

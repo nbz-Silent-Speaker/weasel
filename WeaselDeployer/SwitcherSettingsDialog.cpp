@@ -6,6 +6,11 @@
 #include "WeaselDeployer.h"
 
 #include <algorithm>
+#include <array>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
+#include <regex>
 #include <set>
 #include <thread>
 
@@ -25,6 +30,81 @@ constexpr int kUpdateMonthly =
 constexpr int kUpdateDisabled =
     static_cast<int>(WanxiangUpdateManager::Frequency::Disabled);
 constexpr UINT kUpdateMenuFirst = 41001;
+
+struct InputMode {
+  const wchar_t* value;
+  const wchar_t* simplified;
+  const wchar_t* traditional;
+  const wchar_t* english;
+};
+
+constexpr InputMode kInputModes[] = {
+    {L"全拼", L"全拼", L"全拼", L"Full Pinyin"},
+    {L"小鹤双拼", L"小鹤双拼", L"小鶴雙拼", L"Flypy"},
+    {L"自然码", L"自然码", L"自然碼", L"Ziranma"},
+    {L"微软双拼", L"微软双拼", L"微軟雙拼", L"Microsoft Shuangpin"},
+    {L"搜狗双拼", L"搜狗双拼", L"搜狗雙拼", L"Sogou Shuangpin"},
+    {L"智能ABC", L"智能 ABC", L"智能 ABC", L"Intelligent ABC"},
+    {L"紫光双拼", L"紫光双拼", L"紫光雙拼", L"Ziguang Shuangpin"},
+    {L"拼音加加", L"拼音加加", L"拼音加加", L"Pinyin Jiajia"},
+    {L"国标双拼", L"国标双拼", L"國標雙拼", L"GB Shuangpin"},
+    {L"乱序17", L"乱序 17", L"亂序 17", L"Luanxu 17"},
+    {L"蓝天双拼", L"蓝天双拼", L"藍天雙拼", L"Lantian Shuangpin"},
+    {L"自然龙", L"自然龙", L"自然龍", L"Ziranlong"},
+    {L"汉心龙", L"汉心龙", L"漢心龍", L"Hanxinlong"},
+    {L"首道双拼", L"首道双拼", L"首道雙拼", L"Shoudao Shuangpin"},
+    {L"大牛双拼", L"大牛双拼", L"大牛雙拼", L"Daniu Shuangpin"},
+};
+
+struct ModeFile {
+  const wchar_t* name;
+  const char* expression;
+};
+
+constexpr ModeFile kModeFiles[] = {
+    {L"wanxiang_lite.custom.yaml",
+     "((?:^|\\n)[ \\t]*-[ \\t]*wanxiang_algebra:/lite/)[^\\s#]+"},
+    {L"wanxiang_mixedcode.custom.yaml",
+     "((?:^|\\n)[ \\t]*__patch:[ \\t]*wanxiang_algebra:/mixed/)"
+     "[^\\s#]+"},
+    {L"wanxiang_reverse.custom.yaml",
+     "((?:^|\\n)[ \\t]*__include:[ \\t]*wanxiang_algebra:/reverse/)"
+     "[^\\s#]+"},
+    {L"wanxiang_english.custom.yaml",
+     "((?:^|\\n)[ \\t]*__patch:[ \\t]*wanxiang_algebra:/english/)"
+     "[^\\s#]+"},
+};
+
+bool ReadFile(const std::filesystem::path& path, std::string* text) {
+  std::ifstream input(path, std::ios::binary);
+  if (!input)
+    return false;
+  text->assign(std::istreambuf_iterator<char>(input),
+               std::istreambuf_iterator<char>());
+  return !input.bad();
+}
+
+bool WriteFile(const std::filesystem::path& path, const std::string& text) {
+  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  output.write(text.data(), text.size());
+  output.flush();
+  return output.good();
+}
+
+std::wstring EscapeLinkText(const std::wstring& text) {
+  std::wstring escaped;
+  for (const auto character : text) {
+    if (character == L'&')
+      escaped += L"&amp;";
+    else if (character == L'<')
+      escaped += L"&lt;";
+    else if (character == L'>')
+      escaped += L"&gt;";
+    else
+      escaped += character;
+  }
+  return escaped;
+}
 }  // namespace
 
 SwitcherSettingsDialog::SwitcherSettingsDialog(RimeSwitcherSettings* settings)
@@ -45,6 +125,161 @@ std::wstring SwitcherSettingsDialog::LocalText(const wchar_t* simplified,
                  sublanguage == SUBLANG_CHINESE_SINGAPORE
              ? simplified
              : traditional;
+}
+
+std::wstring SwitcherSettingsDialog::FormatSwitcherHotkeys(
+    const std::wstring& hotkeys) const {
+  // Keep the scheme's configured hotkeys intact. This page only presents the
+  // two shortcuts that users can rely on here.
+  std::vector<std::wstring> labels;
+  if (hotkeys.find(L"Control+grave") != std::wstring::npos)
+    labels.push_back(LocalText(L"Ctrl + `（Esc 下方）", L"Ctrl + `（Esc 下方）",
+                               L"Ctrl + ` (below Esc)"));
+  if (hotkeys.find(L"F4") != std::wstring::npos)
+    labels.push_back(L"F4");
+  std::wstring result;
+  for (const auto& label : labels) {
+    if (!result.empty())
+      result += LocalText(L"    或    ", L"    或    ", L"    or    ");
+    result += label;
+  }
+  return result;
+}
+
+bool SwitcherSettingsDialog::LoadInputMode(std::wstring* mode) const {
+  const auto user = WeaselUserDataPath() / L"wanxiang_lite.custom.yaml";
+  const auto bundled =
+      WeaselSharedDataPath() / L"custom" / L"wanxiang_lite.custom.yaml";
+  std::string text;
+  if (!ReadFile(user, &text) && !ReadFile(bundled, &text)) {
+    *mode = L"全拼";
+    return true;
+  }
+  std::smatch match;
+  if (!std::regex_search(
+          text, match,
+          std::regex("(?:^|\\n)[ \\t]*-[ \\t]*wanxiang_algebra:/lite/"
+                     "([^\\s#]+)")))
+    return false;
+  *mode = u8tow(match[1].str());
+  return true;
+}
+
+bool SwitcherSettingsDialog::SaveInputMode(const std::wstring& mode,
+                                           std::wstring* error) const {
+  struct PreparedFile {
+    std::filesystem::path destination;
+    std::filesystem::path temporary;
+    std::filesystem::path backup;
+    bool had_destination = false;
+    bool committed = false;
+  };
+  std::vector<PreparedFile> prepared;
+  const auto discard_prepared = [&]() {
+    for (const auto& item : prepared) {
+      std::error_code ignored;
+      std::filesystem::remove(item.temporary, ignored);
+    }
+  };
+  const auto user = WeaselUserDataPath();
+  const auto bundled = WeaselSharedDataPath() / L"custom";
+  const auto suffix =
+      L".weasel-mode-" + std::to_wstring(::GetCurrentProcessId());
+  const auto replacement = wtou8(mode);
+  std::error_code file_error;
+  std::filesystem::create_directories(user, file_error);
+  if (file_error) {
+    *error = LocalText(L"无法访问用户文件夹。", L"無法存取使用者資料夾。",
+                       L"The user folder is unavailable.");
+    return false;
+  }
+
+  for (const auto& file : kModeFiles) {
+    PreparedFile item;
+    item.destination = user / file.name;
+    item.temporary = item.destination.wstring() + suffix + L".tmp";
+    item.backup = item.destination.wstring() + suffix + L".bak";
+    item.had_destination =
+        std::filesystem::exists(item.destination, file_error);
+    if (file_error) {
+      discard_prepared();
+      *error = LocalText(L"无法检查现有万象配置。", L"無法檢查現有萬象設定。",
+                         L"Cannot inspect the existing Wanxiang settings.");
+      return false;
+    }
+    const auto source =
+        item.had_destination ? item.destination : bundled / file.name;
+    std::string text;
+    if (!ReadFile(source, &text)) {
+      discard_prepared();
+      *error = LocalText(L"安装包缺少万象拼音方式模板，请重新安装后再试。",
+                         L"安裝包缺少萬象拼音方式範本，請重新安裝後再試。",
+                         L"The Wanxiang input-mode templates are missing. "
+                         L"Reinstall Weasel and try again.");
+      return false;
+    }
+    const std::regex expression(file.expression);
+    if (!std::regex_search(text, expression)) {
+      discard_prepared();
+      *error = LocalText(L"现有万象配置无法识别，未修改用户文件。",
+                         L"現有萬象設定無法識別，未修改使用者檔案。",
+                         L"The existing Wanxiang settings are not recognized; "
+                         L"no user file was changed.");
+      return false;
+    }
+    text = std::regex_replace(text, expression, "$1" + replacement,
+                              std::regex_constants::format_first_only);
+    if (!WriteFile(item.temporary, text)) {
+      std::error_code ignored;
+      std::filesystem::remove(item.temporary, ignored);
+      discard_prepared();
+      *error = LocalText(L"无法在用户文件夹中准备新配置。",
+                         L"無法在使用者資料夾中準備新設定。",
+                         L"Cannot prepare settings in the user folder.");
+      return false;
+    }
+    prepared.push_back(std::move(item));
+  }
+
+  for (auto& item : prepared) {
+    if (item.had_destination) {
+      std::filesystem::rename(item.destination, item.backup, file_error);
+      if (file_error)
+        break;
+    }
+    std::filesystem::rename(item.temporary, item.destination, file_error);
+    if (file_error) {
+      if (item.had_destination) {
+        std::error_code ignored;
+        std::filesystem::rename(item.backup, item.destination, ignored);
+      }
+      break;
+    }
+    item.committed = true;
+  }
+  if (file_error) {
+    for (auto iterator = prepared.rbegin(); iterator != prepared.rend();
+         ++iterator) {
+      std::error_code ignored;
+      if (iterator->committed) {
+        std::filesystem::remove(iterator->destination, ignored);
+        if (iterator->had_destination)
+          std::filesystem::rename(iterator->backup, iterator->destination,
+                                  ignored);
+      }
+      std::filesystem::remove(iterator->temporary, ignored);
+    }
+    *error = LocalText(L"保存拼音方式失败，原配置已经恢复。",
+                       L"儲存拼音方式失敗，原設定已經恢復。",
+                       L"Saving the input mode failed; original settings were "
+                       L"restored.");
+    return false;
+  }
+  for (const auto& item : prepared) {
+    std::error_code ignored;
+    std::filesystem::remove(item.backup, ignored);
+  }
+  return true;
 }
 
 int SwitcherSettingsDialog::LoadUpdateFrequency(
@@ -82,9 +317,9 @@ bool SwitcherSettingsDialog::ConfirmDiscardChanges() {
     return true;
   return ::MessageBoxW(
              m_hWnd,
-             LocalText(L"方案选择尚未保存。关闭并放弃这些更改吗？",
-                       L"方案選擇尚未儲存。關閉並放棄這些變更嗎？",
-                       L"Schema selections have not been saved. Close and "
+             LocalText(L"设置尚未保存。关闭并放弃这些更改吗？",
+                       L"設定尚未儲存。關閉並放棄這些變更嗎？",
+                       L"Settings have not been saved. Close and "
                        L"discard the changes?")
                  .c_str(),
              LocalText(L"放弃更改", L"放棄變更", L"Discard changes").c_str(),
@@ -137,7 +372,7 @@ void SwitcherSettingsDialog::Populate() {
     append_schema(available.list[i]);
 
   if (const char* hotkeys = api_->get_hotkeys(settings_))
-    hotkeys_.SetWindowTextW(u8tow(hotkeys).c_str());
+    hotkeys_.SetWindowTextW(FormatSwitcherHotkeys(u8tow(hotkeys)).c_str());
 
   RebuildList();
   loaded_ = true;
@@ -168,6 +403,8 @@ void SwitcherSettingsDialog::RebuildList() {
     ::SetDlgItemTextW(m_hWnd, IDC_SCHEMA_PROJECT_LINKS, L"");
     ::ShowWindow(GetDlgItem(IDC_SCHEMA_UPDATE_SETTINGS), SW_HIDE);
     ::ShowWindow(GetDlgItem(IDC_SCHEMA_RESTORE_PACKAGE), SW_HIDE);
+    ::ShowWindow(GetDlgItem(IDC_INPUT_MODE_LABEL), SW_HIDE);
+    ::ShowWindow(GetDlgItem(IDC_INPUT_MODE), SW_HIDE);
     ShowModelControls(false);
   }
 }
@@ -214,6 +451,8 @@ void SwitcherSettingsDialog::ShowDetails(size_t index) {
     ::SetDlgItemTextW(m_hWnd, IDC_SCHEMA_UPDATE_SETTINGS, label.c_str());
   }
   ::ShowWindow(GetDlgItem(IDC_SCHEMA_RESTORE_PACKAGE), SW_HIDE);
+  ::ShowWindow(GetDlgItem(IDC_INPUT_MODE_LABEL), wanxiang ? SW_SHOW : SW_HIDE);
+  ::ShowWindow(GetDlgItem(IDC_INPUT_MODE), wanxiang ? SW_SHOW : SW_HIDE);
   ShowModelControls(wanxiang);
   if (wanxiang)
     UpdateModelUi();
@@ -320,9 +559,7 @@ void SwitcherSettingsDialog::UpdateModelUi() {
   bool enabled = true;
   switch (state) {
     case State::Downloading:
-      note = LocalText(L"正在下载，关闭窗口后继续。",
-                       L"正在下載，關閉視窗後繼續。",
-                       L"Downloading continues after closing this window.");
+      note = LocalText(L"正在下载…", L"正在下載…", L"Downloading…");
       primary = LocalText(L"暂停下载", L"暫停下載", L"Pause");
       break;
     case State::WaitingRetry:
@@ -363,7 +600,6 @@ void SwitcherSettingsDialog::UpdateModelUi() {
       break;
     case State::Installed:
       note = LocalText(L"已安装", L"已安裝", L"Installed");
-      primary = note;
       secondary = LocalText(L"移除模型", L"移除模型", L"Remove model");
       enabled = false;
       break;
@@ -371,7 +607,6 @@ void SwitcherSettingsDialog::UpdateModelUi() {
       note = LocalText(L"现有模型与此版本不同，将保留原文件。",
                        L"現有模型與此版本不同，將保留原檔案。",
                        L"The existing model differs and will be preserved.");
-      primary = LocalText(L"保留现有模型", L"保留現有模型", L"Model preserved");
       secondary = LocalText(L"移除模型", L"移除模型", L"Remove model");
       enabled = false;
       break;
@@ -398,6 +633,15 @@ void SwitcherSettingsDialog::UpdateModelUi() {
   set_text(IDC_MODEL_DOWNLOAD, primary);
   set_text(IDC_MODEL_SECONDARY, secondary);
   ::EnableWindow(GetDlgItem(IDC_MODEL_DOWNLOAD), enabled);
+  ::ShowWindow(GetDlgItem(IDC_MODEL_DOWNLOAD),
+               primary.empty() ? SW_HIDE : SW_SHOW);
+  const CRect& secondary_rect =
+      (state == State::Installed || state == State::Modified)
+          ? model_primary_rect_
+          : model_secondary_rect_;
+  ::SetWindowPos(GetDlgItem(IDC_MODEL_SECONDARY), nullptr, secondary_rect.left,
+                 secondary_rect.top, secondary_rect.Width(),
+                 secondary_rect.Height(), SWP_NOZORDER | SWP_NOACTIVATE);
   ::ShowWindow(GetDlgItem(IDC_MODEL_SECONDARY),
                secondary.empty() ? SW_HIDE : SW_SHOW);
 }
@@ -503,6 +747,33 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   hotkeys_.EnableWindow(FALSE);
   model_progress_.Attach(GetDlgItem(IDC_MODEL_PROGRESS));
   model_progress_.SetRange32(0, 1000);
+  input_mode_.Attach(GetDlgItem(IDC_INPUT_MODE));
+  loading_input_mode_ = true;
+  if (!LoadInputMode(&selected_input_mode_))
+    selected_input_mode_ = L"全拼";
+  int selected_mode = 0;
+  for (int index = 0; index < static_cast<int>(_countof(kInputModes));
+       ++index) {
+    const auto& mode = kInputModes[index];
+    const int row = input_mode_.AddString(
+        LocalText(mode.simplified, mode.traditional, mode.english).c_str());
+    input_mode_.SetItemData(row, static_cast<DWORD_PTR>(index));
+    if (selected_input_mode_ == mode.value)
+      selected_mode = row;
+  }
+  input_mode_.SetCurSel(selected_mode);
+  selected_input_mode_ =
+      kInputModes[static_cast<size_t>(input_mode_.GetItemData(selected_mode))]
+          .value;
+  loading_input_mode_ = false;
+
+  auto capture_control_rect = [&](int id, CRect* target) {
+    ::GetWindowRect(GetDlgItem(id), target);
+    ::MapWindowPoints(HWND_DESKTOP, m_hWnd, reinterpret_cast<POINT*>(target),
+                      2);
+  };
+  capture_control_rect(IDC_MODEL_SECONDARY, &model_secondary_rect_);
+  capture_control_rect(IDC_MODEL_DOWNLOAD, &model_primary_rect_);
 
   ::ShowWindow(GetDlgItem(IDC_SCHEMA_UPDATE_SETTINGS), SW_HIDE);
   // Package importing remains hidden until conflict-safe transactional install
@@ -528,10 +799,18 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
 
   Populate();
   ::EnableWindow(GetDlgItem(IDOK), FALSE);
+  const auto user_folder = WeaselUserDataPath().wstring();
   ::SetDlgItemTextW(
       m_hWnd, IDC_USER_DATA_FOLDER,
-      (LocalText(L"用户文件夹：", L"使用者資料夾：", L"User folder: ") +
-       WeaselUserDataPath().wstring())
+      (L"<a id=\"open\">" +
+       LocalText(L"用户文件夹：", L"使用者資料夾：", L"User folder: ") +
+       EscapeLinkText(user_folder) + L"</a>")
+          .c_str());
+  ::SetWindowTextW(
+      GetDlgItem(IDC_HOTKEY_HINT),
+      LocalText(L"` 是 Esc 下方、数字 1 左侧的反引号键。",
+                L"` 是 Esc 下方、數字 1 左側的反引號鍵。",
+                L"` is the grave-accent key below Esc and left of 1.")
           .c_str());
   SetTimer(kModelTimer, 500);
 
@@ -696,6 +975,44 @@ LRESULT SwitcherSettingsDialog::OnProjectLink(int,
   return 0;
 }
 
+LRESULT SwitcherSettingsDialog::OnUserFolderLink(int, LPNMHDR, BOOL&) {
+  const auto folder = WeaselUserDataPath();
+  std::error_code error;
+  std::filesystem::create_directories(folder, error);
+  if (error || reinterpret_cast<INT_PTR>(
+                   ::ShellExecuteW(m_hWnd, L"open", folder.c_str(), nullptr,
+                                   nullptr, SW_SHOWNORMAL)) <= 32) {
+    ::MessageBoxW(
+        m_hWnd,
+        LocalText(L"无法打开用户文件夹，请检查路径是否可用。",
+                  L"無法開啟使用者資料夾，請檢查路徑是否可用。",
+                  L"Cannot open the user folder. Check that the path is "
+                  L"available.")
+            .c_str(),
+        LocalText(L"用户文件夹", L"使用者資料夾", L"User folder").c_str(),
+        MB_OK | MB_ICONERROR);
+  }
+  return 0;
+}
+
+LRESULT SwitcherSettingsDialog::OnInputModeChanged(WORD, WORD, HWND, BOOL&) {
+  if (loading_input_mode_)
+    return 0;
+  const int selected = input_mode_.GetCurSel();
+  if (selected == CB_ERR)
+    return 0;
+  const auto index = static_cast<size_t>(input_mode_.GetItemData(selected));
+  if (index >= _countof(kInputModes))
+    return 0;
+  if (selected_input_mode_ != kInputModes[index].value) {
+    selected_input_mode_ = kInputModes[index].value;
+    input_mode_modified_ = true;
+    modified_ = true;
+    ::EnableWindow(GetDlgItem(IDOK), TRUE);
+  }
+  return 0;
+}
+
 LRESULT SwitcherSettingsDialog::OnModelPrimary(WORD, WORD, HWND, BOOL&) {
   std::wstring error;
   model_install_failed_ = false;
@@ -806,8 +1123,8 @@ LRESULT SwitcherSettingsDialog::OnModelSecondary(WORD, WORD, HWND, BOOL&) {
 }
 
 LRESULT SwitcherSettingsDialog::OnOK(WORD, WORD code, HWND, BOOL&) {
+  std::vector<const char*> selection;
   if (modified_ && settings_ && !schemas_.empty()) {
-    std::vector<const char*> selection;
     for (const auto& schema : schemas_) {
       if (schema.enabled)
         selection.push_back(schema.id.c_str());
@@ -817,6 +1134,19 @@ LRESULT SwitcherSettingsDialog::OnOK(WORD, WORD code, HWND, BOOL&) {
                  MB_OK | MB_ICONEXCLAMATION);
       return 0;
     }
+  }
+  if (input_mode_modified_) {
+    std::wstring error;
+    if (!SaveInputMode(selected_input_mode_, &error)) {
+      ::MessageBoxW(m_hWnd, error.c_str(),
+                    LocalText(L"无法保存拼音方式", L"無法儲存拼音方式",
+                              L"Cannot save input mode")
+                        .c_str(),
+                    MB_OK | MB_ICONERROR);
+      return 0;
+    }
+  }
+  if (modified_ && settings_ && !schemas_.empty()) {
     api_->select_schemas(settings_, selection.data(),
                          static_cast<int>(selection.size()));
   }

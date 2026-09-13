@@ -319,6 +319,10 @@ program_files:
   File "data\packages\*.json"
   SetOutPath $INSTDIR\data\licenses
   File "data\licenses\*.*"
+  ; Read-only Wanxiang input-mode templates. They are copied to the user
+  ; directory only when the user selects a mode; user custom files stay intact.
+  SetOutPath $INSTDIR\data\custom
+  File "data\custom\*.custom.yaml"
   ; opencc data files
   SetOutPath $INSTDIR\data\opencc
   File "data\opencc\*.json"

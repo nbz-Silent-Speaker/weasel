@@ -26,6 +26,10 @@
   },
   "files": [
     "custom_phrase.txt",
+    "custom/wanxiang_english.custom.yaml",
+    "custom/wanxiang_lite.custom.yaml",
+    "custom/wanxiang_mixedcode.custom.yaml",
+    "custom/wanxiang_reverse.custom.yaml",
     "dicts/cuoyin.lite.dict.yaml",
     "dicts/diming.lite.dict.yaml",
     "dicts/duoyin.lite.dict.yaml",

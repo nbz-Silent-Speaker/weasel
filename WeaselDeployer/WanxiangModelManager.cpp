@@ -160,8 +160,16 @@ void CleanCommittedDownload(const std::filesystem::path& path,
 WanxiangModelManager::WanxiangModelManager() {
   RecoverInterruptedTransaction();
   std::wstring error;
-  if (EnsureManager(&error))
+  if (EnsureManager(&error)) {
     AttachExistingJob();
+    // A verified installed model takes precedence over an abandoned download
+    // from an earlier installation. The exact BITS job is no longer useful.
+    if (job_ && InstalledState() == State::Installed) {
+      job_->Cancel();
+      job_.Release();
+      job_path_.clear();
+    }
+  }
   if (!job_) {
     CleanCommittedDownload(CachePath(), false);
     CleanCommittedDownload(WeaselUserDataPath() / L".weasel-packages" /
@@ -307,6 +315,11 @@ std::filesystem::path WanxiangModelManager::CachePath() const {
 
 bool WanxiangModelManager::JobCacheMissing() const {
   if (!job_)
+    return false;
+  // An unavailable drive may still contain resumable data. Do not cancel its
+  // BITS task or report lost data just because the volume is currently offline.
+  if (::GetFileAttributesW(StagingPath().root_path().c_str()) ==
+      INVALID_FILE_ATTRIBUTES)
     return false;
   const DWORD directory =
       ::GetFileAttributesW(StagingPath().parent_path().c_str());
