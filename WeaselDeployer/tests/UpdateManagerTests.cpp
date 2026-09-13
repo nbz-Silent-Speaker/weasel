@@ -1,8 +1,11 @@
 #include "WanxiangUpdateManager.h"
 
+#include <filesystem>
 #include <iostream>
 #include <stdexcept>
 #include <string>
+
+std::filesystem::path test_user_directory;
 
 namespace {
 void Require(bool condition, const char* message) {

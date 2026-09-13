@@ -29,7 +29,6 @@ constexpr int kUpdateMonthly =
     static_cast<int>(WanxiangUpdateManager::Frequency::Monthly);
 constexpr int kUpdateDisabled =
     static_cast<int>(WanxiangUpdateManager::Frequency::Disabled);
-constexpr UINT kUpdateMenuFirst = 41001;
 
 struct InputMode {
   const wchar_t* value;
@@ -105,6 +104,156 @@ std::wstring EscapeLinkText(const std::wstring& text) {
   }
   return escaped;
 }
+
+std::wstring Localize(const wchar_t* simplified,
+                      const wchar_t* traditional,
+                      const wchar_t* english) {
+  const LANGID language = GetThreadUILanguage();
+  if (PRIMARYLANGID(language) != LANG_CHINESE)
+    return english;
+  const WORD sublanguage = SUBLANGID(language);
+  return sublanguage == SUBLANG_CHINESE_SIMPLIFIED ||
+                 sublanguage == SUBLANG_CHINESE_SINGAPORE
+             ? simplified
+             : traditional;
+}
+
+struct UpdateSelection {
+  bool model = false;
+};
+
+class PackageUpdateDialog : public CDialogImpl<PackageUpdateDialog> {
+ public:
+  enum { IDD = IDD_PACKAGE_UPDATES };
+
+  explicit PackageUpdateDialog(const WanxiangUpdateManager::Result& result)
+      : result_(result) {}
+
+  BEGIN_MSG_MAP(PackageUpdateDialog)
+  MESSAGE_HANDLER(WM_INITDIALOG, OnInitDialog)
+  COMMAND_HANDLER(IDC_UPDATE_MODEL, BN_CLICKED, OnSelectionChanged)
+  COMMAND_ID_HANDLER(IDOK, OnOK)
+  COMMAND_ID_HANDLER(IDCANCEL, OnCancel)
+  END_MSG_MAP()
+
+  const UpdateSelection& selection() const { return selection_; }
+
+ private:
+  void MoveControl(int id, int left, int top, int width, int height) {
+    RECT rectangle = {left, top, left + width, top + height};
+    ::MapDialogRect(m_hWnd, &rectangle);
+    ::SetWindowPos(GetDlgItem(id), nullptr, rectangle.left, rectangle.top,
+                   rectangle.right - rectangle.left,
+                   rectangle.bottom - rectangle.top,
+                   SWP_NOZORDER | SWP_NOACTIVATE);
+  }
+
+  void ResizeClient(int width, int height) {
+    RECT window = {};
+    RECT client = {};
+    RECT desired = {0, 0, width, height};
+    ::GetWindowRect(m_hWnd, &window);
+    ::GetClientRect(m_hWnd, &client);
+    ::MapDialogRect(m_hWnd, &desired);
+    ::SetWindowPos(
+        m_hWnd, nullptr, 0, 0,
+        desired.right + (window.right - window.left) - client.right,
+        desired.bottom + (window.bottom - window.top) - client.bottom,
+        SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+  }
+
+  LRESULT OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
+    HWND scheme = GetDlgItem(IDC_UPDATE_SCHEME);
+    HWND model = GetDlgItem(IDC_UPDATE_MODEL);
+    ::ShowWindow(GetDlgItem(IDC_UPDATE_SCHEME_GROUP),
+                 result_.scheme_update_available ? SW_SHOW : SW_HIDE);
+    ::ShowWindow(GetDlgItem(IDC_UPDATE_MODEL_GROUP),
+                 result_.model_update_available ? SW_SHOW : SW_HIDE);
+    ::ShowWindow(scheme, result_.scheme_update_available ? SW_SHOW : SW_HIDE);
+    ::ShowWindow(model, result_.model_update_available ? SW_SHOW : SW_HIDE);
+    if (!result_.scheme_update_available && result_.model_update_available) {
+      MoveControl(IDC_UPDATE_MODEL_GROUP, 14, 28, 372, 36);
+      MoveControl(IDC_UPDATE_MODEL, 24, 40, 350, 16);
+      MoveControl(IDOK, 218, 72, 92, 18);
+      MoveControl(IDCANCEL, 316, 72, 72, 18);
+      ::ShowWindow(GetDlgItem(IDC_UPDATE_SUMMARY), SW_HIDE);
+      ResizeClient(400, 102);
+    } else if (result_.scheme_update_available &&
+               !result_.model_update_available) {
+      MoveControl(IDC_UPDATE_SUMMARY, 18, 70, 364, 16);
+      MoveControl(IDCANCEL, 316, 92, 72, 18);
+      ::ShowWindow(GetDlgItem(IDOK), SW_HIDE);
+      ::SetWindowTextW(GetDlgItem(IDCANCEL),
+                       Localize(L"关闭", L"關閉", L"Close").c_str());
+      ResizeClient(400, 122);
+    }
+    if (result_.scheme_update_available) {
+      std::wstring label = Localize(
+          L"万象拼音 Lite（需由包含新版方案的安装包更新）",
+          L"萬象拼音 Lite（需由包含新版方案的安裝程式更新）",
+          L"Wanxiang Lite (update with a Weasel installer that includes it)");
+      ::SetWindowTextW(scheme, label.c_str());
+      ::EnableWindow(scheme, FALSE);
+    }
+    if (result_.model_update_available) {
+      wchar_t size[128] = {};
+      swprintf_s(size,
+                 Localize(L"万象简体 LTS 语言模型 · %.1f MB · CNB",
+                          L"萬象簡體 LTS 語言模型 · %.1f MB · CNB",
+                          L"Wanxiang Simplified LTS model · %.1f MB · CNB")
+                     .c_str(),
+                 result_.latest_model_size / 1000000.0);
+      ::SetWindowTextW(model, size);
+      ::SendMessageW(model, BM_SETCHECK, BST_CHECKED, 0);
+    }
+    ::SetDlgItemTextW(
+        m_hWnd, IDC_UPDATE_SUMMARY,
+        result_.scheme_update_available
+            ? Localize(L"方案文件会保留当前安全版本；语言模型可在此直接更新。",
+                       L"方案檔案會保留目前安全版本；語言模型可在此直接更新。",
+                       L"Schema files stay on the current safe version. The "
+                       L"model can be updated here.")
+                  .c_str()
+            : L"");
+    UpdateButton();
+    CenterWindow(GetParent());
+    return TRUE;
+  }
+
+  LRESULT OnSelectionChanged(WORD, WORD, HWND, BOOL&) {
+    UpdateButton();
+    return 0;
+  }
+
+  void UpdateButton() {
+    const bool selected =
+        ::SendDlgItemMessageW(m_hWnd, IDC_UPDATE_MODEL, BM_GETCHECK, 0, 0) ==
+        BST_CHECKED;
+    ::EnableWindow(GetDlgItem(IDOK), selected);
+    ::SetWindowTextW(
+        GetDlgItem(IDOK),
+        Localize(selected ? L"更新所选（1）" : L"更新所选",
+                 selected ? L"更新所選（1）" : L"更新所選",
+                 selected ? L"Update selected (1)" : L"Update selected")
+            .c_str());
+  }
+
+  LRESULT OnOK(WORD, WORD, HWND, BOOL&) {
+    selection_.model = ::SendDlgItemMessageW(m_hWnd, IDC_UPDATE_MODEL,
+                                             BM_GETCHECK, 0, 0) == BST_CHECKED;
+    if (selection_.model)
+      EndDialog(IDOK);
+    return 0;
+  }
+
+  LRESULT OnCancel(WORD, WORD, HWND, BOOL&) {
+    EndDialog(IDCANCEL);
+    return 0;
+  }
+
+  WanxiangUpdateManager::Result result_;
+  UpdateSelection selection_;
+};
 }  // namespace
 
 SwitcherSettingsDialog::SwitcherSettingsDialog(RimeSwitcherSettings* settings)
@@ -117,33 +266,7 @@ SwitcherSettingsDialog::~SwitcherSettingsDialog() {}
 std::wstring SwitcherSettingsDialog::LocalText(const wchar_t* simplified,
                                                const wchar_t* traditional,
                                                const wchar_t* english) const {
-  const LANGID language = GetThreadUILanguage();
-  if (PRIMARYLANGID(language) != LANG_CHINESE)
-    return english;
-  const WORD sublanguage = SUBLANGID(language);
-  return sublanguage == SUBLANG_CHINESE_SIMPLIFIED ||
-                 sublanguage == SUBLANG_CHINESE_SINGAPORE
-             ? simplified
-             : traditional;
-}
-
-std::wstring SwitcherSettingsDialog::FormatSwitcherHotkeys(
-    const std::wstring& hotkeys) const {
-  // Keep the scheme's configured hotkeys intact. This page only presents the
-  // two shortcuts that users can rely on here.
-  std::vector<std::wstring> labels;
-  if (hotkeys.find(L"Control+grave") != std::wstring::npos)
-    labels.push_back(LocalText(L"Ctrl + `（Esc 下方）", L"Ctrl + `（Esc 下方）",
-                               L"Ctrl + ` (below Esc)"));
-  if (hotkeys.find(L"F4") != std::wstring::npos)
-    labels.push_back(L"F4");
-  std::wstring result;
-  for (const auto& label : labels) {
-    if (!result.empty())
-      result += LocalText(L"    或    ", L"    或    ", L"    or    ");
-    result += label;
-  }
-  return result;
+  return Localize(simplified, traditional, english);
 }
 
 bool SwitcherSettingsDialog::LoadInputMode(std::wstring* mode) const {
@@ -296,20 +419,16 @@ bool SwitcherSettingsDialog::SaveUpdateFrequency(const std::string& schema_id,
 std::wstring SwitcherSettingsDialog::UpdateFrequencyText(int frequency) const {
   switch (frequency) {
     case kUpdateSmart:
-      return LocalText(L"智能", L"智慧", L"Smart");
+      return LocalText(L"智能更新", L"智慧更新", L"Smart updates");
     case kUpdateDaily:
-      return LocalText(L"每天", L"每天", L"Daily");
+      return LocalText(L"每天更新", L"每天更新", L"Daily updates");
     case kUpdateMonthly:
-      return LocalText(L"每月", L"每月", L"Monthly");
+      return LocalText(L"每月更新", L"每月更新", L"Monthly updates");
     case kUpdateDisabled:
-      return LocalText(L"关闭", L"關閉", L"Off");
+      return LocalText(L"关闭更新", L"關閉更新", L"Updates off");
     default:
-      return LocalText(L"每周", L"每週", L"Weekly");
+      return LocalText(L"每周更新", L"每週更新", L"Weekly updates");
   }
-}
-
-void SwitcherSettingsDialog::SetLastUpdateCheckText(const std::wstring& text) {
-  ::SetDlgItemTextW(m_hWnd, IDC_UPDATE_STATUS, text.c_str());
 }
 
 bool SwitcherSettingsDialog::ConfirmDiscardChanges() {
@@ -371,9 +490,6 @@ void SwitcherSettingsDialog::Populate() {
   for (size_t i = 0; i < available.size; ++i)
     append_schema(available.list[i]);
 
-  if (const char* hotkeys = api_->get_hotkeys(settings_))
-    hotkeys_.SetWindowTextW(FormatSwitcherHotkeys(u8tow(hotkeys)).c_str());
-
   RebuildList();
   loaded_ = true;
   modified_ = false;
@@ -398,12 +514,12 @@ void SwitcherSettingsDialog::RebuildList() {
   } else {
     selected_schema_ = static_cast<size_t>(-1);
     ::SetDlgItemTextW(m_hWnd, IDC_SCHEMA_DETAIL_NAME, L"");
+    ::SetDlgItemTextW(m_hWnd, IDC_SCHEMA_DETAIL_VERSION, L"");
     ::SetDlgItemTextW(m_hWnd, IDC_SCHEMA_DESCRIPTION, L"");
-    ::SetDlgItemTextW(m_hWnd, IDC_SCHEMA_DETAIL_STATUS, L"");
     ::SetDlgItemTextW(m_hWnd, IDC_SCHEMA_PROJECT_LINKS, L"");
+    ::SetDlgItemTextW(m_hWnd, IDC_SCHEMA_AUTHOR, L"");
     ::ShowWindow(GetDlgItem(IDC_SCHEMA_UPDATE_SETTINGS), SW_HIDE);
     ::ShowWindow(GetDlgItem(IDC_SCHEMA_RESTORE_PACKAGE), SW_HIDE);
-    ::ShowWindow(GetDlgItem(IDC_INPUT_MODE_LABEL), SW_HIDE);
     ::ShowWindow(GetDlgItem(IDC_INPUT_MODE), SW_HIDE);
     ShowModelControls(false);
   }
@@ -415,47 +531,94 @@ void SwitcherSettingsDialog::ShowDetails(size_t index) {
   selected_schema_ = index;
   const auto& schema = schemas_[index];
   const bool wanxiang = schema.id == "wanxiang_lite";
-  std::wstring title = schema.name;
-  if (wanxiang)
-    title += L"  ·  " + std::wstring(WanxiangUpdateManager::kInstalledVersion);
-  ::SetDlgItemTextW(m_hWnd, IDC_SCHEMA_DETAIL_NAME, title.c_str());
-  ::SetDlgItemTextW(m_hWnd, IDC_SCHEMA_DETAIL_STATUS,
-                    LocalText(schema.enabled ? L"已启用" : L"未启用",
-                              schema.enabled ? L"已啟用" : L"未啟用",
-                              schema.enabled ? L"Enabled" : L"Not enabled")
-                        .c_str());
+  ::SetDlgItemTextW(m_hWnd, IDC_SCHEMA_DETAIL_NAME, schema.name.c_str());
+  ::SetDlgItemTextW(m_hWnd, IDC_SCHEMA_DETAIL_VERSION,
+                    wanxiang ? WanxiangUpdateManager::kInstalledVersion : L"");
 
   std::string details;
   if (const char* description = api_->get_schema_description(schema.info))
     details += description;
-  if (details.empty()) {
-    if (const char* author = api_->get_schema_author(schema.info))
-      details = author;
-  }
   description_.SetWindowTextW(u8tow(details).c_str());
 
-  ::SetDlgItemTextW(
-      m_hWnd, IDC_SCHEMA_PROJECT_LINKS,
-      wanxiang
-          ? L"<a href=\"https://github.com/amzxyz/rime-wanxiang\">GitHub</a>"
-            L"  ·  <a href=\"https://cnb.cool/amzxyz/rime-wanxiang\">CNB "
-            L"国内源</a>"
-          : L"");
+  std::wstring links;
+  if (wanxiang) {
+    links =
+        L"<a href=\"https://github.com/amzxyz/rime-wanxiang\">GitHub</a>"
+        L"  ·  <a href=\"https://cnb.cool/amzxyz/rime-wanxiang\">" +
+        LocalText(L"CNB 国内源", L"CNB 國內來源", L"CNB mirror") + L"</a>";
+  }
+  std::wstring author;
+  if (const char* value = api_->get_schema_author(schema.info)) {
+    author = u8tow(value);
+    for (auto& character : author) {
+      if (character == L'\r' || character == L'\n' || character == L'\t')
+        character = L' ';
+    }
+    if (!author.empty())
+      author = LocalText(L"作者：", L"作者：", L"By: ") + author;
+  }
+  ::SetDlgItemTextW(m_hWnd, IDC_SCHEMA_PROJECT_LINKS, links.c_str());
+  ::SetDlgItemTextW(m_hWnd, IDC_SCHEMA_AUTHOR, author.c_str());
+  RECT author_rect =
+      links.empty() ? RECT{264, 260, 470, 272} : RECT{366, 260, 468, 272};
+  ::MapDialogRect(m_hWnd, &author_rect);
+  ::SetWindowPos(GetDlgItem(IDC_SCHEMA_AUTHOR), nullptr, author_rect.left,
+                 author_rect.top, author_rect.right - author_rect.left,
+                 author_rect.bottom - author_rect.top,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
   ::ShowWindow(GetDlgItem(IDC_SCHEMA_PROJECT_LINKS),
-               wanxiang ? SW_SHOW : SW_HIDE);
+               links.empty() ? SW_HIDE : SW_SHOW);
+  ::ShowWindow(GetDlgItem(IDC_SCHEMA_AUTHOR),
+               author.empty() ? SW_HIDE : SW_SHOW);
   ::ShowWindow(GetDlgItem(IDC_SCHEMA_UPDATE_SETTINGS),
                wanxiang ? SW_SHOW : SW_HIDE);
   if (wanxiang) {
-    const auto label = LocalText(L"更新设置：", L"更新設定：", L"Update: ") +
-                       UpdateFrequencyText(LoadUpdateFrequency(schema.id));
-    ::SetDlgItemTextW(m_hWnd, IDC_SCHEMA_UPDATE_SETTINGS, label.c_str());
+    if (!update_frequency_modified_)
+      selected_update_frequency_ = LoadUpdateFrequency(schema.id);
+    update_frequency_.SetCurSel(selected_update_frequency_);
   }
   ::ShowWindow(GetDlgItem(IDC_SCHEMA_RESTORE_PACKAGE), SW_HIDE);
-  ::ShowWindow(GetDlgItem(IDC_INPUT_MODE_LABEL), wanxiang ? SW_SHOW : SW_HIDE);
   ::ShowWindow(GetDlgItem(IDC_INPUT_MODE), wanxiang ? SW_SHOW : SW_HIDE);
+  if (wanxiang)
+    AdjustInputModeWidth();
   ShowModelControls(wanxiang);
   if (wanxiang)
     UpdateModelUi();
+}
+
+void SwitcherSettingsDialog::AdjustInputModeWidth() {
+  if (!input_mode_.IsWindow())
+    return;
+  CRect current;
+  input_mode_.GetWindowRect(&current);
+  ::MapWindowPoints(HWND_DESKTOP, m_hWnd, reinterpret_cast<POINT*>(&current),
+                    2);
+  CRect available;
+  ::GetWindowRect(GetDlgItem(IDC_SCHEMA_DESCRIPTION), &available);
+  ::MapWindowPoints(HWND_DESKTOP, m_hWnd, reinterpret_cast<POINT*>(&available),
+                    2);
+  HDC dc = ::GetDC(input_mode_);
+  HFONT font =
+      reinterpret_cast<HFONT>(::SendMessageW(input_mode_, WM_GETFONT, 0, 0));
+  HGDIOBJ previous = font ? ::SelectObject(dc, font) : nullptr;
+  int widest = 0;
+  for (int index = 0; index < input_mode_.GetCount(); ++index) {
+    const int length = input_mode_.GetLBTextLen(index);
+    std::wstring value(length + 1, L'\0');
+    input_mode_.GetLBText(index, value.data());
+    SIZE extent = {};
+    ::GetTextExtentPoint32W(dc, value.c_str(), length, &extent);
+    widest = (std::max)(widest, extent.cx);
+  }
+  if (previous)
+    ::SelectObject(dc, previous);
+  ::ReleaseDC(input_mode_, dc);
+  const int desired = widest + ::GetSystemMetrics(SM_CXVSCROLL) + 24;
+  const int width = (std::min)((std::max)(current.Width(), desired),
+                               current.right - available.left);
+  ::SetWindowPos(input_mode_, nullptr, current.right - width, current.top,
+                 width, current.Height(), SWP_NOZORDER | SWP_NOACTIVATE);
+  input_mode_.SetDroppedWidth((std::max)(width, desired));
 }
 
 void SwitcherSettingsDialog::ShowModelControls(bool show) {
@@ -534,40 +697,53 @@ void SwitcherSettingsDialog::UpdateModelUi() {
     if (previous != text)
       ::SetWindowTextW(control, text.c_str());
   };
+  const auto target_size = latest_model_size_
+                               ? latest_model_size_
+                               : WanxiangModelManager::kExpectedSize;
   wchar_t size[96] = {};
-  if (model_update_available_ && latest_model_size_) {
-    swprintf_s(size,
-               LocalText(L"新版 %.1f MiB · CNB", L"新版 %.1f MiB · CNB",
-                         L"New version %.1f MiB · CNB")
-                   .c_str(),
-               latest_model_size_ / 1048576.0);
-  } else {
-    swprintf_s(size, L"%.1f MiB · CNB",
-               WanxiangModelManager::kExpectedSize / 1048576.0);
-  }
+  swprintf_s(size, L"%.1f MB · CNB", target_size / 1000000.0);
   set_text(IDC_MODEL_SOURCE, size);
   const bool active = state == State::Downloading ||
                       state == State::WaitingRetry || state == State::Paused ||
                       state == State::Transferred || state == State::Error;
+  model_status_active_ = active || state == State::RestartRequired ||
+                         model_install_failed_ ||
+                         (state == State::Modified && !model_update_available_);
   ::ShowWindow(GetDlgItem(IDC_MODEL_PROGRESS), active ? SW_SHOW : SW_HIDE);
   ::ShowWindow(GetDlgItem(IDC_MODEL_PROGRESS_TEXT), active ? SW_SHOW : SW_HIDE);
   if (active) {
-    const auto total =
-        progress.total ? progress.total : WanxiangModelManager::kExpectedSize;
+    const auto total = progress.total ? progress.total : target_size;
     const int value = static_cast<int>(std::min<unsigned long long>(
         1000, progress.transferred * 1000 / total));
     if (model_progress_.GetPos() != value)
       model_progress_.SetPos(value);
-    wchar_t label[96] = {};
-    swprintf_s(label, L"%.1f / %.1f MiB · %d%%",
-               progress.transferred / 1048576.0, total / 1048576.0, value / 10);
+    wchar_t label[32] = {};
+    swprintf_s(label, L"%d%%", value / 10);
     set_text(IDC_MODEL_PROGRESS_TEXT, label);
   }
   std::wstring note, primary, secondary;
   bool enabled = true;
+  model_button_accent_ = false;
+  if (state != State::Downloading) {
+    last_progress_tick_ = 0;
+    last_progress_bytes_ = progress.transferred;
+  }
   switch (state) {
     case State::Downloading:
       note = LocalText(L"正在下载…", L"正在下載…", L"Downloading…");
+      if (last_progress_tick_ && progress.transferred >= last_progress_bytes_) {
+        const ULONGLONG now = ::GetTickCount64();
+        const ULONGLONG elapsed = now - last_progress_tick_;
+        if (elapsed) {
+          wchar_t speed[48] = {};
+          swprintf_s(speed, L"  %.1f MB/s",
+                     (progress.transferred - last_progress_bytes_) * 1000.0 /
+                         elapsed / 1000000.0);
+          note += speed;
+        }
+      }
+      last_progress_tick_ = ::GetTickCount64();
+      last_progress_bytes_ = progress.transferred;
       primary = LocalText(L"暂停下载", L"暫停下載", L"Pause");
       break;
     case State::WaitingRetry:
@@ -607,16 +783,15 @@ void SwitcherSettingsDialog::UpdateModelUi() {
       enabled = false;
       break;
     case State::Installed:
-      note = LocalText(L"已安装", L"已安裝", L"Installed");
       secondary = LocalText(L"移除模型", L"移除模型", L"Remove model");
-      enabled = false;
       break;
     case State::Modified:
-      note = LocalText(L"现有模型与此版本不同，将保留原文件。",
-                       L"現有模型與此版本不同，將保留原檔案。",
-                       L"The existing model differs and will be preserved.");
+      note = model_update_available_
+                 ? L""
+                 : LocalText(L"现有模型不是此处管理的版本。",
+                             L"現有模型不是此處管理的版本。",
+                             L"The existing model is not managed here.");
       secondary = LocalText(L"移除模型", L"移除模型", L"Remove model");
-      enabled = false;
       break;
     default:
       note = LocalText(L"下载完成后自动安装并重新部署。",
@@ -625,22 +800,11 @@ void SwitcherSettingsDialog::UpdateModelUi() {
       primary = LocalText(L"下载模型", L"下載模型", L"Download model");
       break;
   }
-  const bool starts_or_resumes_download =
-      state == State::NotInstalled || state == State::WaitingRetry ||
-      state == State::Paused || state == State::RestartRequired ||
-      state == State::Error;
-  if (model_update_available_ && starts_or_resumes_download) {
-    note = LocalText(
-        L"官方模型已更新，请先更新小狼毫后再下载。",
-        L"官方模型已更新，請先更新小狼毫後再下載。",
-        L"The official model has changed. Update Weasel before downloading.");
-    primary.clear();
-    enabled = false;
-  } else if (model_update_available_ && state == State::Installed) {
-    note = LocalText(L"官方模型已有更新；当前模型可继续使用。",
-                     L"官方模型已有更新；目前模型可繼續使用。",
-                     L"A newer official model is available; the current model "
-                     L"remains usable.");
+  if (model_update_available_ &&
+      (state == State::Installed || state == State::Modified)) {
+    primary = LocalText(L"更新模型", L"更新模型", L"Update model");
+    enabled = true;
+    model_button_accent_ = true;
   }
   if ((active && state != State::Transferred) ||
       state == State::RestartRequired)
@@ -654,21 +818,77 @@ void SwitcherSettingsDialog::UpdateModelUi() {
     primary = LocalText(L"重试安装", L"重試安裝", L"Retry install");
     enabled = true;
   }
+  if ((state == State::Installed || state == State::Modified) && note.empty()) {
+    SYSTEMTIME installed = {};
+    if (WanxiangModelManager::LoadLastInstalledTime(&installed)) {
+      wchar_t date[64] = {};
+      swprintf_s(
+          date,
+          LocalText(L"上次更新：%04u-%02u-%02u", L"上次更新：%04u-%02u-%02u",
+                    L"Last updated: %04u-%02u-%02u")
+              .c_str(),
+          installed.wYear, installed.wMonth, installed.wDay);
+      note = date;
+    }
+  }
   set_text(IDC_MODEL_NOTE, note);
   set_text(IDC_MODEL_DOWNLOAD, primary);
   set_text(IDC_MODEL_SECONDARY, secondary);
   ::EnableWindow(GetDlgItem(IDC_MODEL_DOWNLOAD), enabled);
+  const CRect& primary_rect =
+      active ? model_active_primary_rect_ : model_primary_rect_;
+  ::SetWindowPos(GetDlgItem(IDC_MODEL_DOWNLOAD), nullptr, primary_rect.left,
+                 primary_rect.top, primary_rect.Width(), primary_rect.Height(),
+                 SWP_NOZORDER | SWP_NOACTIVATE);
   ::ShowWindow(GetDlgItem(IDC_MODEL_DOWNLOAD),
                primary.empty() ? SW_HIDE : SW_SHOW);
-  const CRect& secondary_rect =
-      (state == State::Installed || state == State::Modified)
-          ? model_primary_rect_
-          : model_secondary_rect_;
+  const bool use_primary_slot = primary.empty() && (state == State::Installed ||
+                                                    state == State::Modified);
+  const CRect& secondary_rect = active ? model_active_secondary_rect_
+                                : use_primary_slot ? model_primary_rect_
+                                                   : model_secondary_rect_;
   ::SetWindowPos(GetDlgItem(IDC_MODEL_SECONDARY), nullptr, secondary_rect.left,
                  secondary_rect.top, secondary_rect.Width(),
                  secondary_rect.Height(), SWP_NOZORDER | SWP_NOACTIVATE);
   ::ShowWindow(GetDlgItem(IDC_MODEL_SECONDARY),
                secondary.empty() ? SW_HIDE : SW_SHOW);
+  ::InvalidateRect(GetDlgItem(IDC_MODEL_DOWNLOAD), nullptr, TRUE);
+}
+
+LRESULT SwitcherSettingsDialog::OnCtlColorStatic(UINT,
+                                                 WPARAM device_context,
+                                                 LPARAM control,
+                                                 BOOL& handled) {
+  const int id = ::GetDlgCtrlID(reinterpret_cast<HWND>(control));
+  if (id == IDC_SCHEMA_DETAIL_VERSION || id == IDC_SCHEMA_AUTHOR ||
+      id == IDC_MODEL_DESCRIPTION || id == IDC_MODEL_SOURCE ||
+      (id == IDC_MODEL_NOTE && !model_status_active_)) {
+    ::SetTextColor(reinterpret_cast<HDC>(device_context),
+                   ::GetSysColor(COLOR_GRAYTEXT));
+    ::SetBkMode(reinterpret_cast<HDC>(device_context), TRANSPARENT);
+    return reinterpret_cast<LRESULT>(::GetSysColorBrush(COLOR_3DFACE));
+  }
+  handled = FALSE;
+  return 0;
+}
+
+LRESULT SwitcherSettingsDialog::OnButtonCustomDraw(int control_id,
+                                                   LPNMHDR notification,
+                                                   BOOL& handled) {
+  auto* draw = reinterpret_cast<LPNMCUSTOMDRAW>(notification);
+  if (!draw || draw->dwDrawStage != CDDS_PREPAINT) {
+    handled = FALSE;
+    return CDRF_DODEFAULT;
+  }
+  const bool accent =
+      (control_id == IDC_CHECK_SCHEME_UPDATES && check_button_accent_) ||
+      (control_id == IDC_MODEL_DOWNLOAD && model_button_accent_);
+  if (!accent) {
+    handled = FALSE;
+    return CDRF_DODEFAULT;
+  }
+  ::SetTextColor(draw->hdc, RGB(16, 124, 65));
+  return CDRF_NEWFONT;
 }
 void SwitcherSettingsDialog::FinishModelDownload() {
   model_install_failed_ = true;
@@ -741,6 +961,10 @@ void SwitcherSettingsDialog::FinishModelDownload() {
       return;
     }
     model_install_failed_ = false;
+    model_update_available_ = false;
+    WanxiangUpdateManager::StoreAvailableCount(scheme_update_available_ ? 1u
+                                                                        : 0u);
+    UpdateCheckButton();
     ::MessageBoxW(
         m_hWnd,
         LocalText(
@@ -768,11 +992,10 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   schema_list_.SetColumnWidth(0, rect.Width() - 24);
 
   description_.Attach(GetDlgItem(IDC_SCHEMA_DESCRIPTION));
-  hotkeys_.Attach(GetDlgItem(IDC_HOTKEYS));
-  hotkeys_.EnableWindow(FALSE);
   model_progress_.Attach(GetDlgItem(IDC_MODEL_PROGRESS));
   model_progress_.SetRange32(0, 1000);
   input_mode_.Attach(GetDlgItem(IDC_INPUT_MODE));
+  update_frequency_.Attach(GetDlgItem(IDC_SCHEMA_UPDATE_SETTINGS));
   loading_input_mode_ = true;
   if (!LoadInputMode(&selected_input_mode_))
     selected_input_mode_ = L"全拼";
@@ -791,6 +1014,10 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
       kInputModes[static_cast<size_t>(input_mode_.GetItemData(selected_mode))]
           .value;
   loading_input_mode_ = false;
+  for (int frequency = kUpdateSmart; frequency <= kUpdateDisabled;
+       ++frequency) {
+    update_frequency_.AddString(UpdateFrequencyText(frequency).c_str());
+  }
 
   auto capture_control_rect = [&](int id, CRect* target) {
     ::GetWindowRect(GetDlgItem(id), target);
@@ -799,6 +1026,12 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   };
   capture_control_rect(IDC_MODEL_SECONDARY, &model_secondary_rect_);
   capture_control_rect(IDC_MODEL_DOWNLOAD, &model_primary_rect_);
+  RECT active_secondary = {444, 218, 514, 236};
+  RECT active_primary = {520, 218, 590, 236};
+  ::MapDialogRect(m_hWnd, &active_secondary);
+  ::MapDialogRect(m_hWnd, &active_primary);
+  model_active_secondary_rect_ = active_secondary;
+  model_active_primary_rect_ = active_primary;
 
   ::ShowWindow(GetDlgItem(IDC_SCHEMA_UPDATE_SETTINGS), SW_HIDE);
   // Package importing remains hidden until conflict-safe transactional install
@@ -807,26 +1040,16 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   ::ShowWindow(GetDlgItem(IDC_GET_SCHEMATA), SW_HIDE);
   ::ShowWindow(GetDlgItem(IDC_ADD_SCHEME_URL), SW_HIDE);
   ::ShowWindow(GetDlgItem(IDC_IMPORT_SCHEME), SW_HIDE);
-  std::wstring last_release;
-  SYSTEMTIME last_checked = {};
-  if (WanxiangUpdateManager::LoadLastCheck(&last_release, &last_checked)) {
-    wchar_t checked[64] = {};
-    swprintf_s(checked, L"%04u-%02u-%02u %02u:%02u", last_checked.wYear,
-               last_checked.wMonth, last_checked.wDay, last_checked.wHour,
-               last_checked.wMinute);
-    SetLastUpdateCheckText(
-        LocalText(L"上次检查：", L"上次檢查：", L"Last checked: ") + checked);
-  } else {
-    SetLastUpdateCheckText(LocalText(L"上次检查：尚未检查",
-                                     L"上次檢查：尚未檢查",
-                                     L"Last checked: not yet"));
-  }
-  std::wstring latest_model_sha256;
-  if (WanxiangUpdateManager::LoadLastModelMetadata(&latest_model_sha256,
-                                                   &latest_model_size_)) {
-    model_update_available_ =
-        latest_model_sha256 != u8tow(WanxiangModelManager::kExpectedSha256) ||
-        latest_model_size_ != WanxiangModelManager::kExpectedSize;
+  WanxiangUpdateManager::Result cached;
+  if (WanxiangUpdateManager::LoadCachedResult(&cached)) {
+    scheme_update_available_ = cached.scheme_update_available;
+    model_update_available_ = cached.model_update_available;
+    latest_model_sha256_ = cached.latest_model_sha256;
+    latest_model_size_ = cached.latest_model_size;
+    if (!latest_model_sha256_.empty() && latest_model_size_)
+      model_manager_.ConfigureTarget(latest_model_sha256_, latest_model_size_);
+    WanxiangUpdateManager::StoreAvailableCount(static_cast<unsigned int>(
+        scheme_update_available_ + model_update_available_));
   }
 
   Populate();
@@ -834,16 +1057,27 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   const auto user_folder = WeaselUserDataPath().wstring();
   ::SetDlgItemTextW(
       m_hWnd, IDC_USER_DATA_FOLDER,
-      (L"<a id=\"open\">" +
-       LocalText(L"用户文件夹：", L"使用者資料夾：", L"User folder: ") +
-       EscapeLinkText(user_folder) + L"</a>")
-          .c_str());
-  ::SetWindowTextW(
-      GetDlgItem(IDC_HOTKEY_HINT),
-      LocalText(L"` 是 Esc 下方、数字 1 左侧的反引号键。",
-                L"` 是 Esc 下方、數字 1 左側的反引號鍵。",
-                L"` is the grave-accent key below Esc and left of 1.")
-          .c_str());
+      (L"<a id=\"open\">" + EscapeLinkText(user_folder) + L"</a>").c_str());
+  if (const char* hotkeys = api_->get_hotkeys(settings_)) {
+    const auto configured = u8tow(hotkeys);
+    const bool grave = configured.find(L"Control+grave") != std::wstring::npos;
+    const bool f4 = configured.find(L"F4") != std::wstring::npos;
+    ::ShowWindow(GetDlgItem(IDC_HOTKEYS), grave ? SW_SHOW : SW_HIDE);
+    ::ShowWindow(GetDlgItem(IDC_HOTKEY_GRAVE), grave ? SW_SHOW : SW_HIDE);
+    ::ShowWindow(GetDlgItem(IDC_HOTKEY_OR), grave && f4 ? SW_SHOW : SW_HIDE);
+    ::ShowWindow(GetDlgItem(IDC_HOTKEY_F4), f4 ? SW_SHOW : SW_HIDE);
+  }
+  tooltip_.Create(m_hWnd);
+  TOOLINFOW tool = {sizeof(tool)};
+  tool.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+  tool.hwnd = m_hWnd;
+  tool.uId = reinterpret_cast<UINT_PTR>(GetDlgItem(IDC_HOTKEY_GRAVE));
+  tooltip_text_ = LocalText(L"反引号键位于 Esc 下方、数字 1 左侧。",
+                            L"反引號鍵位於 Esc 下方、數字 1 左側。",
+                            L"The grave key is below Esc and left of 1.");
+  tool.lpszText = const_cast<wchar_t*>(tooltip_text_.c_str());
+  tooltip_.AddTool(&tool);
+  UpdateCheckButton();
   SetTimer(kModelTimer, 500);
 
   CenterWindow();
@@ -888,18 +1122,20 @@ LRESULT SwitcherSettingsDialog::OnTimer(UINT, WPARAM timer, LPARAM, BOOL&) {
 }
 
 LRESULT SwitcherSettingsDialog::OnCheckUpdates(WORD, WORD, HWND, BOOL&) {
+  if (scheme_update_available_ || model_update_available_) {
+    ShowUpdateList();
+    return 0;
+  }
+  if (update_check_)
+    return 0;
   HWND button = GetDlgItem(IDC_CHECK_SCHEME_UPDATES);
   ::EnableWindow(button, FALSE);
   ::SetWindowTextW(button,
                    LocalText(L"正在检查…", L"正在檢查…", L"Checking…").c_str());
-  SetLastUpdateCheckText(LocalText(L"正在检查输入方案和语言模型…",
-                                   L"正在檢查輸入方案和語言模型…",
-                                   L"Checking schema and model updates…"));
+  check_button_accent_ = false;
   RedrawWindow(nullptr, nullptr,
                RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
 
-  if (update_check_)
-    return 0;
   update_check_ = std::make_shared<UpdateCheck>();
   std::thread([check = update_check_]() {
     try {
@@ -917,95 +1153,97 @@ void SwitcherSettingsDialog::FinishUpdateCheck() {
     return;
   const auto result = update_check_->result;
   update_check_.reset();
-  HWND button = GetDlgItem(IDC_CHECK_SCHEME_UPDATES);
   if (!result.success) {
-    SetLastUpdateCheckText(LocalText(L"检查失败，请稍后重试",
-                                     L"檢查失敗，請稍後重試",
-                                     L"Check failed. Try again later."));
     LOG(ERROR) << "Unable to check Wanxiang releases: " << wtou8(result.error);
-  } else if (!result.update_available) {
-    SetLastUpdateCheckText(
-        LocalText(L"刚刚检查 · 输入方案和语言模型均为最新版本",
-                  L"剛剛檢查 · 輸入方案和語言模型均為最新版本",
-                  L"Checked just now · schema and model are current"));
-  } else if (result.scheme_update_available && result.model_update_available) {
-    SetLastUpdateCheckText(
-        LocalText(L"刚刚检查 · 输入方案和语言模型均有更新",
-                  L"剛剛檢查 · 輸入方案和語言模型均有更新",
-                  L"Checked just now · schema and model updates available"));
-  } else if (result.scheme_update_available) {
-    SetLastUpdateCheckText(
-        LocalText(L"刚刚检查 · 万象拼音 Lite 有可用更新",
-                  L"剛剛檢查 · 萬象拼音 Lite 有可用更新",
-                  L"Checked just now · Wanxiang Lite update available"));
+    ::MessageBoxW(
+        m_hWnd,
+        LocalText(L"暂时无法检查更新，请稍后重试。",
+                  L"暫時無法檢查更新，請稍後重試。",
+                  L"Updates could not be checked. Try again later.")
+            .c_str(),
+        LocalText(L"检查更新", L"檢查更新", L"Check for updates").c_str(),
+        MB_OK | MB_ICONINFORMATION);
   } else {
-    SetLastUpdateCheckText(LocalText(
-        L"刚刚检查 · 语言模型有可用更新", L"剛剛檢查 · 語言模型有可用更新",
-        L"Checked just now · language model update available"));
-  }
-  if (result.success) {
+    scheme_update_available_ = result.scheme_update_available;
     model_update_available_ = result.model_update_available;
+    latest_model_sha256_ = result.latest_model_sha256;
     latest_model_size_ = result.latest_model_size;
+    if (!latest_model_sha256_.empty() && latest_model_size_)
+      model_manager_.ConfigureTarget(latest_model_sha256_, latest_model_size_);
     if (selected_schema_ < schemas_.size() &&
         schemas_[selected_schema_].id == "wanxiang_lite") {
       UpdateModelUi();
     }
   }
-  ::SetWindowTextW(
-      button,
-      LocalText(L"立即检查更新", L"立即檢查更新", L"Check now").c_str());
-  ::EnableWindow(button, TRUE);
+  UpdateCheckButton();
   return;
 }
 
-LRESULT SwitcherSettingsDialog::OnUpdateSettings(WORD,
-                                                 WORD,
-                                                 HWND control,
-                                                 BOOL&) {
+void SwitcherSettingsDialog::UpdateCheckButton() {
+  HWND button = GetDlgItem(IDC_CHECK_SCHEME_UPDATES);
+  if (update_check_ && !update_check_->done.load()) {
+    check_button_accent_ = false;
+    ::SetWindowTextW(
+        button, LocalText(L"正在检查…", L"正在檢查…", L"Checking…").c_str());
+    ::EnableWindow(button, FALSE);
+    return;
+  }
+  const int count = static_cast<int>(scheme_update_available_) +
+                    static_cast<int>(model_update_available_);
+  std::wstring label;
+  if (count) {
+    label = LocalText(L"立即更新（", L"立即更新（", L"Update now (") +
+            std::to_wstring(count) + LocalText(L" 项）", L" 項）", L")");
+  } else {
+    label = LocalText(L"立即检查更新", L"立即檢查更新", L"Check now");
+  }
+  check_button_accent_ = count != 0;
+  ::SetWindowTextW(button, label.c_str());
+  ::EnableWindow(button, TRUE);
+  ::InvalidateRect(button, nullptr, TRUE);
+}
+
+void SwitcherSettingsDialog::ShowUpdateList() {
+  WanxiangUpdateManager::Result result;
+  result.success = true;
+  result.update_available = scheme_update_available_ || model_update_available_;
+  result.scheme_update_available = scheme_update_available_;
+  result.model_update_available = model_update_available_;
+  result.latest_model_sha256 = latest_model_sha256_;
+  result.latest_model_size = latest_model_size_;
+  PackageUpdateDialog dialog(result);
+  if (dialog.DoModal(m_hWnd) != IDOK || !dialog.selection().model)
+    return;
+  std::wstring error;
+  model_install_failed_ = false;
+  if (!latest_model_sha256_.empty() && latest_model_size_)
+    model_manager_.ConfigureTarget(latest_model_sha256_, latest_model_size_);
+  if (!model_manager_.Start(&error)) {
+    ::MessageBoxW(
+        m_hWnd, error.c_str(),
+        LocalText(L"无法开始更新", L"無法開始更新", L"Unable to update")
+            .c_str(),
+        MB_OK | MB_ICONERROR);
+  }
+  UpdateModelUi();
+}
+
+LRESULT SwitcherSettingsDialog::OnUpdateSettingsChanged(WORD,
+                                                        WORD,
+                                                        HWND,
+                                                        BOOL&) {
   if (selected_schema_ >= schemas_.size())
     return 0;
   const auto& schema = schemas_[selected_schema_];
   if (schema.id != "wanxiang_lite")
     return 0;
-
-  const int current = LoadUpdateFrequency(schema.id);
-  HMENU menu = CreatePopupMenu();
-  if (!menu)
-    return 0;
-  const auto append = [&](int frequency, const std::wstring& label) {
-    AppendMenuW(menu, MF_STRING | (current == frequency ? MF_CHECKED : 0),
-                kUpdateMenuFirst + frequency, label.c_str());
-  };
-  append(kUpdateSmart, LocalText(L"智能", L"智慧", L"Smart"));
-  append(kUpdateDaily, LocalText(L"每天", L"每天", L"Daily"));
-  append(kUpdateWeekly, LocalText(L"每周", L"每週", L"Weekly"));
-  append(kUpdateMonthly, LocalText(L"每月", L"每月", L"Monthly"));
-  append(kUpdateDisabled, LocalText(L"关闭", L"關閉", L"Off"));
-
-  RECT rect = {};
-  ::GetWindowRect(control, &rect);
-  const UINT command =
-      TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
-                     rect.left, rect.bottom, 0, m_hWnd, nullptr);
-  DestroyMenu(menu);
-  if (command < kUpdateMenuFirst ||
-      command > kUpdateMenuFirst + kUpdateDisabled) {
-    return 0;
+  const int frequency = update_frequency_.GetCurSel();
+  if (frequency != CB_ERR && frequency != selected_update_frequency_) {
+    selected_update_frequency_ = frequency;
+    update_frequency_modified_ = true;
+    modified_ = true;
+    ::EnableWindow(GetDlgItem(IDOK), TRUE);
   }
-  const int frequency = static_cast<int>(command - kUpdateMenuFirst);
-  if (!SaveUpdateFrequency(schema.id, frequency)) {
-    ::MessageBoxW(
-        m_hWnd,
-        LocalText(L"无法保存此方案的更新设置。", L"無法儲存此方案的更新設定。",
-                  L"Unable to save update settings for this schema.")
-            .c_str(),
-        LocalText(L"保存失败", L"儲存失敗", L"Save failed").c_str(),
-        MB_OK | MB_ICONERROR);
-    return 0;
-  }
-  const auto label = LocalText(L"更新设置：", L"更新設定：", L"Update: ") +
-                     UpdateFrequencyText(frequency);
-  ::SetDlgItemTextW(m_hWnd, IDC_SCHEMA_UPDATE_SETTINGS, label.c_str());
   return 0;
 }
 
@@ -1165,13 +1403,18 @@ LRESULT SwitcherSettingsDialog::OnModelSecondary(WORD, WORD, HWND, BOOL&) {
           m_hWnd, message.c_str(),
           LocalText(L"移除失败", L"移除失敗", L"Removal failed").c_str(),
           MB_OK | MB_ICONERROR);
+    } else {
+      model_update_available_ = false;
+      WanxiangUpdateManager::StoreAvailableCount(scheme_update_available_ ? 1u
+                                                                          : 0u);
+      UpdateCheckButton();
     }
   }
   UpdateModelUi();
   return 0;
 }
 
-LRESULT SwitcherSettingsDialog::OnOK(WORD, WORD code, HWND, BOOL&) {
+bool SwitcherSettingsDialog::ApplyChanges() {
   std::vector<const char*> selection;
   if (modified_ && settings_ && !schemas_.empty()) {
     for (const auto& schema : schemas_) {
@@ -1181,7 +1424,7 @@ LRESULT SwitcherSettingsDialog::OnOK(WORD, WORD code, HWND, BOOL&) {
     if (selection.empty()) {
       MSG_BY_IDS(IDS_STR_ERR_AT_LEAST_ONE_SEL, IDS_STR_NOT_REGULAR,
                  MB_OK | MB_ICONEXCLAMATION);
-      return 0;
+      return false;
     }
   }
   if (input_mode_modified_) {
@@ -1192,15 +1435,46 @@ LRESULT SwitcherSettingsDialog::OnOK(WORD, WORD code, HWND, BOOL&) {
                               L"Cannot save input mode")
                         .c_str(),
                     MB_OK | MB_ICONERROR);
-      return 0;
+      return false;
     }
   }
   if (modified_ && settings_ && !schemas_.empty()) {
     api_->select_schemas(settings_, selection.data(),
                          static_cast<int>(selection.size()));
   }
-  KillTimer(kModelTimer);
-  EndDialog(code);
+  if (update_frequency_modified_ &&
+      !SaveUpdateFrequency("wanxiang_lite", selected_update_frequency_)) {
+    ::MessageBoxW(m_hWnd,
+                  LocalText(L"无法保存更新频率。", L"無法儲存更新頻率。",
+                            L"The update frequency could not be saved.")
+                      .c_str(),
+                  LocalText(L"应用失败", L"套用失敗", L"Apply failed").c_str(),
+                  MB_OK | MB_ICONERROR);
+    return false;
+  }
+  if (settings_ &&
+      !api_->save_settings(reinterpret_cast<RimeCustomSettings*>(settings_))) {
+    ::MessageBoxW(
+        m_hWnd,
+        LocalText(L"无法保存输入方案设置。", L"無法儲存輸入方案設定。",
+                  L"Schema settings could not be saved.")
+            .c_str(),
+        LocalText(L"应用失败", L"套用失敗", L"Apply failed").c_str(),
+        MB_OK | MB_ICONERROR);
+    return false;
+  }
+  Configurator configurator;
+  if (configurator.UpdateWorkspace(true) != 0)
+    return false;
+  modified_ = false;
+  input_mode_modified_ = false;
+  update_frequency_modified_ = false;
+  ::EnableWindow(GetDlgItem(IDOK), FALSE);
+  return true;
+}
+
+LRESULT SwitcherSettingsDialog::OnOK(WORD, WORD, HWND, BOOL&) {
+  ApplyChanges();
   return 0;
 }
 

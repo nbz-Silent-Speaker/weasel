@@ -1,8 +1,11 @@
-﻿#include "stdafx.h"
+#include "stdafx.h"
 #include "WeaselTrayIcon.h"
 #include <atlstr.h>
 #include <WeaselUserSettings.h>
 #include <WeaselMenu.h>
+
+#include <algorithm>
+#include <string>
 
 // nasty
 #include <resource.h>
@@ -10,6 +13,50 @@
 static UINT mode_icon[] = {IDI_ZH, IDI_ZH, IDI_EN, IDI_RELOAD};
 static const WCHAR* mode_label[] = {NULL, /*L"中文"*/ NULL, /*L"西文"*/ NULL,
                                     L"Under maintenance"};
+
+namespace {
+unsigned int LoadPackageUpdateCount() {
+  constexpr wchar_t kRegistry[] = L"Software\\Rime\\Weasel\\PackageUpdates";
+  DWORD count = 0;
+  DWORD size = sizeof(count);
+  if (::RegGetValueW(HKEY_CURRENT_USER, kRegistry, L"AvailableCount",
+                     RRF_RT_REG_DWORD, nullptr, &count,
+                     &size) != ERROR_SUCCESS) {
+    return 0;
+  }
+  return (std::min)(count, 99ul);
+}
+
+std::wstring SettingsMenuText(unsigned int count) {
+  const LANGID language = GetThreadUILanguage();
+  if (PRIMARYLANGID(language) != LANG_CHINESE) {
+    return L"Settings (&S)\t" + std::to_wstring(count) + L" updates";
+  }
+  const WORD sublanguage = SUBLANGID(language);
+  const bool simplified = sublanguage == SUBLANG_CHINESE_SIMPLIFIED ||
+                          sublanguage == SUBLANG_CHINESE_SINGAPORE;
+  return (simplified ? L"输入法设定 (&S)\t" : L"輸入法設定 (&S)\t") +
+         std::to_wstring(count) + (simplified ? L" 项更新" : L" 項更新");
+}
+
+bool SetMenuCommandText(HMENU menu, UINT command, const std::wstring& text) {
+  const int count = ::GetMenuItemCount(menu);
+  for (int index = 0; index < count; ++index) {
+    if (::GetMenuItemID(menu, index) == command) {
+      MENUITEMINFOW item = {};
+      item.cbSize = sizeof(item);
+      item.fMask = MIIM_STRING;
+      item.dwTypeData = const_cast<wchar_t*>(text.c_str());
+      return ::SetMenuItemInfoW(menu, index, TRUE, &item) != FALSE;
+    }
+    if (HMENU child = ::GetSubMenu(menu, index)) {
+      if (SetMenuCommandText(child, command, text))
+        return true;
+    }
+  }
+  return false;
+}
+}  // namespace
 
 WeaselTrayIcon::WeaselTrayIcon(weasel::UI& ui)
     : m_style(ui.style()),
@@ -22,6 +69,10 @@ WeaselTrayIcon::WeaselTrayIcon(weasel::UI& ui)
 void WeaselTrayIcon::CustomizeMenu(HMENU hMenu) {
   weasel::SetMenuCommandChecked(hMenu, ID_WEASELTRAY_ACRYLIC,
                                 weasel::UserSettings::Load().acrylic);
+  const auto update_count = LoadPackageUpdateCount();
+  if (update_count)
+    SetMenuCommandText(hMenu, ID_WEASELTRAY_SETTINGS,
+                       SettingsMenuText(update_count));
 }
 
 BOOL WeaselTrayIcon::Create(HWND hTargetWnd) {

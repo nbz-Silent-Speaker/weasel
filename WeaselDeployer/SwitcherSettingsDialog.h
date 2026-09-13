@@ -22,8 +22,11 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
   MESSAGE_HANDLER(WM_INITDIALOG, OnInitDialog)
   MESSAGE_HANDLER(WM_CLOSE, OnClose)
   MESSAGE_HANDLER(WM_TIMER, OnTimer)
+  MESSAGE_HANDLER(WM_CTLCOLORSTATIC, OnCtlColorStatic)
   COMMAND_HANDLER(IDC_CHECK_SCHEME_UPDATES, BN_CLICKED, OnCheckUpdates)
-  COMMAND_HANDLER(IDC_SCHEMA_UPDATE_SETTINGS, BN_CLICKED, OnUpdateSettings)
+  COMMAND_HANDLER(IDC_SCHEMA_UPDATE_SETTINGS,
+                  CBN_SELCHANGE,
+                  OnUpdateSettingsChanged)
   COMMAND_HANDLER(IDC_MODEL_DOWNLOAD, BN_CLICKED, OnModelPrimary)
   COMMAND_HANDLER(IDC_MODEL_SECONDARY, BN_CLICKED, OnModelSecondary)
   COMMAND_HANDLER(IDC_INPUT_MODE, CBN_SELCHANGE, OnInputModeChanged)
@@ -34,13 +37,16 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
   NOTIFY_HANDLER(IDC_SCHEMA_PROJECT_LINKS, NM_RETURN, OnProjectLink)
   NOTIFY_HANDLER(IDC_USER_DATA_FOLDER, NM_CLICK, OnUserFolderLink)
   NOTIFY_HANDLER(IDC_USER_DATA_FOLDER, NM_RETURN, OnUserFolderLink)
+  NOTIFY_HANDLER(IDC_CHECK_SCHEME_UPDATES, NM_CUSTOMDRAW, OnButtonCustomDraw)
+  NOTIFY_HANDLER(IDC_MODEL_DOWNLOAD, NM_CUSTOMDRAW, OnButtonCustomDraw)
   END_MSG_MAP()
 
   LRESULT OnInitDialog(UINT, WPARAM, LPARAM, BOOL&);
   LRESULT OnClose(UINT, WPARAM, LPARAM, BOOL&);
   LRESULT OnTimer(UINT, WPARAM, LPARAM, BOOL&);
+  LRESULT OnCtlColorStatic(UINT, WPARAM, LPARAM, BOOL&);
   LRESULT OnCheckUpdates(WORD, WORD, HWND, BOOL&);
-  LRESULT OnUpdateSettings(WORD, WORD, HWND, BOOL&);
+  LRESULT OnUpdateSettingsChanged(WORD, WORD, HWND, BOOL&);
   LRESULT OnModelPrimary(WORD, WORD, HWND, BOOL&);
   LRESULT OnModelSecondary(WORD, WORD, HWND, BOOL&);
   LRESULT OnInputModeChanged(WORD, WORD, HWND, BOOL&);
@@ -49,6 +55,7 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
   LRESULT OnSchemaListItemChanged(int, LPNMHDR, BOOL&);
   LRESULT OnProjectLink(int, LPNMHDR, BOOL&);
   LRESULT OnUserFolderLink(int, LPNMHDR, BOOL&);
+  LRESULT OnButtonCustomDraw(int, LPNMHDR, BOOL&);
 
   void Populate();
   void RebuildList();
@@ -57,13 +64,15 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
   void UpdateModelUi();
   void FinishModelDownload();
   void FinishUpdateCheck();
+  void UpdateCheckButton();
+  void ShowUpdateList();
+  void AdjustInputModeWidth();
+  bool ApplyChanges();
   bool ConfirmDiscardChanges();
   int LoadUpdateFrequency(const std::string& schema_id) const;
   bool SaveUpdateFrequency(const std::string& schema_id, int frequency) const;
   std::wstring UpdateFrequencyText(int frequency) const;
-  void SetLastUpdateCheckText(const std::wstring& text);
   std::wstring ModelErrorText(HRESULT error_code) const;
-  std::wstring FormatSwitcherHotkeys(const std::wstring& hotkeys) const;
   bool LoadInputMode(std::wstring* mode) const;
   bool SaveInputMode(const std::wstring& mode, std::wstring* error) const;
   std::wstring LocalText(const wchar_t* simplified,
@@ -91,16 +100,29 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
   std::shared_ptr<UpdateCheck> update_check_;
   bool model_install_failed_ = false;
   bool model_update_available_ = false;
+  bool scheme_update_available_ = false;
+  bool check_button_accent_ = false;
+  bool model_button_accent_ = false;
+  bool model_status_active_ = false;
   unsigned long long latest_model_size_ = 0;
+  std::wstring latest_model_sha256_;
   bool loading_input_mode_ = false;
   bool input_mode_modified_ = false;
   std::wstring selected_input_mode_ = L"全拼";
+  std::wstring tooltip_text_;
+  int selected_update_frequency_ = 2;
+  bool update_frequency_modified_ = false;
+  ULONGLONG last_progress_tick_ = 0;
+  unsigned long long last_progress_bytes_ = 0;
   CRect model_secondary_rect_;
   CRect model_primary_rect_;
+  CRect model_active_secondary_rect_;
+  CRect model_active_primary_rect_;
 
   CCheckListViewCtrl schema_list_;
   CEdit description_;
-  CEdit hotkeys_;
   CProgressBarCtrl model_progress_;
   CComboBox input_mode_;
+  CComboBox update_frequency_;
+  CToolTipCtrl tooltip_;
 };

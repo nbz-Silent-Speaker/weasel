@@ -5,9 +5,12 @@
 #include <bits3_0.h>
 #include <ShlObj.h>
 
+#include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
+#include <utility>
 #include <vector>
 
 #include <WeaselIPC.h>
@@ -17,6 +20,7 @@ namespace {
 constexpr wchar_t kJobName[] = L"Weasel Wanxiang LTS Model";
 constexpr wchar_t kModelFileName[] = L"wanxiang-lts-zh-hans.gram";
 constexpr wchar_t kCompletionArgument[] = L"/model-download-complete";
+constexpr wchar_t kUpdateRegistry[] = L"Software\\Rime\\Weasel\\PackageUpdates";
 
 class MaintenanceScope {
  public:
@@ -118,7 +122,105 @@ done:
   return success;
 }
 
+bool IsSha256(const std::string& value) {
+  if (value.size() != 64)
+    return false;
+  return std::all_of(value.begin(), value.end(), [](unsigned char character) {
+    return std::isxdigit(character) != 0;
+  });
+}
+
+std::string NarrowAscii(const std::wstring& value) {
+  return std::string(value.begin(), value.end());
+}
+
+bool LoadLatestTarget(std::string* sha256, unsigned long long* size) {
+  wchar_t digest[65] = {};
+  DWORD digest_size = sizeof(digest);
+  ULONGLONG model_size = 0;
+  DWORD model_size_size = sizeof(model_size);
+  if (::RegGetValueW(HKEY_CURRENT_USER, kUpdateRegistry, L"LastModelSha256",
+                     RRF_RT_REG_SZ, nullptr, digest,
+                     &digest_size) != ERROR_SUCCESS ||
+      ::RegGetValueW(HKEY_CURRENT_USER, kUpdateRegistry, L"LastModelSize",
+                     RRF_RT_REG_QWORD, nullptr, &model_size,
+                     &model_size_size) != ERROR_SUCCESS) {
+    return false;
+  }
+  std::string converted = NarrowAscii(digest);
+  if (!IsSha256(converted) || !model_size)
+    return false;
+  std::transform(converted.begin(), converted.end(), converted.begin(),
+                 [](unsigned char value) {
+                   return static_cast<char>(std::tolower(value));
+                 });
+  *sha256 = std::move(converted);
+  *size = model_size;
+  return true;
+}
+
+void SaveInstalledTarget(const std::string& sha256, unsigned long long size) {
+  HKEY key = nullptr;
+  if (::RegCreateKeyExW(HKEY_CURRENT_USER, kUpdateRegistry, 0, nullptr,
+                        REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, nullptr, &key,
+                        nullptr) != ERROR_SUCCESS) {
+    return;
+  }
+  const auto digest = u8tow(sha256);
+  const ULONGLONG model_size = size;
+  FILETIME installed = {};
+  ::GetSystemTimeAsFileTime(&installed);
+  ULARGE_INTEGER installed_value = {};
+  installed_value.LowPart = installed.dwLowDateTime;
+  installed_value.HighPart = installed.dwHighDateTime;
+  ::RegSetValueExW(key, L"InstalledModelSha256", 0, REG_SZ,
+                   reinterpret_cast<const BYTE*>(digest.c_str()),
+                   static_cast<DWORD>((digest.size() + 1) * sizeof(wchar_t)));
+  ::RegSetValueExW(key, L"InstalledModelSize", 0, REG_QWORD,
+                   reinterpret_cast<const BYTE*>(&model_size),
+                   sizeof(model_size));
+  ::RegSetValueExW(key, L"LastModelInstalled", 0, REG_QWORD,
+                   reinterpret_cast<const BYTE*>(&installed_value.QuadPart),
+                   sizeof(installed_value.QuadPart));
+  ::RegCloseKey(key);
+}
+
+void ClearInstalledTarget() {
+  ::RegDeleteKeyValueW(HKEY_CURRENT_USER, kUpdateRegistry,
+                       L"InstalledModelSha256");
+  ::RegDeleteKeyValueW(HKEY_CURRENT_USER, kUpdateRegistry,
+                       L"InstalledModelSize");
+  ::RegDeleteKeyValueW(HKEY_CURRENT_USER, kUpdateRegistry,
+                       L"LastModelInstalled");
+}
+
+bool IsManagedInstalledModel(const std::filesystem::path& path) {
+  std::error_code error;
+  const auto actual_size = std::filesystem::file_size(path, error);
+  if (error)
+    return false;
+  wchar_t digest[65] = {};
+  DWORD digest_size = sizeof(digest);
+  ULONGLONG recorded_size = 0;
+  DWORD recorded_size_size = sizeof(recorded_size);
+  if (::RegGetValueW(HKEY_CURRENT_USER, kUpdateRegistry,
+                     L"InstalledModelSha256", RRF_RT_REG_SZ, nullptr, digest,
+                     &digest_size) == ERROR_SUCCESS &&
+      ::RegGetValueW(HKEY_CURRENT_USER, kUpdateRegistry, L"InstalledModelSize",
+                     RRF_RT_REG_QWORD, nullptr, &recorded_size,
+                     &recorded_size_size) == ERROR_SUCCESS &&
+      recorded_size == actual_size) {
+    std::string actual_digest;
+    if (Sha256File(path, &actual_digest) &&
+        actual_digest == NarrowAscii(digest)) {
+      return true;
+    }
+  }
+  return actual_size == WanxiangModelManager::kExpectedSize;
+}
+
 void CleanCommittedDownload(const std::filesystem::path& path,
+                            const std::string& digest,
                             bool record_commit) {
   if (path.empty())
     return;
@@ -129,15 +231,15 @@ void CleanCommittedDownload(const std::filesystem::path& path,
     if (!std::filesystem::exists(path, error) || error)
       return;
     std::ofstream marker(receipt, std::ios::binary | std::ios::trunc);
-    marker << WanxiangModelManager::kExpectedSha256;
+    marker << digest;
     marker.flush();
     if (!marker)
       LOG(WARNING) << "Unable to record pending model cache cleanup.";
   } else {
     std::ifstream marker(receipt, std::ios::binary);
-    std::string digest;
-    marker >> digest;
-    if (digest != WanxiangModelManager::kExpectedSha256)
+    std::string marker_digest;
+    marker >> marker_digest;
+    if (marker_digest != digest)
       return;
   }
   // Called only after deployment has committed, or from its cleanup receipt.
@@ -153,6 +255,7 @@ void CleanCommittedDownload(const std::filesystem::path& path,
 }  // namespace
 
 WanxiangModelManager::WanxiangModelManager() {
+  LoadLatestTarget(&target_sha256_, &target_size_);
   RecoverInterruptedTransaction();
   std::wstring error;
   if (EnsureManager(&error)) {
@@ -166,11 +269,33 @@ WanxiangModelManager::WanxiangModelManager() {
     }
   }
   if (!job_) {
-    CleanCommittedDownload(CachePath(), false);
+    CleanCommittedDownload(CachePath(), target_sha256_, false);
     CleanCommittedDownload(WeaselUserDataPath() / L".weasel-packages" /
                                L"wanxiang-lts-zh-hans.gram.part",
-                           false);
+                           target_sha256_, false);
   }
+}
+
+bool WanxiangModelManager::ConfigureTarget(const std::wstring& sha256,
+                                           unsigned long long size) {
+  std::string digest = NarrowAscii(sha256);
+  std::transform(digest.begin(), digest.end(), digest.begin(),
+                 [](unsigned char value) {
+                   return static_cast<char>(std::tolower(value));
+                 });
+  if (!IsSha256(digest) || !size)
+    return false;
+  const bool changed = digest != target_sha256_ || size != target_size_;
+  if (changed && job_) {
+    job_->Cancel();
+    job_.Release();
+    job_path_.clear();
+  }
+  if (changed)
+    ready_to_install_ = false;
+  target_sha256_ = std::move(digest);
+  target_size_ = size;
+  return true;
 }
 
 void WanxiangModelManager::RecoverInterruptedTransaction() {
@@ -304,7 +429,7 @@ std::filesystem::path WanxiangModelManager::CachePath() const {
     return {};
   const std::filesystem::path root(directory);
   ::CoTaskMemFree(directory);
-  return root / L"Rime" / L"Weasel" / L"Downloads" / u8tow(kExpectedSha256) /
+  return root / L"Rime" / L"Weasel" / L"Downloads" / u8tow(target_sha256_) /
          L"wanxiang-lts-zh-hans.gram.part";
 }
 
@@ -361,7 +486,7 @@ WanxiangModelManager::State WanxiangModelManager::InstalledState() const {
   const auto size = std::filesystem::file_size(ModelPath(), error);
   if (error)
     return State::NotInstalled;
-  return size == kExpectedSize ? State::Installed : State::Modified;
+  return size == target_size_ ? State::Installed : State::Modified;
 }
 
 std::wstring WanxiangModelManager::GetJobError(
@@ -395,16 +520,16 @@ WanxiangModelManager::Progress WanxiangModelManager::GetProgress() {
   Progress result;
   if (!job_) {
     result.state = ready_to_install_ ? State::Transferred : InstalledState();
-    result.total = kExpectedSize;
+    result.total = target_size_;
     if (ready_to_install_)
-      result.transferred = kExpectedSize;
+      result.transferred = target_size_;
     return result;
   }
 
   BG_JOB_PROGRESS progress{};
   if (SUCCEEDED(job_->GetProgress(&progress))) {
     result.transferred = progress.BytesTransferred;
-    result.total = progress.BytesTotal == BG_SIZE_UNKNOWN ? kExpectedSize
+    result.total = progress.BytesTotal == BG_SIZE_UNKNOWN ? target_size_
                                                           : progress.BytesTotal;
   }
   BG_JOB_STATE state;
@@ -583,7 +708,7 @@ void WanxiangModelManager::Cancel() {
 bool WanxiangModelManager::VerifyStagedFile(std::wstring* error) const {
   std::error_code file_error;
   const auto size = std::filesystem::file_size(StagingPath(), file_error);
-  if (file_error || size != kExpectedSize) {
+  if (file_error || size != target_size_) {
     if (error)
       *error = L"Downloaded model size does not match the verified package.";
     return false;
@@ -594,7 +719,7 @@ bool WanxiangModelManager::VerifyStagedFile(std::wstring* error) const {
       *error = L"Unable to calculate the downloaded model checksum.";
     return false;
   }
-  if (digest != kExpectedSha256) {
+  if (digest != target_sha256_) {
     if (error)
       *error =
           L"Downloaded model checksum does not match the verified CNB file.";
@@ -682,7 +807,7 @@ bool WanxiangModelManager::CompleteAndInstall(std::wstring* error) {
         std::filesystem::copy_options::overwrite_existing, file_error);
   std::string prepared_digest;
   if (file_error || !Sha256File(prepared, &prepared_digest) ||
-      prepared_digest != kExpectedSha256) {
+      prepared_digest != target_sha256_) {
     std::error_code ignored;
     std::filesystem::remove(prepared, ignored);
     if (error)
@@ -690,7 +815,8 @@ bool WanxiangModelManager::CompleteAndInstall(std::wstring* error) {
           L"无法将模型写入用户文件夹，请检查权限和剩余空间。下载文件已保留。";
     return false;
   }
-  if (InstalledState() == State::Modified) {
+  if (InstalledState() == State::Modified &&
+      !IsManagedInstalledModel(ModelPath())) {
     if (error)
       *error = L"用户文件夹中出现了其他版本的模型，已保留原文件和下载缓存。";
     return false;
@@ -725,6 +851,7 @@ bool WanxiangModelManager::CompleteAndInstall(std::wstring* error) {
     return false;
   }
   installed_this_session_ = true;
+  removed_this_session_ = false;
   return true;
 }
 
@@ -775,6 +902,7 @@ bool WanxiangModelManager::RemoveInstalled(std::wstring* error) {
   }
   installed_this_session_ = true;
   backed_up_existing_ = true;
+  removed_this_session_ = true;
   return true;
 }
 
@@ -806,6 +934,7 @@ bool WanxiangModelManager::Rollback(std::wstring* error) {
   }
   installed_this_session_ = false;
   backed_up_existing_ = false;
+  removed_this_session_ = false;
   return true;
 }
 
@@ -835,8 +964,40 @@ bool WanxiangModelManager::Commit(std::wstring* error) {
                  << file_error.message();
     }
   }
+  const bool installed = installed_this_session_ && !removed_this_session_;
   installed_this_session_ = false;
   backed_up_existing_ = false;
-  CleanCommittedDownload(StagingPath(), true);
+  removed_this_session_ = false;
+  if (installed)
+    SaveInstalledTarget(target_sha256_, target_size_);
+  else
+    ClearInstalledTarget();
+  CleanCommittedDownload(StagingPath(), target_sha256_, true);
   return true;
+}
+
+bool WanxiangModelManager::LoadLastInstalledTime(SYSTEMTIME* local_time) {
+  if (!local_time)
+    return false;
+  ULONGLONG value = 0;
+  DWORD size = sizeof(value);
+  if (::RegGetValueW(HKEY_CURRENT_USER, kUpdateRegistry, L"LastModelInstalled",
+                     RRF_RT_REG_QWORD, nullptr, &value,
+                     &size) != ERROR_SUCCESS) {
+    WIN32_FILE_ATTRIBUTE_DATA attributes = {};
+    if (!::GetFileAttributesExW((WeaselUserDataPath() / kModelFileName).c_str(),
+                                GetFileExInfoStandard, &attributes)) {
+      return false;
+    }
+    ULARGE_INTEGER fallback = {};
+    fallback.LowPart = attributes.ftLastWriteTime.dwLowDateTime;
+    fallback.HighPart = attributes.ftLastWriteTime.dwHighDateTime;
+    value = fallback.QuadPart;
+  }
+  ULARGE_INTEGER packed = {};
+  packed.QuadPart = value;
+  FILETIME utc = {packed.LowPart, packed.HighPart};
+  FILETIME local = {};
+  return ::FileTimeToLocalFileTime(&utc, &local) &&
+         ::FileTimeToSystemTime(&local, local_time);
 }

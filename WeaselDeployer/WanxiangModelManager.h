@@ -31,6 +31,7 @@ class WanxiangModelManager {
   WanxiangModelManager();
 
   Progress GetProgress();
+  bool ConfigureTarget(const std::wstring& sha256, unsigned long long size);
   bool Start(std::wstring* error);
   bool Pause(std::wstring* error);
   void Cancel();
@@ -38,6 +39,7 @@ class WanxiangModelManager {
   bool RemoveInstalled(std::wstring* error);
   bool Rollback(std::wstring* error);
   bool Commit(std::wstring* error);
+  static bool LoadLastInstalledTime(SYSTEMTIME* local_time);
 
   static constexpr unsigned long long kExpectedSize = 420343852;
   static constexpr char kExpectedSha256[] =
@@ -61,10 +63,14 @@ class WanxiangModelManager {
                            BG_ERROR_CONTEXT* error_context) const;
   bool VerifyStagedFile(std::wstring* error) const;
 
+  std::string target_sha256_ = kExpectedSha256;
+  unsigned long long target_size_ = kExpectedSize;
+
   CComPtr<IBackgroundCopyManager> manager_;
   CComPtr<IBackgroundCopyJob> job_;
   std::filesystem::path job_path_;
   bool ready_to_install_ = false;
   bool installed_this_session_ = false;
   bool backed_up_existing_ = false;
+  bool removed_this_session_ = false;
 };

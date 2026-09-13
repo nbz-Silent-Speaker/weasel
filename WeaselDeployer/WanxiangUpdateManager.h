@@ -32,6 +32,9 @@ class WanxiangUpdateManager {
   static bool LoadLastCheck(std::wstring* tag, SYSTEMTIME* local_time);
   static bool LoadLastModelMetadata(std::wstring* sha256,
                                     unsigned long long* size);
+  static bool LoadCachedResult(Result* result);
+  static unsigned int LoadAvailableCount();
+  static void StoreAvailableCount(unsigned int count);
   static bool IsAutomaticCheckDue(Frequency frequency);
   static Result CheckNow();
 

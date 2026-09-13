@@ -132,6 +132,16 @@ int wmain(int argc, wchar_t** argv) {
       Require(FirstByte(model) == 'Z',
               "interrupted transaction recovery failed");
     }
+    {
+      WanxiangModelManager manager;
+      Require(manager.RemoveInstalled(&error), "committed remove failed");
+      Require(manager.Commit(&error), "remove commit failed");
+      Require(!std::filesystem::exists(model),
+              "committed removal left the model installed");
+      Require(manager.GetProgress().state ==
+                  WanxiangModelManager::State::NotInstalled,
+              "committed removal kept an installed model state");
+    }
     std::cout << "Model transaction tests passed\n";
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

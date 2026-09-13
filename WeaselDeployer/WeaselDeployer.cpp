@@ -106,6 +106,11 @@ static int Run(LPTSTR lpCmdLine) {
       }
       return 1;
     }
+    WanxiangUpdateManager::Result cached;
+    if (WanxiangUpdateManager::LoadCachedResult(&cached)) {
+      WanxiangUpdateManager::StoreAvailableCount(
+          cached.scheme_update_available ? 1u : 0u);
+    }
     return 0;
   }
 

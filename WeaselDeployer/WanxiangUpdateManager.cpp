@@ -6,10 +6,13 @@
 #include <array>
 #include <cctype>
 #include <cwctype>
+#include <filesystem>
 #include <limits>
+#include <utility>
 #include <vector>
 
 #include <winhttp.h>
+#include <WeaselUtility.h>
 
 namespace {
 constexpr wchar_t kReleaseHost[] = L"cnb.cool";
@@ -95,6 +98,41 @@ bool ReadRegistryString(const wchar_t* name, std::wstring* value) {
   }
   *value = buffer.data();
   return true;
+}
+
+bool LoadInstalledModel(std::wstring* sha256, unsigned long long* size) {
+  std::error_code file_error;
+  if (!std::filesystem::exists(
+          WeaselUserDataPath() / L"wanxiang-lts-zh-hans.gram", file_error) ||
+      file_error) {
+    return false;
+  }
+  ULONGLONG installed_size = 0;
+  if (ReadRegistryString(L"InstalledModelSha256", sha256) &&
+      ReadRegistryQword(L"InstalledModelSize", &installed_size) &&
+      installed_size) {
+    *size = installed_size;
+    return true;
+  }
+  sha256->assign(WanxiangModelManager::kExpectedSha256,
+                 WanxiangModelManager::kExpectedSha256 +
+                     std::char_traits<char>::length(
+                         WanxiangModelManager::kExpectedSha256));
+  *size = WanxiangModelManager::kExpectedSize;
+  return true;
+}
+
+void WriteAvailableCount(unsigned int count) {
+  HKEY key = nullptr;
+  if (RegCreateKeyExW(HKEY_CURRENT_USER, kRegistryRoot, 0, nullptr,
+                      REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, nullptr, &key,
+                      nullptr) != ERROR_SUCCESS) {
+    return;
+  }
+  const DWORD value = count;
+  RegSetValueExW(key, L"AvailableCount", 0, REG_DWORD,
+                 reinterpret_cast<const BYTE*>(&value), sizeof(value));
+  RegCloseKey(key);
 }
 
 bool IsSha256(const std::string& value) {
@@ -244,24 +282,58 @@ bool WanxiangUpdateManager::LoadLastModelMetadata(std::wstring* sha256,
                                                   unsigned long long* size) {
   if (!sha256 || !size)
     return false;
-  std::wstring baseline;
   std::wstring latest;
   ULONGLONG latest_size = 0;
-  if (!ReadRegistryString(L"LastModelBaselineSha256", &baseline) ||
-      !ReadRegistryString(L"LastModelSha256", &latest) ||
+  if (!ReadRegistryString(L"LastModelSha256", &latest) ||
       !ReadRegistryQword(L"LastModelSize", &latest_size)) {
     return false;
   }
-  const std::wstring expected(WanxiangModelManager::kExpectedSha256,
-                              WanxiangModelManager::kExpectedSha256 +
-                                  std::char_traits<char>::length(
-                                      WanxiangModelManager::kExpectedSha256));
   const std::string latest_ascii(latest.begin(), latest.end());
-  if (baseline != expected || !IsSha256(latest_ascii) || !latest_size)
+  if (!IsSha256(latest_ascii) || !latest_size)
     return false;
   *sha256 = latest;
   *size = latest_size;
   return true;
+}
+
+bool WanxiangUpdateManager::LoadCachedResult(Result* result) {
+  if (!result)
+    return false;
+  SYSTEMTIME ignored = {};
+  Result cached;
+  if (!LoadLastCheck(&cached.latest_tag, &ignored) ||
+      !LoadLastModelMetadata(&cached.latest_model_sha256,
+                             &cached.latest_model_size)) {
+    return false;
+  }
+  cached.success = true;
+  cached.scheme_update_available =
+      CompareVersions(cached.latest_tag, kInstalledVersion) > 0;
+  std::wstring installed_sha256;
+  unsigned long long installed_size = 0;
+  const bool model_installed =
+      LoadInstalledModel(&installed_sha256, &installed_size);
+  cached.model_update_available =
+      model_installed && (cached.latest_model_sha256 != installed_sha256 ||
+                          cached.latest_model_size != installed_size);
+  cached.update_available =
+      cached.scheme_update_available || cached.model_update_available;
+  *result = std::move(cached);
+  return true;
+}
+
+unsigned int WanxiangUpdateManager::LoadAvailableCount() {
+  DWORD value = 0;
+  DWORD size = sizeof(value);
+  if (RegGetValueW(HKEY_CURRENT_USER, kRegistryRoot, L"AvailableCount",
+                   RRF_RT_REG_DWORD, nullptr, &value, &size) != ERROR_SUCCESS) {
+    return 0;
+  }
+  return (std::min)(value, 99ul);
+}
+
+void WanxiangUpdateManager::StoreAvailableCount(unsigned int count) {
+  WriteAvailableCount((std::min)(count, 99u));
 }
 
 bool WanxiangUpdateManager::IsAutomaticCheckDue(Frequency frequency) {
@@ -354,15 +426,17 @@ WanxiangUpdateManager::Result WanxiangUpdateManager::CheckNow() {
       CompareVersions(result.latest_tag, kInstalledVersion) > 0;
   result.latest_model_sha256 = model.sha256;
   result.latest_model_size = model.size;
-  const std::wstring expected(WanxiangModelManager::kExpectedSha256,
-                              WanxiangModelManager::kExpectedSha256 +
-                                  std::char_traits<char>::length(
-                                      WanxiangModelManager::kExpectedSha256));
+  std::wstring installed_sha256;
+  unsigned long long installed_size = 0;
+  const bool model_installed =
+      LoadInstalledModel(&installed_sha256, &installed_size);
   result.model_update_available =
-      model.sha256 != expected ||
-      model.size != WanxiangModelManager::kExpectedSize;
+      model_installed &&
+      (model.sha256 != installed_sha256 || model.size != installed_size);
   result.update_available =
       result.scheme_update_available || result.model_update_available;
+  WriteAvailableCount(static_cast<unsigned int>(result.scheme_update_available +
+                                                result.model_update_available));
   return result;
 }
 
