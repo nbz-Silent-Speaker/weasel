@@ -432,17 +432,65 @@ std::wstring SwitcherSettingsDialog::UpdateFrequencyText(int frequency) const {
 }
 
 bool SwitcherSettingsDialog::ConfirmDiscardChanges() {
-  if (!modified_)
+  if (!modified_ && !model_pending_apply_)
     return true;
+  const std::wstring message = LocalText(
+      L"存在尚未应用的设置或模型更改。关闭并恢复到应用前状态吗？",
+      L"存在尚未套用的設定或模型變更。關閉並恢復到套用前狀態嗎？",
+      L"Some settings or model changes have not been applied. Close and "
+      L"restore the previous state?");
   return ::MessageBoxW(
-             m_hWnd,
-             LocalText(L"设置尚未保存。关闭并放弃这些更改吗？",
-                       L"設定尚未儲存。關閉並放棄這些變更嗎？",
-                       L"Settings have not been saved. Close and "
-                       L"discard the changes?")
-                 .c_str(),
+             m_hWnd, message.c_str(),
              LocalText(L"放弃更改", L"放棄變更", L"Discard changes").c_str(),
              MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) == IDYES;
+}
+
+void SwitcherSettingsDialog::DiscardPendingModel() {
+  if (!model_pending_apply_)
+    return;
+  std::wstring error;
+  if (!model_manager_.Rollback(&error)) {
+    LOG(ERROR) << "Unable to roll back an unapplied Wanxiang model: "
+               << wtou8(error);
+  }
+  model_pending_apply_ = false;
+}
+
+bool SwitcherSettingsDialog::RestorePersistedSettings() {
+  bool restored = true;
+  std::wstring error;
+  if (input_mode_modified_ && !SaveInputMode(initial_input_mode_, &error)) {
+    LOG(ERROR) << "Unable to restore the previous Wanxiang input mode: "
+               << wtou8(error);
+    restored = false;
+  }
+  if (update_frequency_modified_ &&
+      !SaveUpdateFrequency("wanxiang_lite", initial_update_frequency_)) {
+    LOG(ERROR) << "Unable to restore the previous Wanxiang update frequency.";
+    restored = false;
+  }
+  if (settings_) {
+    std::vector<const char*> original_selection;
+    for (const auto& schema : schemas_) {
+      if (schema.initial_enabled)
+        original_selection.push_back(schema.id.c_str());
+    }
+    api_->select_schemas(settings_, original_selection.data(),
+                         static_cast<int>(original_selection.size()));
+    if (!api_->save_settings(
+            reinterpret_cast<RimeCustomSettings*>(settings_))) {
+      LOG(ERROR) << "Unable to restore the previous schema selection.";
+      restored = false;
+    }
+  }
+  return restored;
+}
+
+void SwitcherSettingsDialog::CommitAppliedBaseline() {
+  for (auto& schema : schemas_)
+    schema.initial_enabled = schema.enabled;
+  initial_input_mode_ = selected_input_mode_;
+  initial_update_frequency_ = selected_update_frequency_;
 }
 
 void SwitcherSettingsDialog::Populate() {
@@ -473,6 +521,7 @@ void SwitcherSettingsDialog::Populate() {
     entry.id = item.schema_id ? item.schema_id : "";
     entry.name = u8tow(item.name ? item.name : entry.id.c_str());
     entry.enabled = selected_ids.find(entry.id) != selected_ids.end();
+    entry.initial_enabled = entry.enabled;
     schemas_.push_back(std::move(entry));
   };
 
@@ -578,6 +627,7 @@ void SwitcherSettingsDialog::ShowDetails(size_t index) {
   if (const char* description = api_->get_schema_description(schema.info))
     details += description;
   description_.SetWindowTextW(u8tow(details).c_str());
+  UpdateDescriptionLayout();
 
   std::wstring links;
   if (wanxiang) {
@@ -623,6 +673,7 @@ void SwitcherSettingsDialog::ShowDetails(size_t index) {
   ShowModelControls(wanxiang);
   if (wanxiang)
     UpdateModelUi();
+  RedrawWindow(nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
 }
 
 void SwitcherSettingsDialog::AdjustInputModeWidth() {
@@ -668,17 +719,70 @@ void SwitcherSettingsDialog::AdjustInputModeWidth() {
                  input_mode_base_rect_.top, width,
                  input_mode_base_rect_.Height(), SWP_NOZORDER | SWP_NOACTIVATE);
   input_mode_.SetDroppedWidth((std::max)(width, desired));
+  ApplyRoundedRegion(input_mode_, 5);
+}
+
+void SwitcherSettingsDialog::UpdateDescriptionLayout() {
+  if (!description_.IsWindow())
+    return;
+  ::ShowScrollBar(description_, SB_VERT, FALSE);
+  CRect client;
+  description_.GetClientRect(&client);
+  RECT inset = {4, 4, 4, 4};
+  ::MapDialogRect(m_hWnd, &inset);
+  RECT format = {client.left + inset.left, client.top + inset.top,
+                 client.right - inset.right, client.bottom - inset.bottom};
+  ::SendMessageW(description_, EM_SETRECTNP, 0,
+                 reinterpret_cast<LPARAM>(&format));
+
+  HDC dc = ::GetDC(description_);
+  HFONT font =
+      reinterpret_cast<HFONT>(::SendMessageW(description_, WM_GETFONT, 0, 0));
+  const HGDIOBJ previous = font ? ::SelectObject(dc, font) : nullptr;
+  TEXTMETRICW metrics = {};
+  ::GetTextMetricsW(dc, &metrics);
+  if (previous)
+    ::SelectObject(dc, previous);
+  ::ReleaseDC(description_, dc);
+  const int content_height = description_.GetLineCount() * metrics.tmHeight;
+  const bool overflow = content_height > format.bottom - format.top;
+  ::ShowScrollBar(description_, SB_VERT, overflow);
+  description_.Invalidate();
+}
+
+void SwitcherSettingsDialog::ApplyRoundedRegion(HWND control, int radius_dlu) {
+  if (!::IsWindow(control))
+    return;
+  RECT client = {};
+  ::GetClientRect(control, &client);
+  RECT radius = {0, 0, radius_dlu, radius_dlu};
+  ::MapDialogRect(m_hWnd, &radius);
+  const int diameter = (std::max)(4, static_cast<int>(radius.right));
+  HRGN region = ::CreateRoundRectRgn(client.left, client.top, client.right + 1,
+                                     client.bottom + 1, diameter, diameter);
+  if (region && !::SetWindowRgn(control, region, TRUE))
+    ::DeleteObject(region);
+}
+
+void SwitcherSettingsDialog::ApplyControlRounding() {
+  for (const int id :
+       {IDOK, IDC_CHECK_SCHEME_UPDATES, IDC_MODEL_DOWNLOAD, IDC_MODEL_SECONDARY,
+        IDC_INPUT_MODE, IDC_SCHEMA_UPDATE_SETTINGS}) {
+    ApplyRoundedRegion(GetDlgItem(id), 5);
+  }
+  ApplyRoundedRegion(GetDlgItem(IDC_SCHEMA_DESCRIPTION), 6);
+  ApplyRoundedRegion(GetDlgItem(IDC_MODEL_PROGRESS), 3);
 }
 
 void SwitcherSettingsDialog::ShowModelControls(bool show) {
   constexpr int controls[] = {
-      IDC_MODEL_GROUP,           IDC_MODEL_NAME,     IDC_MODEL_DESCRIPTION,
-      IDC_MODEL_SOURCE,          IDC_MODEL_NOTE,     IDC_MODEL_DOWNLOAD,
-      IDC_MODEL_SECONDARY,       IDC_MODEL_PROGRESS, IDC_MODEL_PROGRESS_TEXT,
-      IDC_MODEL_DOWNLOAD_STATUS,
+      IDC_MODEL_GROUP,    IDC_MODEL_NAME,          IDC_MODEL_DESCRIPTION,
+      IDC_MODEL_NOTE,     IDC_MODEL_DOWNLOAD,      IDC_MODEL_SECONDARY,
+      IDC_MODEL_PROGRESS, IDC_MODEL_PROGRESS_TEXT, IDC_MODEL_DOWNLOAD_STATUS,
   };
   for (const int control : controls)
     ::ShowWindow(GetDlgItem(control), show ? SW_SHOW : SW_HIDE);
+  ::ShowWindow(GetDlgItem(IDC_MODEL_SOURCE), SW_HIDE);
 }
 
 std::wstring SwitcherSettingsDialog::ModelErrorText(HRESULT error_code) const {
@@ -750,15 +854,23 @@ void SwitcherSettingsDialog::UpdateModelUi() {
   const auto target_size = latest_model_size_
                                ? latest_model_size_
                                : WanxiangModelManager::kExpectedSize;
-  wchar_t size[96] = {};
-  swprintf_s(size, L" · %.1f MB · CNB", target_size / 1000000.0);
-  set_text(IDC_MODEL_SOURCE, size);
+  wchar_t model_summary[192] = {};
+  swprintf_s(model_summary,
+             LocalText(L"提升长句和上下文预测 · %.1f MB · CNB 国内下载源",
+                       L"提升長句和上下文預測 · %.1f MB · CNB 國內下載來源",
+                       L"Improves long phrases and context prediction · "
+                       L"%.1f MB · CNB mirror")
+                 .c_str(),
+             target_size / 1000000.0);
+  set_text(IDC_MODEL_DESCRIPTION, model_summary);
+  set_text(IDC_MODEL_SOURCE, L"");
+  ::ShowWindow(GetDlgItem(IDC_MODEL_SOURCE), SW_HIDE);
   const bool active = state == State::Downloading ||
                       state == State::WaitingRetry || state == State::Paused ||
                       state == State::Transferred || state == State::Error;
   model_status_active_ = (active && state != State::Downloading) ||
                          state == State::RestartRequired ||
-                         model_install_failed_ ||
+                         model_install_failed_ || model_pending_apply_ ||
                          (state == State::Modified && !model_update_available_);
   ::ShowWindow(GetDlgItem(IDC_MODEL_PROGRESS), active ? SW_SHOW : SW_HIDE);
   ::ShowWindow(GetDlgItem(IDC_MODEL_PROGRESS_TEXT), active ? SW_SHOW : SW_HIDE);
@@ -782,10 +894,10 @@ void SwitcherSettingsDialog::UpdateModelUi() {
   }
   switch (state) {
     case State::Downloading:
-      note = LocalText(L"下载完成后自动安装、清理缓存并重新部署。",
-                       L"下載完成後自動安裝、清理快取並重新部署。",
-                       L"Installs, clears the cache, and redeploys "
-                       L"automatically after download.");
+      note = LocalText(L"下载完成后自动校验并安装；点击“应用”完成重新部署。",
+                       L"下載完成後自動校驗並安裝；點擊「套用」完成重新部署。",
+                       L"The download is verified and installed automatically; "
+                       L"select Apply to redeploy.");
       download_status = LocalText(L"正在下载", L"正在下載", L"Downloading");
       if (last_progress_tick_ && progress.transferred >= last_progress_bytes_) {
         const ULONGLONG now = ::GetTickCount64();
@@ -840,6 +952,11 @@ void SwitcherSettingsDialog::UpdateModelUi() {
       break;
     case State::Installed:
       secondary = LocalText(L"移除模型", L"移除模型", L"Remove model");
+      if (model_pending_apply_) {
+        note = LocalText(L"已安装 · 待应用", L"已安裝 · 待套用",
+                         L"Installed · Apply pending");
+        secondary.clear();
+      }
       break;
     case State::Modified:
       note = model_update_available_
@@ -850,14 +967,14 @@ void SwitcherSettingsDialog::UpdateModelUi() {
       secondary = LocalText(L"移除模型", L"移除模型", L"Remove model");
       break;
     default:
-      note = LocalText(L"下载完成后自动安装、清理缓存并重新部署。",
-                       L"下載完成後自動安裝、清理快取並重新部署。",
-                       L"Installs, clears the cache, and redeploys "
-                       L"automatically after download.");
+      note = LocalText(L"下载完成后自动校验并安装；点击“应用”完成重新部署。",
+                       L"下載完成後自動校驗並安裝；點擊「套用」完成重新部署。",
+                       L"The download is verified and installed automatically; "
+                       L"select Apply to redeploy.");
       primary = LocalText(L"下载模型", L"下載模型", L"Download model");
       break;
   }
-  if (model_update_available_ &&
+  if (model_update_available_ && !model_pending_apply_ &&
       (state == State::Installed || state == State::Modified)) {
     primary = LocalText(L"更新模型", L"更新模型", L"Update model");
     enabled = true;
@@ -912,7 +1029,26 @@ void SwitcherSettingsDialog::UpdateModelUi() {
                  secondary_rect.Height(), SWP_NOZORDER | SWP_NOACTIVATE);
   ::ShowWindow(GetDlgItem(IDC_MODEL_SECONDARY),
                secondary.empty() ? SW_HIDE : SW_SHOW);
+  ApplyRoundedRegion(GetDlgItem(IDC_MODEL_DOWNLOAD), 5);
+  ApplyRoundedRegion(GetDlgItem(IDC_MODEL_SECONDARY), 5);
   ::InvalidateRect(GetDlgItem(IDC_MODEL_DOWNLOAD), nullptr, TRUE);
+}
+
+LRESULT SwitcherSettingsDialog::OnMeasureItem(UINT,
+                                              WPARAM,
+                                              LPARAM parameter,
+                                              BOOL& handled) {
+  auto* measure = reinterpret_cast<MEASUREITEMSTRUCT*>(parameter);
+  if (!measure || (measure->CtlID != IDC_INPUT_MODE &&
+                   measure->CtlID != IDC_SCHEMA_UPDATE_SETTINGS)) {
+    handled = FALSE;
+    return 0;
+  }
+  RECT height = {0, 0, 0, 10};
+  ::MapDialogRect(m_hWnd, &height);
+  measure->itemHeight = (std::max)(16u, static_cast<UINT>(height.bottom));
+  handled = TRUE;
+  return TRUE;
 }
 
 LRESULT SwitcherSettingsDialog::OnDrawItem(UINT,
@@ -925,6 +1061,54 @@ LRESULT SwitcherSettingsDialog::OnDrawItem(UINT,
     return 0;
   }
   const int id = static_cast<int>(draw->CtlID);
+  const bool combo = id == IDC_INPUT_MODE || id == IDC_SCHEMA_UPDATE_SETTINGS;
+  if (combo) {
+    const bool edit_portion = (draw->itemState & ODS_COMBOBOXEDIT) != 0;
+    const bool selected =
+        (draw->itemState & ODS_SELECTED) != 0 && !edit_portion;
+    const COLORREF background =
+        ::GetSysColor(selected ? COLOR_HIGHLIGHT : COLOR_WINDOW);
+    const COLORREF foreground =
+        ::GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : COLOR_WINDOWTEXT);
+    HBRUSH brush = ::CreateSolidBrush(background);
+    ::FillRect(draw->hDC, &draw->rcItem, brush);
+    ::DeleteObject(brush);
+
+    std::wstring label;
+    int item = static_cast<int>(draw->itemID);
+    if (item == -1)
+      item =
+          static_cast<int>(::SendMessageW(draw->hwndItem, CB_GETCURSEL, 0, 0));
+    if (item != CB_ERR) {
+      const int length = static_cast<int>(
+          ::SendMessageW(draw->hwndItem, CB_GETLBTEXTLEN, item, 0));
+      if (length >= 0) {
+        label.resize(static_cast<size_t>(length) + 1);
+        ::SendMessageW(draw->hwndItem, CB_GETLBTEXT, item,
+                       reinterpret_cast<LPARAM>(label.data()));
+        label.resize(static_cast<size_t>(length));
+      }
+    }
+    RECT text_rectangle = draw->rcItem;
+    RECT padding = {0, 0, 5, 0};
+    ::MapDialogRect(m_hWnd, &padding);
+    text_rectangle.left += padding.right;
+    text_rectangle.right -= padding.right;
+    ::SetBkMode(draw->hDC, TRANSPARENT);
+    ::SetTextColor(draw->hDC, foreground);
+    HFONT font = reinterpret_cast<HFONT>(
+        ::SendMessageW(draw->hwndItem, WM_GETFONT, 0, 0));
+    const HGDIOBJ old_font = font ? ::SelectObject(draw->hDC, font) : nullptr;
+    ::DrawTextW(
+        draw->hDC, label.c_str(), -1, &text_rectangle,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    if (old_font)
+      ::SelectObject(draw->hDC, old_font);
+    if ((draw->itemState & ODS_FOCUS) != 0 && !edit_portion)
+      ::DrawFocusRect(draw->hDC, &draw->rcItem);
+    handled = TRUE;
+    return TRUE;
+  }
   const bool panel =
       id == IDC_SCHEMA_LIST_PANEL || id == IDC_SCHEMA_DETAIL_GROUP;
   const bool divider = id == IDC_MODEL_GROUP ||
@@ -972,7 +1156,7 @@ LRESULT SwitcherSettingsDialog::OnDrawItem(UINT,
       ::CreateSolidBrush(::GetSysColor(panel ? COLOR_WINDOW : COLOR_BTNFACE));
   const HGDIOBJ old_pen = ::SelectObject(draw->hDC, pen);
   const HGDIOBJ old_brush = ::SelectObject(draw->hDC, brush);
-  RECT rounding = {0, 0, panel ? 5 : 4, 0};
+  RECT rounding = {0, 0, panel ? 8 : 5, 0};
   ::MapDialogRect(m_hWnd, &rounding);
   const int radius = rounding.right > 4 ? static_cast<int>(rounding.right) : 4;
   ::RoundRect(draw->hDC, rectangle.left, rectangle.top, rectangle.right,
@@ -1006,6 +1190,12 @@ LRESULT SwitcherSettingsDialog::OnCtlColorStatic(UINT,
                                                  LPARAM control,
                                                  BOOL& handled) {
   const int id = ::GetDlgCtrlID(reinterpret_cast<HWND>(control));
+  if (id == IDC_SCHEMA_DESCRIPTION && description_brush_.m_hBrush) {
+    ::SetTextColor(reinterpret_cast<HDC>(device_context),
+                   ::GetSysColor(COLOR_WINDOWTEXT));
+    ::SetBkMode(reinterpret_cast<HDC>(device_context), TRANSPARENT);
+    return reinterpret_cast<LRESULT>(description_brush_.m_hBrush);
+  }
   const bool muted =
       id == IDC_SCHEMA_LAST_CHECK || id == IDC_SCHEMA_DETAIL_VERSION ||
       id == IDC_SCHEMA_AUTHOR || id == IDC_MODEL_DESCRIPTION ||
@@ -1029,6 +1219,13 @@ LRESULT SwitcherSettingsDialog::OnCtlColorStatic(UINT,
   }
   handled = FALSE;
   return 0;
+}
+
+LRESULT SwitcherSettingsDialog::OnCtlColorEdit(UINT message,
+                                               WPARAM device_context,
+                                               LPARAM control,
+                                               BOOL& handled) {
+  return OnCtlColorStatic(message, device_context, control, handled);
 }
 
 LRESULT SwitcherSettingsDialog::OnButtonCustomDraw(int control_id,
@@ -1061,79 +1258,9 @@ void SwitcherSettingsDialog::FinishModelDownload() {
     UpdateModelUi();
     return;
   }
-
-  Configurator configurator;
-  if (configurator.UpdateWorkspace(true) != 0) {
-    std::wstring rollback_error;
-    const bool file_restored = model_manager_.Rollback(&rollback_error);
-    const bool restored =
-        file_restored && configurator.UpdateWorkspace(false) == 0;
-    std::wstring message =
-        restored
-            ? LocalText(L"模型已下载，但重新部署失败，原文件已经恢复。",
-                        L"模型已下載，但重新部署失敗，原檔案已經恢復。",
-                        L"The model downloaded, but deployment failed. The "
-                        L"previous file was restored.")
-            : LocalText(
-                  L"模型已下载，但重新部署和自动恢复均失败，请查看部署日志。",
-                  L"模型已下載，但重新部署和自動恢復均失敗，請查看部署記錄。",
-                  L"The model downloaded, but deployment and automatic "
-                  L"recovery both failed. Review the deployment log.");
-    if (!rollback_error.empty())
-      message += L"\n" + rollback_error;
-    ::MessageBoxW(m_hWnd, message.c_str(),
-                  LocalText(L"模型安装失败", L"模型安裝失敗",
-                            L"Model installation failed")
-                      .c_str(),
-                  MB_OK | MB_ICONERROR);
-  } else {
-    std::wstring commit_error;
-    if (!model_manager_.Commit(&commit_error)) {
-      std::wstring rollback_error;
-      const bool file_restored = model_manager_.Rollback(&rollback_error);
-      const bool restored =
-          file_restored && configurator.UpdateWorkspace(false) == 0;
-      std::wstring message =
-          restored
-              ? LocalText(
-                    L"模型已下载并部署，但无法完成安装记录，原文件已经恢复。",
-                    L"模型已下載並部署，但無法完成安裝記錄，原檔案已經恢復。",
-                    L"The model was deployed, but the installation could "
-                    L"not be finalized. The previous file was restored.")
-              : LocalText(
-                    L"模型已部署，但无法完成安装记录和自动恢复，请查看部署日志"
-                    L"。",
-                    L"模型已部署，但無法完成安裝記錄和自動恢復，請查看部署記錄"
-                    L"。",
-                    L"The model was deployed, but finalization and automatic "
-                    L"recovery failed. Review the deployment log.");
-      if (!commit_error.empty())
-        message += L"\n" + commit_error;
-      if (!rollback_error.empty())
-        message += L"\n" + rollback_error;
-      ::MessageBoxW(m_hWnd, message.c_str(),
-                    LocalText(L"模型安装失败", L"模型安裝失敗",
-                              L"Model installation failed")
-                        .c_str(),
-                    MB_OK | MB_ICONERROR);
-      UpdateModelUi();
-      return;
-    }
-    model_install_failed_ = false;
-    model_update_available_ = false;
-    WanxiangUpdateManager::StoreAvailableCount(scheme_update_available_ ? 1u
-                                                                        : 0u);
-    UpdateCheckButton();
-    ::MessageBoxW(
-        m_hWnd,
-        LocalText(
-            L"语言模型已安装并完成重新部署。",
-            L"語言模型已安裝並完成重新部署。",
-            L"The language model is installed and Weasel has been redeployed.")
-            .c_str(),
-        LocalText(L"安装完成", L"安裝完成", L"Installation complete").c_str(),
-        MB_OK | MB_ICONINFORMATION);
-  }
+  model_install_failed_ = false;
+  model_pending_apply_ = true;
+  ::EnableWindow(GetDlgItem(IDOK), TRUE);
   UpdateModelUi();
 }
 
@@ -1155,6 +1282,7 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   }
 
   schema_list_.SubclassWindow(GetDlgItem(IDC_SCHEMA_LIST));
+  schema_list_.ModifyStyle(0, LVS_SHOWSELALWAYS);
   schema_list_.SetExtendedListViewStyle(
       LVS_EX_FULLROWSELECT | LVS_EX_CHECKBOXES | LVS_EX_DOUBLEBUFFER,
       LVS_EX_FULLROWSELECT | LVS_EX_CHECKBOXES | LVS_EX_DOUBLEBUFFER);
@@ -1169,6 +1297,18 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   schema_list_.SetColumnWidth(0, rect.Width() - 24);
 
   description_.Attach(GetDlgItem(IDC_SCHEMA_DESCRIPTION));
+  const auto blend = [](COLORREF base, COLORREF accent, int accent_percent) {
+    const int base_percent = 100 - accent_percent;
+    return RGB(
+        (GetRValue(base) * base_percent + GetRValue(accent) * accent_percent) /
+            100,
+        (GetGValue(base) * base_percent + GetGValue(accent) * accent_percent) /
+            100,
+        (GetBValue(base) * base_percent + GetBValue(accent) * accent_percent) /
+            100);
+  };
+  description_brush_.CreateSolidBrush(
+      blend(::GetSysColor(COLOR_WINDOW), ::GetSysColor(COLOR_3DFACE), 35));
   model_progress_.Attach(GetDlgItem(IDC_MODEL_PROGRESS));
   model_progress_.SetRange32(0, 1000);
   input_mode_.Attach(GetDlgItem(IDC_INPUT_MODE));
@@ -1190,11 +1330,14 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   selected_input_mode_ =
       kInputModes[static_cast<size_t>(input_mode_.GetItemData(selected_mode))]
           .value;
+  initial_input_mode_ = selected_input_mode_;
   loading_input_mode_ = false;
   for (int frequency = kUpdateSmart; frequency <= kUpdateDisabled;
        ++frequency) {
     update_frequency_.AddString(UpdateFrequencyText(frequency).c_str());
   }
+  selected_update_frequency_ = LoadUpdateFrequency("wanxiang_lite");
+  initial_update_frequency_ = selected_update_frequency_;
 
   auto capture_control_rect = [&](int id, CRect* target) {
     ::GetWindowRect(GetDlgItem(id), target);
@@ -1231,6 +1374,7 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   }
 
   Populate();
+  ApplyControlRounding();
   ::EnableWindow(GetDlgItem(IDOK), FALSE);
   const auto user_folder = WeaselUserDataPath().wstring();
   ::SetDlgItemTextW(
@@ -1269,6 +1413,7 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
 LRESULT SwitcherSettingsDialog::OnClose(UINT, WPARAM, LPARAM, BOOL&) {
   if (!ConfirmDiscardChanges())
     return 0;
+  DiscardPendingModel();
   KillTimer(kModelTimer);
   EndDialog(IDCANCEL);
   return 0;
@@ -1277,6 +1422,7 @@ LRESULT SwitcherSettingsDialog::OnClose(UINT, WPARAM, LPARAM, BOOL&) {
 LRESULT SwitcherSettingsDialog::OnCloseCommand(WORD, WORD, HWND, BOOL&) {
   if (!ConfirmDiscardChanges())
     return 0;
+  DiscardPendingModel();
   KillTimer(kModelTimer);
   EndDialog(IDCANCEL);
   return 0;
@@ -1374,10 +1520,10 @@ void SwitcherSettingsDialog::UpdateCheckButton() {
                     static_cast<int>(model_update_available_);
   std::wstring label;
   if (count) {
-    label = LocalText(L"立即更新（", L"立即更新（", L"Update now (") +
-            std::to_wstring(count) + LocalText(L" 项）", L" 項）", L")");
+    label = LocalText(L"更新 · ", L"更新 · ", L"Updates · ") +
+            std::to_wstring(count) + LocalText(L" 项", L" 項", L"");
   } else {
-    label = LocalText(L"立即检查更新", L"立即檢查更新", L"Check now");
+    label = LocalText(L"检查更新", L"檢查更新", L"Check updates");
   }
   check_button_accent_ = count != 0;
   ::SetWindowTextW(button, label.c_str());
@@ -1388,19 +1534,39 @@ void SwitcherSettingsDialog::UpdateCheckButton() {
 void SwitcherSettingsDialog::UpdateLastCheckText() {
   std::wstring tag;
   SYSTEMTIME checked = {};
+  SYSTEMTIME installed = {};
   HWND label = GetDlgItem(IDC_SCHEMA_LAST_CHECK);
-  if (!WanxiangUpdateManager::LoadLastCheck(&tag, &checked)) {
+  const bool has_check = WanxiangUpdateManager::LoadLastCheck(&tag, &checked);
+  const bool has_install =
+      WanxiangModelManager::LoadLastInstalledTime(&installed);
+  if (!has_check && !has_install) {
     ::ShowWindow(label, SW_HIDE);
     return;
   }
+
+  const auto value_of = [](const SYSTEMTIME& time) {
+    FILETIME file_time = {};
+    ULARGE_INTEGER value = {};
+    if (::SystemTimeToFileTime(&time, &file_time)) {
+      value.LowPart = file_time.dwLowDateTime;
+      value.HighPart = file_time.dwHighDateTime;
+    }
+    return value.QuadPart;
+  };
+  const bool show_install =
+      has_install && (!has_check || value_of(installed) > value_of(checked));
+  const SYSTEMTIME& displayed = show_install ? installed : checked;
   wchar_t text[96] = {};
   swprintf_s(text,
-             LocalText(L"上次检查：%04u-%02u-%02u %02u:%02u",
-                       L"上次檢查：%04u-%02u-%02u %02u:%02u",
-                       L"Last checked: %04u-%02u-%02u %02u:%02u")
+             LocalText(show_install ? L"上次更新：%04u-%02u-%02u %02u:%02u"
+                                    : L"上次检查：%04u-%02u-%02u %02u:%02u",
+                       show_install ? L"上次更新：%04u-%02u-%02u %02u:%02u"
+                                    : L"上次檢查：%04u-%02u-%02u %02u:%02u",
+                       show_install ? L"Last updated: %04u-%02u-%02u %02u:%02u"
+                                    : L"Last checked: %04u-%02u-%02u %02u:%02u")
                  .c_str(),
-             checked.wYear, checked.wMonth, checked.wDay, checked.wHour,
-             checked.wMinute);
+             displayed.wYear, displayed.wMonth, displayed.wDay, displayed.wHour,
+             displayed.wMinute);
   ::SetWindowTextW(label, text);
   ::ShowWindow(label, SW_SHOW);
 }
@@ -1507,6 +1673,10 @@ LRESULT SwitcherSettingsDialog::OnModelPrimary(WORD, WORD, HWND, BOOL&) {
   std::wstring error;
   model_install_failed_ = false;
   const auto state = model_manager_.GetProgress().state;
+  if (state == WanxiangModelManager::State::Transferred) {
+    FinishModelDownload();
+    return 0;
+  }
   const bool success = state == WanxiangModelManager::State::Downloading
                            ? model_manager_.Pause(&error)
                            : model_manager_.Start(&error);
@@ -1633,6 +1803,7 @@ bool SwitcherSettingsDialog::ApplyChanges() {
   if (input_mode_modified_) {
     std::wstring error;
     if (!SaveInputMode(selected_input_mode_, &error)) {
+      RestorePersistedSettings();
       ::MessageBoxW(m_hWnd, error.c_str(),
                     LocalText(L"无法保存拼音方式", L"無法儲存拼音方式",
                               L"Cannot save input mode")
@@ -1647,6 +1818,7 @@ bool SwitcherSettingsDialog::ApplyChanges() {
   }
   if (update_frequency_modified_ &&
       !SaveUpdateFrequency("wanxiang_lite", selected_update_frequency_)) {
+    RestorePersistedSettings();
     ::MessageBoxW(m_hWnd,
                   LocalText(L"无法保存更新频率。", L"無法儲存更新頻率。",
                             L"The update frequency could not be saved.")
@@ -1657,6 +1829,7 @@ bool SwitcherSettingsDialog::ApplyChanges() {
   }
   if (settings_ &&
       !api_->save_settings(reinterpret_cast<RimeCustomSettings*>(settings_))) {
+    RestorePersistedSettings();
     ::MessageBoxW(
         m_hWnd,
         LocalText(L"无法保存输入方案设置。", L"無法儲存輸入方案設定。",
@@ -1667,8 +1840,96 @@ bool SwitcherSettingsDialog::ApplyChanges() {
     return false;
   }
   Configurator configurator;
-  if (configurator.UpdateWorkspace(true) != 0)
+  if (configurator.UpdateWorkspace(true) != 0) {
+    const bool had_pending_model = model_pending_apply_;
+    std::wstring rollback_error;
+    const bool file_restored =
+        !had_pending_model || model_manager_.Rollback(&rollback_error);
+    const bool settings_restored = RestorePersistedSettings();
+    const bool previous_state_deployed =
+        configurator.UpdateWorkspace(false) == 0;
+    const bool restored =
+        file_restored && settings_restored && previous_state_deployed;
+    if (had_pending_model) {
+      model_pending_apply_ = false;
+      model_install_failed_ = true;
+    }
+    std::wstring message =
+        restored
+            ? had_pending_model
+                  ? LocalText(
+                        L"重新部署失败，设置和语言模型已经恢复。下载缓存已保留"
+                        L"，可重试。",
+                        L"重新部署失敗，設定和語言模型已經恢復。下載快取已保留"
+                        L"，可重試。",
+                        L"Deployment failed. Settings and the previous model "
+                        L"were restored, and the download cache was kept.")
+                  : LocalText(L"重新部署失败，设置已经恢复。",
+                              L"重新部署失敗，設定已經恢復。",
+                              L"Deployment failed and settings were restored.")
+            : LocalText(
+                  L"重新部署和自动恢复均失败，请保留当前文件并查看部署日志。",
+                  L"重新部署和自動恢復均失敗，請保留目前檔案並查看部署記錄。",
+                  L"Deployment and automatic recovery both failed. Keep the "
+                  L"current files and review the deployment log.");
+    if (!rollback_error.empty())
+      message += L"\n" + rollback_error;
+    ::MessageBoxW(m_hWnd, message.c_str(),
+                  LocalText(L"应用失败", L"套用失敗", L"Apply failed").c_str(),
+                  MB_OK | MB_ICONERROR);
+    ::EnableWindow(GetDlgItem(IDOK), modified_ || input_mode_modified_ ||
+                                         update_frequency_modified_);
+    UpdateModelUi();
     return false;
+  }
+  if (model_pending_apply_) {
+    std::wstring commit_error;
+    if (!model_manager_.Commit(&commit_error)) {
+      std::wstring rollback_error;
+      const bool file_restored = model_manager_.Rollback(&rollback_error);
+      const bool settings_restored = RestorePersistedSettings();
+      const bool previous_state_deployed =
+          configurator.UpdateWorkspace(false) == 0;
+      const bool restored =
+          file_restored && settings_restored && previous_state_deployed;
+      model_pending_apply_ = false;
+      model_install_failed_ = true;
+      std::wstring message =
+          restored
+              ? LocalText(L"模型已经部署，但无法完成安装记录，原文件已经恢复。",
+                          L"模型已經部署，但無法完成安裝記錄，原檔案已經恢復。",
+                          L"The model was deployed, but installation could "
+                          L"not be finalized. The previous model was restored.")
+              : LocalText(
+                    L"模型已经部署，但安装记录和自动恢复均失败，请查看部署日志"
+                    L"。",
+                    L"模型已經部署，但安裝記錄和自動恢復均失敗，請查看部署記錄"
+                    L"。",
+                    L"The model was deployed, but finalization and automatic "
+                    L"recovery failed. Review the deployment log.");
+      if (!commit_error.empty())
+        message += L"\n" + commit_error;
+      if (!rollback_error.empty())
+        message += L"\n" + rollback_error;
+      ::MessageBoxW(
+          m_hWnd, message.c_str(),
+          LocalText(L"应用失败", L"套用失敗", L"Apply failed").c_str(),
+          MB_OK | MB_ICONERROR);
+      ::EnableWindow(GetDlgItem(IDOK), modified_ || input_mode_modified_ ||
+                                           update_frequency_modified_);
+      UpdateModelUi();
+      return false;
+    }
+    model_pending_apply_ = false;
+    model_install_failed_ = false;
+    model_update_available_ = false;
+    WanxiangUpdateManager::StoreAvailableCount(scheme_update_available_ ? 1u
+                                                                        : 0u);
+    UpdateCheckButton();
+    UpdateLastCheckText();
+    UpdateModelUi();
+  }
+  CommitAppliedBaseline();
   modified_ = false;
   input_mode_modified_ = false;
   update_frequency_modified_ = false;

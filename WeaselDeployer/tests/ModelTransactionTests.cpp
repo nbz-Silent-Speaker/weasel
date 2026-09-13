@@ -49,7 +49,13 @@ int wmain(int argc, wchar_t** argv) {
               "download cache must be independent of the Rime user directory");
       Write(staging, 'Z');
       manager.job_path_ = staging;
-      manager.ready_to_install_ = true;
+      Require(manager.CompleteDownload(&error),
+              "completed download could not be verified");
+      Require(!std::filesystem::exists(model),
+              "completing a download installed the model early");
+      Require(manager.GetProgress().state ==
+                  WanxiangModelManager::State::Transferred,
+              "verified download was not reported as ready to install");
       Require(manager.CompleteAndInstall(&error), "fresh model install failed");
       Require(FirstByte(model) == 'Z', "wrong installed content");
       Require(manager.Commit(&error), "model commit failed");
@@ -68,6 +74,9 @@ int wmain(int argc, wchar_t** argv) {
       Require(FirstByte(model) == 'A', "rollback lost the original model");
       Require(std::filesystem::exists(staging),
               "rollback discarded retry cache");
+      Require(manager.GetProgress().state ==
+                  WanxiangModelManager::State::Transferred,
+              "rollback did not preserve a reusable verified download");
     }
     {
       WanxiangModelManager manager;

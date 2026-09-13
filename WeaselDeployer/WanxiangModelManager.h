@@ -35,6 +35,7 @@ class WanxiangModelManager {
   bool Start(std::wstring* error);
   bool Pause(std::wstring* error);
   void Cancel();
+  bool CompleteDownload(std::wstring* error);
   bool CompleteAndInstall(std::wstring* error);
   bool RemoveInstalled(std::wstring* error);
   bool Rollback(std::wstring* error);

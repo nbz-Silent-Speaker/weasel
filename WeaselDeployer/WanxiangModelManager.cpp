@@ -273,6 +273,10 @@ WanxiangModelManager::WanxiangModelManager() {
     CleanCommittedDownload(WeaselUserDataPath() / L".weasel-packages" /
                                L"wanxiang-lts-zh-hans.gram.part",
                            target_sha256_, false);
+    std::error_code cache_error;
+    ready_to_install_ =
+        std::filesystem::file_size(CachePath(), cache_error) == target_size_ &&
+        !cache_error;
   }
 }
 
@@ -728,10 +732,8 @@ bool WanxiangModelManager::VerifyStagedFile(std::wstring* error) const {
   return true;
 }
 
-bool WanxiangModelManager::CompleteAndInstall(std::wstring* error) {
-  const bool cached = ready_to_install_;
-  ready_to_install_ = false;
-  if (!job_ && !cached) {
+bool WanxiangModelManager::CompleteDownload(std::wstring* error) {
+  if (!job_ && !VerifyStagedFile(nullptr)) {
     if (error)
       *error = L"No completed model download was found.";
     return false;
@@ -761,8 +763,16 @@ bool WanxiangModelManager::CompleteAndInstall(std::wstring* error) {
   if (!VerifyStagedFile(error)) {
     std::error_code ignored;
     std::filesystem::remove(StagingPath(), ignored);
+    ready_to_install_ = false;
     return false;
   }
+  ready_to_install_ = true;
+  return true;
+}
+
+bool WanxiangModelManager::CompleteAndInstall(std::wstring* error) {
+  if (!CompleteDownload(error))
+    return false;
 
   std::error_code file_error;
   const bool has_marker =
@@ -852,6 +862,7 @@ bool WanxiangModelManager::CompleteAndInstall(std::wstring* error) {
   }
   installed_this_session_ = true;
   removed_this_session_ = false;
+  ready_to_install_ = false;
   return true;
 }
 
@@ -935,6 +946,10 @@ bool WanxiangModelManager::Rollback(std::wstring* error) {
   installed_this_session_ = false;
   backed_up_existing_ = false;
   removed_this_session_ = false;
+  std::error_code cache_error;
+  ready_to_install_ =
+      std::filesystem::file_size(StagingPath(), cache_error) == target_size_ &&
+      !cache_error;
   return true;
 }
 

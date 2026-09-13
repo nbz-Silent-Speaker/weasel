@@ -73,43 +73,10 @@ static int Run(LPTSTR lpCmdLine) {
       return 1;
     }
     std::wstring error;
-    if (!model_manager.CompleteAndInstall(&error)) {
-      LOG(ERROR) << "Failed to install Wanxiang model: " << wtou8(error);
+    if (!model_manager.CompleteDownload(&error)) {
+      LOG(ERROR) << "Failed to finalize the Wanxiang model download: "
+                 << wtou8(error);
       return 1;
-    }
-    if (configurator.UpdateWorkspace(false) != 0) {
-      std::wstring rollback_error;
-      const bool file_restored = model_manager.Rollback(&rollback_error);
-      if (!file_restored) {
-        LOG(ERROR) << "Failed to roll back Wanxiang model: "
-                   << wtou8(rollback_error);
-      } else if (configurator.UpdateWorkspace(false) != 0) {
-        LOG(ERROR)
-            << "Wanxiang model was restored, but redeploying the previous "
-               "state also failed.";
-      }
-      return 1;
-    }
-    std::wstring commit_error;
-    if (!model_manager.Commit(&commit_error)) {
-      LOG(ERROR) << "Failed to finalize Wanxiang model install: "
-                 << wtou8(commit_error);
-      std::wstring rollback_error;
-      const bool file_restored = model_manager.Rollback(&rollback_error);
-      if (!file_restored) {
-        LOG(ERROR) << "Failed to roll back Wanxiang model: "
-                   << wtou8(rollback_error);
-      } else if (configurator.UpdateWorkspace(false) != 0) {
-        LOG(ERROR)
-            << "Wanxiang model was restored, but redeploying the previous "
-               "state also failed.";
-      }
-      return 1;
-    }
-    WanxiangUpdateManager::Result cached;
-    if (WanxiangUpdateManager::LoadCachedResult(&cached)) {
-      WanxiangUpdateManager::StoreAvailableCount(
-          cached.scheme_update_available ? 1u : 0u);
     }
     return 0;
   }

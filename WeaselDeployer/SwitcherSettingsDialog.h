@@ -22,8 +22,10 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
   MESSAGE_HANDLER(WM_INITDIALOG, OnInitDialog)
   MESSAGE_HANDLER(WM_CLOSE, OnClose)
   MESSAGE_HANDLER(WM_TIMER, OnTimer)
+  MESSAGE_HANDLER(WM_MEASUREITEM, OnMeasureItem)
   MESSAGE_HANDLER(WM_DRAWITEM, OnDrawItem)
   MESSAGE_HANDLER(WM_CTLCOLORSTATIC, OnCtlColorStatic)
+  MESSAGE_HANDLER(WM_CTLCOLOREDIT, OnCtlColorEdit)
   COMMAND_HANDLER(IDC_CHECK_SCHEME_UPDATES, BN_CLICKED, OnCheckUpdates)
   COMMAND_HANDLER(IDC_SCHEMA_UPDATE_SETTINGS,
                   CBN_SELCHANGE,
@@ -45,8 +47,10 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
   LRESULT OnInitDialog(UINT, WPARAM, LPARAM, BOOL&);
   LRESULT OnClose(UINT, WPARAM, LPARAM, BOOL&);
   LRESULT OnTimer(UINT, WPARAM, LPARAM, BOOL&);
+  LRESULT OnMeasureItem(UINT, WPARAM, LPARAM, BOOL&);
   LRESULT OnDrawItem(UINT, WPARAM, LPARAM, BOOL&);
   LRESULT OnCtlColorStatic(UINT, WPARAM, LPARAM, BOOL&);
+  LRESULT OnCtlColorEdit(UINT, WPARAM, LPARAM, BOOL&);
   LRESULT OnCheckUpdates(WORD, WORD, HWND, BOOL&);
   LRESULT OnUpdateSettingsChanged(WORD, WORD, HWND, BOOL&);
   LRESULT OnModelPrimary(WORD, WORD, HWND, BOOL&);
@@ -70,8 +74,14 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
   void UpdateLastCheckText();
   void ShowUpdateList();
   void AdjustInputModeWidth();
+  void UpdateDescriptionLayout();
+  void ApplyControlRounding();
+  void ApplyRoundedRegion(HWND control, int radius_dlu);
   bool ApplyChanges();
   bool ConfirmDiscardChanges();
+  void DiscardPendingModel();
+  bool RestorePersistedSettings();
+  void CommitAppliedBaseline();
   int LoadUpdateFrequency(const std::string& schema_id) const;
   bool SaveUpdateFrequency(const std::string& schema_id, int frequency) const;
   std::wstring UpdateFrequencyText(int frequency) const;
@@ -87,6 +97,7 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
     std::string id;
     std::wstring name;
     bool enabled = false;
+    bool initial_enabled = false;
   };
 
   RimeLeversApi* api_;
@@ -107,13 +118,16 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
   bool check_button_accent_ = false;
   bool model_button_accent_ = false;
   bool model_status_active_ = false;
+  bool model_pending_apply_ = false;
   unsigned long long latest_model_size_ = 0;
   std::wstring latest_model_sha256_;
   bool loading_input_mode_ = false;
   bool input_mode_modified_ = false;
   std::wstring selected_input_mode_ = L"全拼";
+  std::wstring initial_input_mode_ = L"全拼";
   std::wstring tooltip_text_;
   int selected_update_frequency_ = 2;
+  int initial_update_frequency_ = 2;
   bool update_frequency_modified_ = false;
   ULONGLONG last_progress_tick_ = 0;
   unsigned long long last_progress_bytes_ = 0;
@@ -131,4 +145,5 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
   CToolTipCtrl tooltip_;
   CFont title_font_;
   CFont heading_font_;
+  CBrush description_brush_;
 };
