@@ -628,7 +628,7 @@ LRESULT SwitcherSettingsDialog::OnUpdateSettings(WORD,
   append(kUpdateDisabled, LocalText(L"关闭", L"關閉", L"Off"));
 
   RECT rect = {};
-  GetWindowRect(control, &rect);
+  ::GetWindowRect(control, &rect);
   const UINT command =
       TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
                      rect.left, rect.bottom, 0, m_hWnd, nullptr);
@@ -657,7 +657,7 @@ LRESULT SwitcherSettingsDialog::OnUpdateSettings(WORD,
 LRESULT SwitcherSettingsDialog::OnProjectLink(int,
                                               LPNMHDR notification,
                                               BOOL&) {
-  const auto* link = reinterpret_cast<LPNMLINK>(notification);
+  const auto* link = reinterpret_cast<PNMLINK>(notification);
   if (!link)
     return 0;
   const std::wstring url(link->item.szUrl);
