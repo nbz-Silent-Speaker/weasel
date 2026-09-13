@@ -138,7 +138,7 @@ bool ExtractJsonUnsigned(const std::string& object,
          std::isdigit(static_cast<unsigned char>(object[position]))) {
     const unsigned int digit = object[position] - '0';
     if (result >
-        (std::numeric_limits<unsigned long long>::max() - digit) / 10) {
+        ((std::numeric_limits<unsigned long long>::max)() - digit) / 10) {
       return false;
     }
     result = result * 10 + digit;
