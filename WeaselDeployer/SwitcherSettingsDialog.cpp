@@ -535,8 +535,16 @@ void SwitcherSettingsDialog::UpdateModelUi() {
       ::SetWindowTextW(control, text.c_str());
   };
   wchar_t size[96] = {};
-  swprintf_s(size, L"%.1f MiB · CNB",
-             WanxiangModelManager::kExpectedSize / 1048576.0);
+  if (model_update_available_ && latest_model_size_) {
+    swprintf_s(size,
+               LocalText(L"新版 %.1f MiB · CNB", L"新版 %.1f MiB · CNB",
+                         L"New version %.1f MiB · CNB")
+                   .c_str(),
+               latest_model_size_ / 1048576.0);
+  } else {
+    swprintf_s(size, L"%.1f MiB · CNB",
+               WanxiangModelManager::kExpectedSize / 1048576.0);
+  }
   set_text(IDC_MODEL_SOURCE, size);
   const bool active = state == State::Downloading ||
                       state == State::WaitingRetry || state == State::Paused ||
@@ -616,6 +624,23 @@ void SwitcherSettingsDialog::UpdateModelUi() {
                        L"Installs and redeploys automatically after download.");
       primary = LocalText(L"下载模型", L"下載模型", L"Download model");
       break;
+  }
+  const bool starts_or_resumes_download =
+      state == State::NotInstalled || state == State::WaitingRetry ||
+      state == State::Paused || state == State::RestartRequired ||
+      state == State::Error;
+  if (model_update_available_ && starts_or_resumes_download) {
+    note = LocalText(
+        L"官方模型已更新，请先更新小狼毫后再下载。",
+        L"官方模型已更新，請先更新小狼毫後再下載。",
+        L"The official model has changed. Update Weasel before downloading.");
+    primary.clear();
+    enabled = false;
+  } else if (model_update_available_ && state == State::Installed) {
+    note = LocalText(L"官方模型已有更新；当前模型可继续使用。",
+                     L"官方模型已有更新；目前模型可繼續使用。",
+                     L"A newer official model is available; the current model "
+                     L"remains usable.");
   }
   if ((active && state != State::Transferred) ||
       state == State::RestartRequired)
@@ -796,6 +821,13 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
                                      L"上次檢查：尚未檢查",
                                      L"Last checked: not yet"));
   }
+  std::wstring latest_model_sha256;
+  if (WanxiangUpdateManager::LoadLastModelMetadata(&latest_model_sha256,
+                                                   &latest_model_size_)) {
+    model_update_available_ =
+        latest_model_sha256 != u8tow(WanxiangModelManager::kExpectedSha256) ||
+        latest_model_size_ != WanxiangModelManager::kExpectedSize;
+  }
 
   Populate();
   ::EnableWindow(GetDlgItem(IDOK), FALSE);
@@ -860,9 +892,9 @@ LRESULT SwitcherSettingsDialog::OnCheckUpdates(WORD, WORD, HWND, BOOL&) {
   ::EnableWindow(button, FALSE);
   ::SetWindowTextW(button,
                    LocalText(L"正在检查…", L"正在檢查…", L"Checking…").c_str());
-  SetLastUpdateCheckText(LocalText(L"正在检查可更新方案…",
-                                   L"正在檢查可更新方案…",
-                                   L"Checking managed schemas…"));
+  SetLastUpdateCheckText(LocalText(L"正在检查输入方案和语言模型…",
+                                   L"正在檢查輸入方案和語言模型…",
+                                   L"Checking schema and model updates…"));
   RedrawWindow(nullptr, nullptr,
                RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
 
@@ -893,14 +925,31 @@ void SwitcherSettingsDialog::FinishUpdateCheck() {
     LOG(ERROR) << "Unable to check Wanxiang releases: " << wtou8(result.error);
   } else if (!result.update_available) {
     SetLastUpdateCheckText(
-        LocalText(L"刚刚检查 · 所有可更新方案均为最新版本",
-                  L"剛剛檢查 · 所有可更新方案均為最新版本",
-                  L"Checked just now · all managed schemas are current"));
-  } else {
+        LocalText(L"刚刚检查 · 输入方案和语言模型均为最新版本",
+                  L"剛剛檢查 · 輸入方案和語言模型均為最新版本",
+                  L"Checked just now · schema and model are current"));
+  } else if (result.scheme_update_available && result.model_update_available) {
+    SetLastUpdateCheckText(
+        LocalText(L"刚刚检查 · 输入方案和语言模型均有更新",
+                  L"剛剛檢查 · 輸入方案和語言模型均有更新",
+                  L"Checked just now · schema and model updates available"));
+  } else if (result.scheme_update_available) {
     SetLastUpdateCheckText(
         LocalText(L"刚刚检查 · 万象拼音 Lite 有可用更新",
                   L"剛剛檢查 · 萬象拼音 Lite 有可用更新",
                   L"Checked just now · Wanxiang Lite update available"));
+  } else {
+    SetLastUpdateCheckText(LocalText(
+        L"刚刚检查 · 语言模型有可用更新", L"剛剛檢查 · 語言模型有可用更新",
+        L"Checked just now · language model update available"));
+  }
+  if (result.success) {
+    model_update_available_ = result.model_update_available;
+    latest_model_size_ = result.latest_model_size;
+    if (selected_schema_ < schemas_.size() &&
+        schemas_[selected_schema_].id == "wanxiang_lite") {
+      UpdateModelUi();
+    }
   }
   ::SetWindowTextW(
       button,

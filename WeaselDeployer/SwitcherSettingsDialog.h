@@ -90,6 +90,8 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
   };
   std::shared_ptr<UpdateCheck> update_check_;
   bool model_install_failed_ = false;
+  bool model_update_available_ = false;
+  unsigned long long latest_model_size_ = 0;
   bool loading_input_mode_ = false;
   bool input_mode_modified_ = false;
   std::wstring selected_input_mode_ = L"全拼";

@@ -16,11 +16,6 @@
 namespace {
 constexpr wchar_t kJobName[] = L"Weasel Wanxiang LTS Model";
 constexpr wchar_t kModelFileName[] = L"wanxiang-lts-zh-hans.gram";
-constexpr wchar_t kModelUrl[] =
-    L"https://cnb.cool/amzxyz/rime-wanxiang/-/releases/download/model/"
-    L"wanxiang-lts-zh-hans.gram";
-constexpr char kModelSha256[] =
-    "9f80530f470033cfb6d4b44bb861b540f64100426f92dd0f87140883632a3d93";
 constexpr wchar_t kCompletionArgument[] = L"/model-download-complete";
 
 class MaintenanceScope {
@@ -134,7 +129,7 @@ void CleanCommittedDownload(const std::filesystem::path& path,
     if (!std::filesystem::exists(path, error) || error)
       return;
     std::ofstream marker(receipt, std::ios::binary | std::ios::trunc);
-    marker << kModelSha256;
+    marker << WanxiangModelManager::kExpectedSha256;
     marker.flush();
     if (!marker)
       LOG(WARNING) << "Unable to record pending model cache cleanup.";
@@ -142,7 +137,7 @@ void CleanCommittedDownload(const std::filesystem::path& path,
     std::ifstream marker(receipt, std::ios::binary);
     std::string digest;
     marker >> digest;
-    if (digest != kModelSha256)
+    if (digest != WanxiangModelManager::kExpectedSha256)
       return;
   }
   // Called only after deployment has committed, or from its cleanup receipt.
@@ -278,11 +273,11 @@ bool WanxiangModelManager::AttachExistingJob() {
           LPWSTR local = nullptr;
           const HRESULT remote_result = file->GetRemoteName(&remote);
           const HRESULT local_result = file->GetLocalName(&local);
-          const bool valid = SUCCEEDED(remote_result) &&
-                             SUCCEEDED(local_result) && remote && local &&
-                             !wcscmp(remote, kModelUrl) &&
-                             std::filesystem::path(local).filename() ==
-                                 L"wanxiang-lts-zh-hans.gram.part";
+          const bool valid =
+              SUCCEEDED(remote_result) && SUCCEEDED(local_result) && remote &&
+              local && !wcscmp(remote, WanxiangModelManager::kDownloadUrl) &&
+              std::filesystem::path(local).filename() ==
+                  L"wanxiang-lts-zh-hans.gram.part";
           if (valid)
             job_path_ = local;
           ::CoTaskMemFree(remote);
@@ -309,7 +304,7 @@ std::filesystem::path WanxiangModelManager::CachePath() const {
     return {};
   const std::filesystem::path root(directory);
   ::CoTaskMemFree(directory);
-  return root / L"Rime" / L"Weasel" / L"Downloads" / kModelSha256 /
+  return root / L"Rime" / L"Weasel" / L"Downloads" / u8tow(kExpectedSha256) /
          L"wanxiang-lts-zh-hans.gram.part";
 }
 
@@ -540,7 +535,7 @@ bool WanxiangModelManager::Start(std::wstring* error) {
   if (SUCCEEDED(result))
     result = job_->SetNoProgressTimeout(7 * 24 * 60 * 60);
   if (SUCCEEDED(result))
-    result = job_->AddFile(kModelUrl, StagingPath().c_str());
+    result = job_->AddFile(kDownloadUrl, StagingPath().c_str());
   wchar_t executable[MAX_PATH] = {};
   if (SUCCEEDED(result)) {
     const DWORD length =
@@ -599,7 +594,7 @@ bool WanxiangModelManager::VerifyStagedFile(std::wstring* error) const {
       *error = L"Unable to calculate the downloaded model checksum.";
     return false;
   }
-  if (digest != kModelSha256) {
+  if (digest != kExpectedSha256) {
     if (error)
       *error =
           L"Downloaded model checksum does not match the verified CNB file.";
@@ -687,7 +682,7 @@ bool WanxiangModelManager::CompleteAndInstall(std::wstring* error) {
         std::filesystem::copy_options::overwrite_existing, file_error);
   std::string prepared_digest;
   if (file_error || !Sha256File(prepared, &prepared_digest) ||
-      prepared_digest != kModelSha256) {
+      prepared_digest != kExpectedSha256) {
     std::error_code ignored;
     std::filesystem::remove(prepared, ignored);
     if (error)

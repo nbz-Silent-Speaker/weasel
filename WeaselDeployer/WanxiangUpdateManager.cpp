@@ -1,8 +1,12 @@
 #include "stdafx.h"
 #include "WanxiangUpdateManager.h"
 
+#include "WanxiangModelManager.h"
+
 #include <array>
+#include <cctype>
 #include <cwctype>
+#include <limits>
 #include <vector>
 
 #include <winhttp.h>
@@ -13,7 +17,13 @@ constexpr wchar_t kReleasePath[] =
     L"/amzxyz/rime-wanxiang/-/badge/release.link";
 constexpr wchar_t kReleasePrefix[] =
     L"https://cnb.cool/amzxyz/rime-wanxiang/-/releases/tag/";
+constexpr wchar_t kModelReleasePath[] =
+    L"/amzxyz/rime-wanxiang/-/releases/tag/model";
+constexpr char kModelAssetPath[] =
+    "/amzxyz/rime-wanxiang/-/releases/download/model/"
+    "wanxiang-lts-zh-hans.gram";
 constexpr wchar_t kRegistryRoot[] = L"Software\\Rime\\Weasel\\PackageUpdates";
+constexpr size_t kMaximumModelReleasePage = 2 * 1024 * 1024;
 
 class InternetHandle {
  public:
@@ -69,6 +79,73 @@ bool ReadRegistryQword(const wchar_t* name, ULONGLONG* value) {
   DWORD size = sizeof(*value);
   return RegGetValueW(HKEY_CURRENT_USER, kRegistryRoot, name, RRF_RT_REG_QWORD,
                       nullptr, value, &size) == ERROR_SUCCESS;
+}
+
+bool ReadRegistryString(const wchar_t* name, std::wstring* value) {
+  DWORD size = 0;
+  if (RegGetValueW(HKEY_CURRENT_USER, kRegistryRoot, name, RRF_RT_REG_SZ,
+                   nullptr, nullptr, &size) != ERROR_SUCCESS ||
+      size < sizeof(wchar_t)) {
+    return false;
+  }
+  std::vector<wchar_t> buffer(size / sizeof(wchar_t));
+  if (RegGetValueW(HKEY_CURRENT_USER, kRegistryRoot, name, RRF_RT_REG_SZ,
+                   nullptr, buffer.data(), &size) != ERROR_SUCCESS) {
+    return false;
+  }
+  *value = buffer.data();
+  return true;
+}
+
+bool IsSha256(const std::string& value) {
+  if (value.size() != 64)
+    return false;
+  for (const unsigned char character : value) {
+    if (!std::isxdigit(character))
+      return false;
+  }
+  return true;
+}
+
+bool ExtractJsonString(const std::string& object,
+                       const std::string& name,
+                       std::string* value) {
+  const std::string marker = "\"" + name + "\":\"";
+  const auto start = object.find(marker);
+  if (start == std::string::npos)
+    return false;
+  const auto value_start = start + marker.size();
+  const auto end = object.find('"', value_start);
+  if (end == std::string::npos)
+    return false;
+  *value = object.substr(value_start, end - value_start);
+  return true;
+}
+
+bool ExtractJsonUnsigned(const std::string& object,
+                         const std::string& name,
+                         unsigned long long* value) {
+  const std::string marker = "\"" + name + "\":";
+  auto position = object.find(marker);
+  if (position == std::string::npos)
+    return false;
+  position += marker.size();
+  if (position >= object.size() ||
+      !std::isdigit(static_cast<unsigned char>(object[position])))
+    return false;
+  unsigned long long result = 0;
+  while (position < object.size() &&
+         std::isdigit(static_cast<unsigned char>(object[position]))) {
+    const unsigned int digit = object[position] - '0';
+    if (result >
+        (std::numeric_limits<unsigned long long>::max() - digit) / 10) {
+      return false;
+    }
+    result = result * 10 + digit;
+    ++position;
+  }
+  *value = result;
+  return true;
 }
 
 bool ParseVersion(const std::wstring& text,
@@ -163,6 +240,30 @@ bool WanxiangUpdateManager::LoadLastCheck(std::wstring* tag,
   return true;
 }
 
+bool WanxiangUpdateManager::LoadLastModelMetadata(std::wstring* sha256,
+                                                  unsigned long long* size) {
+  if (!sha256 || !size)
+    return false;
+  std::wstring baseline;
+  std::wstring latest;
+  ULONGLONG latest_size = 0;
+  if (!ReadRegistryString(L"LastModelBaselineSha256", &baseline) ||
+      !ReadRegistryString(L"LastModelSha256", &latest) ||
+      !ReadRegistryQword(L"LastModelSize", &latest_size)) {
+    return false;
+  }
+  const std::wstring expected(WanxiangModelManager::kExpectedSha256,
+                              WanxiangModelManager::kExpectedSha256 +
+                                  std::char_traits<char>::length(
+                                      WanxiangModelManager::kExpectedSha256));
+  const std::string latest_ascii(latest.begin(), latest.end());
+  if (baseline != expected || !IsSha256(latest_ascii) || !latest_size)
+    return false;
+  *sha256 = latest;
+  *size = latest_size;
+  return true;
+}
+
 bool WanxiangUpdateManager::IsAutomaticCheckDue(Frequency frequency) {
   if (frequency == Frequency::Disabled)
     return false;
@@ -201,7 +302,8 @@ void WanxiangUpdateManager::SaveLastAttempt() {
   RegCloseKey(key);
 }
 
-void WanxiangUpdateManager::SaveLastCheck(const std::wstring& tag) {
+void WanxiangUpdateManager::SaveLastCheck(const std::wstring& tag,
+                                          const ModelRelease& model) {
   HKEY key = nullptr;
   if (RegCreateKeyExW(HKEY_CURRENT_USER, kRegistryRoot, 0, nullptr,
                       REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, nullptr, &key,
@@ -219,6 +321,21 @@ void WanxiangUpdateManager::SaveLastCheck(const std::wstring& tag) {
   RegSetValueExW(key, L"LastReleaseTag", 0, REG_SZ,
                  reinterpret_cast<const BYTE*>(tag.c_str()),
                  static_cast<DWORD>((tag.size() + 1) * sizeof(wchar_t)));
+  const std::wstring baseline(WanxiangModelManager::kExpectedSha256,
+                              WanxiangModelManager::kExpectedSha256 +
+                                  std::char_traits<char>::length(
+                                      WanxiangModelManager::kExpectedSha256));
+  RegSetValueExW(key, L"LastModelBaselineSha256", 0, REG_SZ,
+                 reinterpret_cast<const BYTE*>(baseline.c_str()),
+                 static_cast<DWORD>((baseline.size() + 1) * sizeof(wchar_t)));
+  RegSetValueExW(
+      key, L"LastModelSha256", 0, REG_SZ,
+      reinterpret_cast<const BYTE*>(model.sha256.c_str()),
+      static_cast<DWORD>((model.sha256.size() + 1) * sizeof(wchar_t)));
+  const ULONGLONG model_size = model.size;
+  RegSetValueExW(key, L"LastModelSize", 0, REG_QWORD,
+                 reinterpret_cast<const BYTE*>(&model_size),
+                 sizeof(model_size));
   RegCloseKey(key);
 }
 
@@ -228,11 +345,134 @@ WanxiangUpdateManager::Result WanxiangUpdateManager::CheckNow() {
   result.latest_tag = QueryLatestRelease(&result.error);
   if (result.latest_tag.empty())
     return result;
-  SaveLastCheck(result.latest_tag);
+  ModelRelease model;
+  if (!QueryLatestModel(&model, &result.error))
+    return result;
+  SaveLastCheck(result.latest_tag, model);
   result.success = true;
-  result.update_available =
+  result.scheme_update_available =
       CompareVersions(result.latest_tag, kInstalledVersion) > 0;
+  result.latest_model_sha256 = model.sha256;
+  result.latest_model_size = model.size;
+  const std::wstring expected(WanxiangModelManager::kExpectedSha256,
+                              WanxiangModelManager::kExpectedSha256 +
+                                  std::char_traits<char>::length(
+                                      WanxiangModelManager::kExpectedSha256));
+  result.model_update_available =
+      model.sha256 != expected ||
+      model.size != WanxiangModelManager::kExpectedSize;
+  result.update_available =
+      result.scheme_update_available || result.model_update_available;
   return result;
+}
+
+bool WanxiangUpdateManager::ParseModelRelease(const std::string& page,
+                                              ModelRelease* model) {
+  if (!model)
+    return false;
+  const std::string path_marker =
+      "\"path\":\"" + std::string(kModelAssetPath) + "\"";
+  const auto path_position = page.find(path_marker);
+  if (path_position == std::string::npos)
+    return false;
+  const auto object_start = page.rfind("{\"id\":", path_position);
+  const auto object_end = page.find("\"author\":", path_position);
+  if (object_start == std::string::npos || object_end == std::string::npos ||
+      object_end <= object_start || object_end - object_start > 4096) {
+    return false;
+  }
+  const auto object = page.substr(object_start, object_end - object_start);
+  std::string algorithm;
+  std::string digest;
+  unsigned long long size = 0;
+  if (!ExtractJsonString(object, "hashAlgo", &algorithm) ||
+      algorithm != "sha256" ||
+      !ExtractJsonString(object, "hashValue", &digest) || !IsSha256(digest) ||
+      !ExtractJsonUnsigned(object, "sizeInByte", &size) || !size) {
+    return false;
+  }
+  for (auto& character : digest)
+    character =
+        static_cast<char>(std::tolower(static_cast<unsigned char>(character)));
+  model->sha256.assign(digest.begin(), digest.end());
+  model->size = size;
+  return true;
+}
+
+bool WanxiangUpdateManager::QueryLatestModel(ModelRelease* model,
+                                             std::wstring* error) {
+#ifdef WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY
+  constexpr DWORD kProxyMode = WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY;
+#else
+  constexpr DWORD kProxyMode = WINHTTP_ACCESS_TYPE_DEFAULT_PROXY;
+#endif
+  InternetHandle session(WinHttpOpen(L"WeaselDeployer/ModelUpdateCheck",
+                                     kProxyMode, WINHTTP_NO_PROXY_NAME,
+                                     WINHTTP_NO_PROXY_BYPASS, 0));
+  if (!session) {
+    *error = L"WinHTTP initialization failed.";
+    return false;
+  }
+  WinHttpSetTimeouts(session, 5000, 5000, 5000, 10000);
+
+  InternetHandle connection(
+      WinHttpConnect(session, kReleaseHost, INTERNET_DEFAULT_HTTPS_PORT, 0));
+  if (!connection) {
+    *error = L"Unable to connect to the model update source.";
+    return false;
+  }
+  InternetHandle request(WinHttpOpenRequest(
+      connection, L"GET", kModelReleasePath, nullptr, WINHTTP_NO_REFERER,
+      WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE));
+  if (!request ||
+      !WinHttpSendRequest(request, WINHTTP_NO_ADDITIONAL_HEADERS, 0,
+                          WINHTTP_NO_REQUEST_DATA, 0, 0, 0) ||
+      !WinHttpReceiveResponse(request, nullptr)) {
+    *error = L"The model update source did not respond.";
+    return false;
+  }
+  DWORD status = 0;
+  DWORD status_size = sizeof(status);
+  if (!WinHttpQueryHeaders(
+          request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+          WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size,
+          WINHTTP_NO_HEADER_INDEX) ||
+      status != 200) {
+    *error = L"The model update source returned an unexpected response.";
+    return false;
+  }
+
+  std::string page;
+  while (true) {
+    DWORD available = 0;
+    if (!WinHttpQueryDataAvailable(request, &available)) {
+      *error = L"Unable to read the model update response.";
+      return false;
+    }
+    if (!available)
+      break;
+    if (page.size() + available > kMaximumModelReleasePage) {
+      *error = L"The model update response was unexpectedly large.";
+      return false;
+    }
+    const auto offset = page.size();
+    page.resize(offset + available);
+    DWORD received = 0;
+    if (!WinHttpReadData(request, page.data() + offset, available, &received)) {
+      *error = L"Unable to read the model update response.";
+      return false;
+    }
+    if (!received) {
+      *error = L"The model update response ended unexpectedly.";
+      return false;
+    }
+    page.resize(offset + received);
+  }
+  if (!ParseModelRelease(page, model)) {
+    *error = L"The model release metadata was not recognized.";
+    return false;
+  }
+  return true;
 }
 
 std::wstring WanxiangUpdateManager::QueryLatestRelease(std::wstring* error) {

@@ -19,7 +19,13 @@ $cpp = $cpp.Replace('9f80530f470033cfb6d4b44bb861b540f64100426f92dd0f87140883632
 $cpp = $cpp.Replace('Weasel Wanxiang LTS Model', ('Weasel model tests ' + [guid]::NewGuid()))
 Write-TestFile 'WanxiangModelManager.cpp' $cpp
 $header = [IO.File]::ReadAllText((Join-Path $source 'WanxiangModelManager.h'))
-Write-TestFile 'WanxiangModelManager.h' ($header.Replace('420343852', '4096').Replace(' private:', ' public:'))
+$header = $header.Replace('420343852', '4096')
+$header = $header.Replace('9f80530f470033cfb6d4b44bb861b540f64100426f92dd0f87140883632a3d93', $digest)
+Write-TestFile 'WanxiangModelManager.h' ($header.Replace(' private:', ' public:'))
+$updateHeader = [IO.File]::ReadAllText((Join-Path $source 'WanxiangUpdateManager.h'))
+Write-TestFile 'WanxiangUpdateManager.h' ($updateHeader.Replace(' private:', ' public:'))
+Write-TestFile 'WanxiangUpdateManager.cpp' ([IO.File]::ReadAllText((Join-Path $source 'WanxiangUpdateManager.cpp')))
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'UpdateManagerTests.cpp') -Destination $build
 Write-TestFile 'stdafx.h' @'
 #pragma once
 #include <windows.h>
@@ -60,6 +66,10 @@ try {
     $cacheRoot = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) ('weasel-model-test-cache-' + [guid]::NewGuid())
     & .\ModelTransactionTests.exe $fixtureRoot $cacheRoot
     if ($LASTEXITCODE -ne 0) { throw "Model transaction tests failed (exit $LASTEXITCODE)" }
+    & cl.exe /nologo /EHsc /std:c++17 /utf-8 /DUNICODE /D_UNICODE /I. WanxiangUpdateManager.cpp UpdateManagerTests.cpp /Fe:UpdateManagerTests.exe /link advapi32.lib winhttp.lib
+    if ($LASTEXITCODE -ne 0) { throw 'Update manager test build failed' }
+    & .\UpdateManagerTests.exe
+    if ($LASTEXITCODE -ne 0) { throw "Update manager tests failed (exit $LASTEXITCODE)" }
 } finally {
     Pop-Location
 }
