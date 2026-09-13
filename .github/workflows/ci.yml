@@ -77,6 +77,11 @@ jobs:
         with:
           sdk: ${{ env.SDKVER }}
 
+      - name: Test model installation and recovery
+        if: matrix.variant == 'msbuild'
+        shell: pwsh
+        run: .\WeaselDeployer\tests\RunModelTransactionTests.ps1
+
       # bundled winsparkle v0.9.2 to disable auto open ReleaseNoteUrl in default browser
       - name: cache bundled winsparkle
         id: cache-winsparkle

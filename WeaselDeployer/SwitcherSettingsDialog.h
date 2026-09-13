@@ -4,6 +4,9 @@
 #include <rime_levers_api.h>
 #include <string>
 #include <vector>
+#include <atomic>
+#include <memory>
+#include "WanxiangUpdateManager.h"
 
 #include "WanxiangModelManager.h"
 
@@ -48,6 +51,7 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
   void ShowModelControls(bool show);
   void UpdateModelUi();
   void FinishModelDownload();
+  void FinishUpdateCheck();
   bool ConfirmDiscardChanges();
   int LoadUpdateFrequency(const std::string& schema_id) const;
   bool SaveUpdateFrequency(const std::string& schema_id, int frequency) const;
@@ -72,6 +76,12 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
   size_t selected_schema_ = static_cast<size_t>(-1);
   std::vector<SchemaEntry> schemas_;
   WanxiangModelManager model_manager_;
+  struct UpdateCheck {
+    WanxiangUpdateManager::Result result;
+    std::atomic<bool> done{false};
+  };
+  std::shared_ptr<UpdateCheck> update_check_;
+  bool model_install_failed_ = false;
 
   CCheckListViewCtrl schema_list_;
   CEdit description_;

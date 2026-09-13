@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <set>
+#include <thread>
 
 #include <rime_levers_api.h>
 #include <WeaselUtility.h>
@@ -230,6 +231,19 @@ void SwitcherSettingsDialog::ShowModelControls(bool show) {
 
 std::wstring SwitcherSettingsDialog::ModelErrorText(HRESULT error_code) const {
   std::wstring message;
+  if (error_code == HRESULT_FROM_WIN32(ERROR_DISK_FULL))
+    return LocalText(L"下载磁盘空间不足，请释放空间后重试。",
+                     L"下載磁碟空間不足，請釋放空間後重試。",
+                     L"Download disk is full. Free space and retry.");
+  if (error_code == HRESULT_FROM_WIN32(ERROR_ACCESS_DENIED))
+    return LocalText(L"下载缓存没有写入权限，请检查文件夹权限。",
+                     L"下載快取沒有寫入權限，請檢查資料夾權限。",
+                     L"Cannot write to the cache. Check folder permissions.");
+  if (error_code == HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND) ||
+      error_code == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND))
+    return LocalText(L"下载缓存路径不存在，需要修复或重新下载。",
+                     L"下載快取路徑不存在，需要修復或重新下載。",
+                     L"Download cache path is missing. Repair or restart.");
   constexpr unsigned int kHttpFacility = 25;
   if (HRESULT_FACILITY(error_code) == kHttpFacility) {
     switch (HRESULT_CODE(error_code)) {
@@ -269,141 +283,126 @@ std::wstring SwitcherSettingsDialog::ModelErrorText(HRESULT error_code) const {
 
 void SwitcherSettingsDialog::UpdateModelUi() {
   const auto progress = model_manager_.GetProgress();
-  const bool downloading =
-      progress.state == WanxiangModelManager::State::Downloading;
-  const bool waiting_retry =
-      progress.state == WanxiangModelManager::State::WaitingRetry;
-  const bool paused = progress.state == WanxiangModelManager::State::Paused;
-  const bool transferred =
-      progress.state == WanxiangModelManager::State::Transferred;
-  const bool show_progress =
-      downloading || waiting_retry || paused || transferred;
-  ::ShowWindow(GetDlgItem(IDC_MODEL_PROGRESS),
-               show_progress ? SW_SHOW : SW_HIDE);
-  ::ShowWindow(GetDlgItem(IDC_MODEL_PROGRESS_TEXT),
-               show_progress ? SW_SHOW : SW_HIDE);
-  ::ShowWindow(GetDlgItem(IDC_MODEL_NOTE), SW_SHOW);
-
-  HWND primary = GetDlgItem(IDC_MODEL_DOWNLOAD);
-  HWND secondary = GetDlgItem(IDC_MODEL_SECONDARY);
-  ::SetDlgItemTextW(m_hWnd, IDC_MODEL_NOTE,
-                    LocalText(L"下载完成后将自动安装并重新部署。",
-                              L"下載完成後將自動安裝並重新部署。",
-                              L"After download, the model is installed and "
-                              L"redeployed automatically.")
-                        .c_str());
-  if (show_progress) {
+  using State = WanxiangModelManager::State;
+  const auto state = progress.state;
+  // Only update changed text; avoid flashing default and actual state messages.
+  const auto set_text = [&](int id, const std::wstring& text) {
+    HWND control = GetDlgItem(id);
+    const int length = ::GetWindowTextLengthW(control);
+    std::wstring previous(length + 1, L'\0');
+    ::GetWindowTextW(control, previous.data(), length + 1);
+    previous.resize(length);
+    if (previous != text)
+      ::SetWindowTextW(control, text.c_str());
+  };
+  wchar_t size[96] = {};
+  swprintf_s(size, L"%.1f MiB · CNB",
+             WanxiangModelManager::kExpectedSize / 1048576.0);
+  set_text(IDC_MODEL_SOURCE, size);
+  const bool active = state == State::Downloading ||
+                      state == State::WaitingRetry || state == State::Paused ||
+                      state == State::Transferred || state == State::Error;
+  ::ShowWindow(GetDlgItem(IDC_MODEL_PROGRESS), active ? SW_SHOW : SW_HIDE);
+  ::ShowWindow(GetDlgItem(IDC_MODEL_PROGRESS_TEXT), active ? SW_SHOW : SW_HIDE);
+  if (active) {
     const auto total =
         progress.total ? progress.total : WanxiangModelManager::kExpectedSize;
     const int value = static_cast<int>(std::min<unsigned long long>(
         1000, progress.transferred * 1000 / total));
-    model_progress_.SetPos(value);
-    wchar_t label[80] = {};
-    swprintf_s(label, L"%llu / %llu MB · %d%%",
-               progress.transferred / 1024 / 1024, total / 1024 / 1024,
-               value / 10);
-    ::SetDlgItemTextW(m_hWnd, IDC_MODEL_PROGRESS_TEXT, label);
+    if (model_progress_.GetPos() != value)
+      model_progress_.SetPos(value);
+    wchar_t label[96] = {};
+    swprintf_s(label, L"%.1f / %.1f MiB · %d%%",
+               progress.transferred / 1048576.0, total / 1048576.0, value / 10);
+    set_text(IDC_MODEL_PROGRESS_TEXT, label);
   }
-  if (downloading) {
-    ::SetDlgItemTextW(
-        m_hWnd, IDC_MODEL_NOTE,
-        LocalText(L"正在下载；关闭此窗口后仍会继续。",
-                  L"正在下載；關閉此視窗後仍會繼續。",
-                  L"Downloading continues after this window is closed.")
-            .c_str());
-    ::SetWindowTextW(
-        primary, LocalText(L"正在下载", L"正在下載", L"Downloading").c_str());
-    ::EnableWindow(primary, FALSE);
-    ::SetWindowTextW(
-        secondary,
-        LocalText(L"取消下载", L"取消下載", L"Cancel download").c_str());
-    ::ShowWindow(secondary, SW_SHOW);
-  } else if (waiting_retry) {
-    ::SetDlgItemTextW(
-        m_hWnd, IDC_MODEL_NOTE,
-        LocalText(L"网络暂时不可用，系统将自动重试，已下载内容会保留。",
-                  L"網路暫時無法使用，系統將自動重試，已下載內容會保留。",
-                  L"The network is temporarily unavailable. The download "
-                  L"will retry and keep its progress.")
-            .c_str());
-    ::SetWindowTextW(primary,
-                     LocalText(L"立即重试", L"立即重試", L"Retry now").c_str());
-    ::EnableWindow(primary, TRUE);
-    ::SetWindowTextW(
-        secondary,
-        LocalText(L"取消下载", L"取消下載", L"Cancel download").c_str());
-    ::ShowWindow(secondary, SW_SHOW);
-  } else if (paused) {
-    std::wstring note = LocalText(
-        L"下载已暂停，已下载内容会保留。", L"下載已暫停，已下載內容會保留。",
-        L"The download is paused and its progress is preserved.");
-    if (FAILED(progress.error_code))
-      note += L" " + ModelErrorText(progress.error_code);
-    ::SetDlgItemTextW(m_hWnd, IDC_MODEL_NOTE, note.c_str());
-    ::SetWindowTextW(primary,
-                     LocalText(L"继续下载", L"繼續下載", L"Continue").c_str());
-    ::EnableWindow(primary, TRUE);
-    ::SetWindowTextW(
-        secondary,
-        LocalText(L"取消下载", L"取消下載", L"Cancel download").c_str());
-    ::ShowWindow(secondary, SW_SHOW);
-  } else if (transferred) {
-    ::SetDlgItemTextW(
-        m_hWnd, IDC_MODEL_NOTE,
-        LocalText(L"下载完成，正在校验并安装。", L"下載完成，正在校驗並安裝。",
-                  L"Download complete. Verifying and installing.")
-            .c_str());
-    ::SetWindowTextW(primary,
-                     LocalText(L"正在校验", L"正在校驗", L"Verifying").c_str());
-    ::EnableWindow(primary, FALSE);
-    ::ShowWindow(secondary, SW_HIDE);
-  } else if (progress.state == WanxiangModelManager::State::Installed) {
-    ::SetDlgItemTextW(m_hWnd, IDC_MODEL_NOTE,
-                      LocalText(L"语言模型已安装。", L"語言模型已安裝。",
-                                L"The language model is installed.")
-                          .c_str());
-    ::SetWindowTextW(primary,
-                     LocalText(L"已安装", L"已安裝", L"Installed").c_str());
-    ::EnableWindow(primary, FALSE);
-    ::SetWindowTextW(
-        secondary,
-        LocalText(L"移除模型", L"移除模型", L"Remove model").c_str());
-    ::ShowWindow(secondary, SW_SHOW);
-  } else if (progress.state == WanxiangModelManager::State::Modified) {
-    ::SetDlgItemTextW(
-        m_hWnd, IDC_MODEL_NOTE,
-        LocalText(
-            L"检测到用户修改的模型文件，不会自动覆盖。",
-            L"偵測到使用者修改的模型檔案，不會自動覆蓋。",
-            L"A modified model file was found and will not be overwritten.")
-            .c_str());
-    ::SetWindowTextW(primary, LocalText(L"现有文件已修改", L"現有檔案已修改",
-                                        L"File modified")
-                                  .c_str());
-    ::EnableWindow(primary, FALSE);
-    ::SetWindowTextW(
-        secondary,
-        LocalText(L"移除模型", L"移除模型", L"Remove model").c_str());
-    ::ShowWindow(secondary, SW_SHOW);
-  } else if (progress.state == WanxiangModelManager::State::Error) {
-    ::SetWindowTextW(primary, LocalText(L"重试", L"重試", L"Retry").c_str());
-    ::EnableWindow(primary, TRUE);
-    ::SetWindowTextW(
-        secondary,
-        LocalText(L"取消下载", L"取消下載", L"Cancel download").c_str());
-    ::ShowWindow(secondary, SW_SHOW);
-    ::SetDlgItemTextW(m_hWnd, IDC_MODEL_NOTE,
-                      ModelErrorText(progress.error_code).c_str());
-  } else {
-    ::SetWindowTextW(
-        primary,
-        LocalText(L"下载模型", L"下載模型", L"Download model").c_str());
-    ::EnableWindow(primary, TRUE);
-    ::ShowWindow(secondary, SW_HIDE);
+  std::wstring note, primary, secondary;
+  bool enabled = true;
+  switch (state) {
+    case State::Downloading:
+      note = LocalText(L"正在下载，关闭窗口后继续。",
+                       L"正在下載，關閉視窗後繼續。",
+                       L"Downloading continues after closing this window.");
+      primary = LocalText(L"暂停下载", L"暫停下載", L"Pause");
+      break;
+    case State::WaitingRetry:
+      note = ModelErrorText(progress.error_code) +
+             LocalText(L" 将自动重试。", L" 將自動重試。",
+                       L" Retrying automatically.");
+      primary = LocalText(L"立即重试", L"立即重試", L"Retry now");
+      break;
+    case State::Paused:
+      note = LocalText(L"已暂停，可继续下载。", L"已暫停，可繼續下載。",
+                       L"Paused. Resume when ready.");
+      primary = LocalText(L"继续下载", L"繼續下載", L"Resume");
+      break;
+    case State::RestartRequired:
+      note = LocalText(L"原下载缓存已丢失，需要重新下载。",
+                       L"原下載快取已遺失，需要重新下載。",
+                       L"The previous download cache is missing. Start again.");
+      primary = LocalText(L"重新下载", L"重新下載", L"Restart");
+      break;
+    case State::Error:
+      note = ModelErrorText(progress.error_code);
+      if (progress.error_context == BG_ERROR_CONTEXT_LOCAL_FILE &&
+          HRESULT_CODE(progress.error_code) != ERROR_DISK_FULL &&
+          HRESULT_CODE(progress.error_code) != ERROR_ACCESS_DENIED) {
+        note = LocalText(
+            L"无法访问下载缓存，请检查目录和磁盘后重试。",
+            L"無法存取下載快取，請檢查目錄和磁碟後重試。",
+            L"Cannot access the download cache. Check the folder and disk.");
+      }
+      primary = LocalText(L"重试", L"重試", L"Retry");
+      break;
+    case State::Transferred:
+      note = LocalText(L"下载完成，正在校验并安装。",
+                       L"下載完成，正在校驗並安裝。",
+                       L"Verifying and installing the downloaded model.");
+      primary = LocalText(L"正在安装", L"正在安裝", L"Installing");
+      enabled = false;
+      break;
+    case State::Installed:
+      note = LocalText(L"已安装", L"已安裝", L"Installed");
+      primary = note;
+      secondary = LocalText(L"移除模型", L"移除模型", L"Remove model");
+      enabled = false;
+      break;
+    case State::Modified:
+      note = LocalText(L"现有模型与此版本不同，将保留原文件。",
+                       L"現有模型與此版本不同，將保留原檔案。",
+                       L"The existing model differs and will be preserved.");
+      primary = LocalText(L"保留现有模型", L"保留現有模型", L"Model preserved");
+      secondary = LocalText(L"移除模型", L"移除模型", L"Remove model");
+      enabled = false;
+      break;
+    default:
+      note = LocalText(L"下载完成后自动安装并重新部署。",
+                       L"下載完成後自動安裝並重新部署。",
+                       L"Installs and redeploys automatically after download.");
+      primary = LocalText(L"下载模型", L"下載模型", L"Download model");
+      break;
   }
+  if ((active && state != State::Transferred) ||
+      state == State::RestartRequired)
+    secondary = LocalText(L"取消下载", L"取消下載", L"Cancel download");
+  if (model_install_failed_) {
+    note =
+        LocalText(L"安装未完成。检查用户文件夹后重试，已校验的下载会复用。",
+                  L"安裝未完成。檢查使用者資料夾後重試，已校驗的下載會重用。",
+                  L"Installation failed. Check the user folder and retry; "
+                  L"verified data is reused.");
+    primary = LocalText(L"重试安装", L"重試安裝", L"Retry install");
+    enabled = true;
+  }
+  set_text(IDC_MODEL_NOTE, note);
+  set_text(IDC_MODEL_DOWNLOAD, primary);
+  set_text(IDC_MODEL_SECONDARY, secondary);
+  ::EnableWindow(GetDlgItem(IDC_MODEL_DOWNLOAD), enabled);
+  ::ShowWindow(GetDlgItem(IDC_MODEL_SECONDARY),
+               secondary.empty() ? SW_HIDE : SW_SHOW);
 }
-
 void SwitcherSettingsDialog::FinishModelDownload() {
+  model_install_failed_ = true;
   std::wstring error;
   if (!model_manager_.CompleteAndInstall(&error)) {
     ::MessageBoxW(m_hWnd, error.c_str(),
@@ -472,6 +471,7 @@ void SwitcherSettingsDialog::FinishModelDownload() {
       UpdateModelUi();
       return;
     }
+    model_install_failed_ = false;
     ::MessageBoxW(
         m_hWnd,
         LocalText(
@@ -519,8 +519,7 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
                last_checked.wMonth, last_checked.wDay, last_checked.wHour,
                last_checked.wMinute);
     SetLastUpdateCheckText(
-        LocalText(L"上次检查：", L"上次檢查：", L"Last checked: ") + checked +
-        L" · " + last_release);
+        LocalText(L"上次检查：", L"上次檢查：", L"Last checked: ") + checked);
   } else {
     SetLastUpdateCheckText(LocalText(L"上次检查：尚未检查",
                                      L"上次檢查：尚未檢查",
@@ -528,6 +527,12 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   }
 
   Populate();
+  ::EnableWindow(GetDlgItem(IDOK), FALSE);
+  ::SetDlgItemTextW(
+      m_hWnd, IDC_USER_DATA_FOLDER,
+      (LocalText(L"用户文件夹：", L"使用者資料夾：", L"User folder: ") +
+       WeaselUserDataPath().wstring())
+          .c_str());
   SetTimer(kModelTimer, 500);
 
   CenterWindow();
@@ -554,12 +559,16 @@ LRESULT SwitcherSettingsDialog::OnCloseCommand(WORD, WORD, HWND, BOOL&) {
 LRESULT SwitcherSettingsDialog::OnTimer(UINT, WPARAM timer, LPARAM, BOOL&) {
   if (timer != kModelTimer)
     return 0;
+  FinishUpdateCheck();
   const auto progress = model_manager_.GetProgress();
-  if (progress.state == WanxiangModelManager::State::Transferred) {
+  if (!model_install_failed_ &&
+      progress.state == WanxiangModelManager::State::Transferred) {
     UpdateModelUi();
     RedrawWindow(nullptr, nullptr,
                  RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
+    KillTimer(kModelTimer);
     FinishModelDownload();
+    SetTimer(kModelTimer, 500);
   } else if (selected_schema_ < schemas_.size() &&
              schemas_[selected_schema_].id == "wanxiang_lite") {
     UpdateModelUi();
@@ -578,7 +587,26 @@ LRESULT SwitcherSettingsDialog::OnCheckUpdates(WORD, WORD, HWND, BOOL&) {
   RedrawWindow(nullptr, nullptr,
                RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
 
-  const auto result = WanxiangUpdateManager::CheckNow();
+  if (update_check_)
+    return 0;
+  update_check_ = std::make_shared<UpdateCheck>();
+  std::thread([check = update_check_]() {
+    try {
+      check->result = WanxiangUpdateManager::CheckNow();
+    } catch (...) {
+      check->result.success = false;
+    }
+    check->done.store(true);
+  }).detach();
+  return 0;
+}
+
+void SwitcherSettingsDialog::FinishUpdateCheck() {
+  if (!update_check_ || !update_check_->done.load())
+    return;
+  const auto result = update_check_->result;
+  update_check_.reset();
+  HWND button = GetDlgItem(IDC_CHECK_SCHEME_UPDATES);
   if (!result.success) {
     SetLastUpdateCheckText(LocalText(L"检查失败，请稍后重试",
                                      L"檢查失敗，請稍後重試",
@@ -591,16 +619,15 @@ LRESULT SwitcherSettingsDialog::OnCheckUpdates(WORD, WORD, HWND, BOOL&) {
                   L"Checked just now · all managed schemas are current"));
   } else {
     SetLastUpdateCheckText(
-        LocalText(L"刚刚检查 · 万象拼音 Lite 最新发布：",
-                  L"剛剛檢查 · 萬象拼音 Lite 最新發佈：",
-                  L"Checked just now · latest Wanxiang Lite release: ") +
-        result.latest_tag);
+        LocalText(L"刚刚检查 · 万象拼音 Lite 有可用更新",
+                  L"剛剛檢查 · 萬象拼音 Lite 有可用更新",
+                  L"Checked just now · Wanxiang Lite update available"));
   }
   ::SetWindowTextW(
       button,
       LocalText(L"立即检查更新", L"立即檢查更新", L"Check now").c_str());
   ::EnableWindow(button, TRUE);
-  return 0;
+  return;
 }
 
 LRESULT SwitcherSettingsDialog::OnUpdateSettings(WORD,
@@ -671,7 +698,12 @@ LRESULT SwitcherSettingsDialog::OnProjectLink(int,
 
 LRESULT SwitcherSettingsDialog::OnModelPrimary(WORD, WORD, HWND, BOOL&) {
   std::wstring error;
-  if (!model_manager_.Start(&error)) {
+  model_install_failed_ = false;
+  const auto state = model_manager_.GetProgress().state;
+  const bool success = state == WanxiangModelManager::State::Downloading
+                           ? model_manager_.Pause(&error)
+                           : model_manager_.Start(&error);
+  if (!success) {
     ::MessageBoxW(
         m_hWnd, error.c_str(),
         LocalText(L"无法开始下载", L"無法開始下載", L"Unable to start download")
@@ -687,8 +719,10 @@ LRESULT SwitcherSettingsDialog::OnModelSecondary(WORD, WORD, HWND, BOOL&) {
   if (state == WanxiangModelManager::State::Downloading ||
       state == WanxiangModelManager::State::WaitingRetry ||
       state == WanxiangModelManager::State::Paused ||
+      state == WanxiangModelManager::State::RestartRequired ||
       state == WanxiangModelManager::State::Error) {
     model_manager_.Cancel();
+    model_install_failed_ = false;
     UpdateModelUi();
     return 0;
   }
@@ -808,6 +842,7 @@ LRESULT SwitcherSettingsDialog::OnSchemaListItemChanged(int,
       (item->uOldState & LVIS_STATEIMAGEMASK)) {
     schemas_[index].enabled = schema_list_.GetCheckState(item->iItem) != FALSE;
     modified_ = true;
+    ::EnableWindow(GetDlgItem(IDOK), TRUE);
     if (selected_schema_ == index)
       ShowDetails(index);
   }

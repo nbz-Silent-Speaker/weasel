@@ -340,7 +340,14 @@ program_files:
   IfErrors +2 0
   StrCpy $R2 "/t"
 
-  ExecWait '"$INSTDIR\WeaselSetup.exe" $R2'
+  ClearErrors
+  ExecWait '"$INSTDIR\WeaselSetup.exe" $R2' $R3
+  IfErrors setup_aborted
+  StrCmp $R3 "0" setup_confirmed setup_aborted
+  setup_aborted:
+  SetErrorLevel 1
+  Abort
+  setup_confirmed:
 
   ; Write the uninstall keys for Windows
   WriteRegStr HKLM "${REG_UNINST_KEY}" "DisplayName" "$(DISPLAYNAME)"

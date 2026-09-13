@@ -2,6 +2,8 @@
 #include "WanxiangModelManager.h"
 
 #include <bcrypt.h>
+#include <bits3_0.h>
+#include <ShlObj.h>
 
 #include <array>
 #include <fstream>
@@ -120,6 +122,39 @@ done:
     ::BCryptCloseAlgorithmProvider(algorithm, 0);
   return success;
 }
+
+void CleanCommittedDownload(const std::filesystem::path& path,
+                            bool record_commit) {
+  if (path.empty())
+    return;
+  auto receipt = path;
+  receipt += L".cleanup";
+  std::error_code error;
+  if (record_commit) {
+    if (!std::filesystem::exists(path, error) || error)
+      return;
+    std::ofstream marker(receipt, std::ios::binary | std::ios::trunc);
+    marker << kModelSha256;
+    marker.flush();
+    if (!marker)
+      LOG(WARNING) << "Unable to record pending model cache cleanup.";
+  } else {
+    std::ifstream marker(receipt, std::ios::binary);
+    std::string digest;
+    marker >> digest;
+    if (digest != kModelSha256)
+      return;
+  }
+  // Called only after deployment has committed, or from its cleanup receipt.
+  // Never recurse or remove another model/version's cache.
+  std::filesystem::remove(path, error);
+  if (error) {
+    LOG(WARNING) << "Model deployed; cache cleanup will retry: "
+                 << error.message();
+    return;
+  }
+  std::filesystem::remove(receipt, error);
+}
 }  // namespace
 
 WanxiangModelManager::WanxiangModelManager() {
@@ -127,6 +162,12 @@ WanxiangModelManager::WanxiangModelManager() {
   std::wstring error;
   if (EnsureManager(&error))
     AttachExistingJob();
+  if (!job_) {
+    CleanCommittedDownload(CachePath(), false);
+    CleanCommittedDownload(WeaselUserDataPath() / L".weasel-packages" /
+                               L"wanxiang-lts-zh-hans.gram.part",
+                           false);
+  }
 }
 
 void WanxiangModelManager::RecoverInterruptedTransaction() {
@@ -218,7 +259,27 @@ bool WanxiangModelManager::AttachExistingJob() {
         if (SUCCEEDED(candidate->GetState(&state)) &&
             state != BG_JOB_STATE_CANCELLED &&
             state != BG_JOB_STATE_ACKNOWLEDGED) {
-          if (state == BG_JOB_STATE_SUSPENDED && FAILED(candidate->Resume()))
+          CComPtr<IEnumBackgroundCopyFiles> files;
+          CComPtr<IBackgroundCopyFile> file;
+          ULONG count = 0;
+          if (FAILED(candidate->EnumFiles(&files)) ||
+              FAILED(files->GetCount(&count)) || count != 1 ||
+              files->Next(1, &file, &count) != S_OK || count != 1)
+            continue;
+          LPWSTR remote = nullptr;
+          LPWSTR local = nullptr;
+          const HRESULT remote_result = file->GetRemoteName(&remote);
+          const HRESULT local_result = file->GetLocalName(&local);
+          const bool valid = SUCCEEDED(remote_result) &&
+                             SUCCEEDED(local_result) && remote && local &&
+                             !wcscmp(remote, kModelUrl) &&
+                             std::filesystem::path(local).filename() ==
+                                 L"wanxiang-lts-zh-hans.gram.part";
+          if (valid)
+            job_path_ = local;
+          ::CoTaskMemFree(remote);
+          ::CoTaskMemFree(local);
+          if (!valid)
             continue;
           job_ = candidate;
           return true;
@@ -230,8 +291,47 @@ bool WanxiangModelManager::AttachExistingJob() {
 }
 
 std::filesystem::path WanxiangModelManager::StagingPath() const {
-  return WeaselUserDataPath() / L".weasel-packages" /
+  return job_path_.empty() ? CachePath() : job_path_;
+}
+
+std::filesystem::path WanxiangModelManager::CachePath() const {
+  PWSTR directory = nullptr;
+  if (FAILED(::SHGetKnownFolderPath(FOLDERID_LocalAppData, KF_FLAG_DEFAULT,
+                                    nullptr, &directory)))
+    return {};
+  const std::filesystem::path root(directory);
+  ::CoTaskMemFree(directory);
+  return root / L"Rime" / L"Weasel" / L"Downloads" / kModelSha256 /
          L"wanxiang-lts-zh-hans.gram.part";
+}
+
+bool WanxiangModelManager::JobCacheMissing() const {
+  if (!job_)
+    return false;
+  const DWORD directory =
+      ::GetFileAttributesW(StagingPath().parent_path().c_str());
+  const DWORD directory_error = ::GetLastError();
+  const bool directory_missing = directory == INVALID_FILE_ATTRIBUTES &&
+                                 (directory_error == ERROR_FILE_NOT_FOUND ||
+                                  directory_error == ERROR_PATH_NOT_FOUND);
+  // BITS owns a temporary file until Complete(). The destination .part file
+  // normally does not exist yet, so its absence is not evidence of lost data.
+  CComPtr<IEnumBackgroundCopyFiles> files;
+  CComPtr<IBackgroundCopyFile> file;
+  ULONG fetched = 0;
+  if (FAILED(job_->EnumFiles(&files)) ||
+      files->Next(1, &file, &fetched) != S_OK || fetched != 1)
+    return directory_missing;
+  CComQIPtr<IBackgroundCopyFile3> file3(file);
+  LPWSTR temporary = nullptr;
+  if (!file3 || FAILED(file3->GetTemporaryName(&temporary)))
+    return directory_missing;
+  const DWORD attributes =
+      temporary ? ::GetFileAttributesW(temporary) : INVALID_FILE_ATTRIBUTES;
+  const DWORD error = ::GetLastError();
+  ::CoTaskMemFree(temporary);
+  return attributes == INVALID_FILE_ATTRIBUTES &&
+         (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND);
 }
 
 std::filesystem::path WanxiangModelManager::ModelPath() const {
@@ -256,7 +356,9 @@ WanxiangModelManager::State WanxiangModelManager::InstalledState() const {
   return size == kExpectedSize ? State::Installed : State::Modified;
 }
 
-std::wstring WanxiangModelManager::GetJobError(HRESULT* error_code) const {
+std::wstring WanxiangModelManager::GetJobError(
+    HRESULT* error_code,
+    BG_ERROR_CONTEXT* error_context) const {
   if (error_code)
     *error_code = E_FAIL;
   if (!job_)
@@ -266,8 +368,12 @@ std::wstring WanxiangModelManager::GetJobError(HRESULT* error_code) const {
     return L"Background download failed.";
   BG_ERROR_CONTEXT context = BG_ERROR_CONTEXT_NONE;
   HRESULT code = E_FAIL;
-  if (SUCCEEDED(error->GetError(&context, &code)) && error_code)
-    *error_code = code;
+  if (SUCCEEDED(error->GetError(&context, &code))) {
+    if (error_code)
+      *error_code = code;
+    if (error_context)
+      *error_context = context;
+  }
   LPWSTR description = nullptr;
   if (FAILED(error->GetErrorDescription(GetThreadUILanguage(), &description)) ||
       !description)
@@ -280,8 +386,10 @@ std::wstring WanxiangModelManager::GetJobError(HRESULT* error_code) const {
 WanxiangModelManager::Progress WanxiangModelManager::GetProgress() {
   Progress result;
   if (!job_) {
-    result.state = InstalledState();
+    result.state = ready_to_install_ ? State::Transferred : InstalledState();
     result.total = kExpectedSize;
+    if (ready_to_install_)
+      result.transferred = kExpectedSize;
     return result;
   }
 
@@ -298,14 +406,24 @@ WanxiangModelManager::Progress WanxiangModelManager::GetProgress() {
     result.error_code = state_result;
     result.error = L"Unable to read background download state.";
   } else if (state == BG_JOB_STATE_TRANSFERRED) {
-    result.state = State::Transferred;
+    result.state =
+        JobCacheMissing() ? State::RestartRequired : State::Transferred;
   } else if (state == BG_JOB_STATE_TRANSIENT_ERROR) {
     result.state = State::WaitingRetry;
-    result.error = GetJobError(&result.error_code);
+    result.error = GetJobError(&result.error_code, &result.error_context);
+    if (result.error_context == BG_ERROR_CONTEXT_LOCAL_FILE)
+      result.state = JobCacheMissing() ? State::RestartRequired : State::Error;
   } else if (state == BG_JOB_STATE_ERROR || state == BG_JOB_STATE_SUSPENDED) {
     result.state = State::Paused;
     if (state == BG_JOB_STATE_ERROR)
-      result.error = GetJobError(&result.error_code);
+      result.error = GetJobError(&result.error_code, &result.error_context);
+    if (state == BG_JOB_STATE_ERROR)
+      result.state = result.error_context == BG_ERROR_CONTEXT_LOCAL_FILE &&
+                             JobCacheMissing()
+                         ? State::RestartRequired
+                         : State::Error;
+    else if (result.transferred > 0 && JobCacheMissing())
+      result.state = State::RestartRequired;
   } else if (state == BG_JOB_STATE_CANCELLED ||
              state == BG_JOB_STATE_ACKNOWLEDGED) {
     job_.Release();
@@ -318,6 +436,20 @@ WanxiangModelManager::Progress WanxiangModelManager::GetProgress() {
 
 bool WanxiangModelManager::Start(std::wstring* error) {
   if (job_) {
+    const auto progress = GetProgress();
+    if (progress.state == State::RestartRequired) {
+      // The UI explicitly offers restarting when BITS' real cache is gone.
+      const HRESULT cancelled = job_->Cancel();
+      if (FAILED(cancelled)) {
+        if (error)
+          *error = HresultMessage(cancelled);
+        return false;
+      }
+      job_.Release();
+      job_path_.clear();
+    }
+  }
+  if (job_) {
     BG_JOB_STATE state = BG_JOB_STATE_ERROR;
     HRESULT result = job_->GetState(&state);
     if (SUCCEEDED(result) && (state == BG_JOB_STATE_CANCELLED ||
@@ -326,7 +458,16 @@ bool WanxiangModelManager::Start(std::wstring* error) {
     } else if (SUCCEEDED(result) && state == BG_JOB_STATE_TRANSFERRED) {
       return true;
     } else if (SUCCEEDED(result)) {
+      std::error_code directory_error;
+      std::filesystem::create_directories(StagingPath().parent_path(),
+                                          directory_error);
+      if (directory_error) {
+        if (error)
+          *error = L"无法访问下载缓存目录，请检查目录权限和磁盘状态。";
+        return false;
+      }
       job_->SetPriority(BG_JOB_PRIORITY_FOREGROUND);
+      job_->SetNotifyFlags(BG_NOTIFY_JOB_TRANSFERRED);
       if (state == BG_JOB_STATE_ERROR ||
           state == BG_JOB_STATE_TRANSIENT_ERROR ||
           state == BG_JOB_STATE_SUSPENDED) {
@@ -347,13 +488,22 @@ bool WanxiangModelManager::Start(std::wstring* error) {
   if (!EnsureManager(error))
     return false;
 
+  // A verified download is reusable after installation/deployment failed.
+  if (!StagingPath().empty() && VerifyStagedFile(nullptr)) {
+    ready_to_install_ = true;
+    return true;
+  }
+  job_path_.clear();
+  if (StagingPath().empty()) {
+    if (error)
+      *error = L"无法获取当前用户的本地缓存目录。";
+    return false;
+  }
   std::error_code file_error;
   std::filesystem::create_directories(StagingPath().parent_path(), file_error);
   if (file_error) {
     if (error)
-      *error = file_error.message().empty()
-                   ? L"Unable to create the model download directory."
-                   : u8tow(file_error.message());
+      *error = L"无法创建下载缓存目录，请检查目录权限和磁盘状态。";
     return false;
   }
   std::filesystem::remove(StagingPath(), file_error);
@@ -375,7 +525,7 @@ bool WanxiangModelManager::Start(std::wstring* error) {
   if (SUCCEEDED(result))
     result = job_->SetMinimumRetryDelay(60);
   if (SUCCEEDED(result))
-    result = job_->SetNoProgressTimeout(3600);
+    result = job_->SetNoProgressTimeout(7 * 24 * 60 * 60);
   if (SUCCEEDED(result))
     result = job_->AddFile(kModelUrl, StagingPath().c_str());
   wchar_t executable[MAX_PATH] = {};
@@ -392,8 +542,7 @@ bool WanxiangModelManager::Start(std::wstring* error) {
   if (SUCCEEDED(result))
     result = job2->SetNotifyCmdLine(executable, kCompletionArgument);
   if (SUCCEEDED(result))
-    result =
-        job_->SetNotifyFlags(BG_NOTIFY_JOB_TRANSFERRED | BG_NOTIFY_JOB_ERROR);
+    result = job_->SetNotifyFlags(BG_NOTIFY_JOB_TRANSFERRED);
   if (SUCCEEDED(result))
     result = job_->Resume();
   if (FAILED(result)) {
@@ -406,12 +555,21 @@ bool WanxiangModelManager::Start(std::wstring* error) {
   return true;
 }
 
+bool WanxiangModelManager::Pause(std::wstring* error) {
+  const HRESULT result = job_ ? job_->Suspend() : E_UNEXPECTED;
+  if (FAILED(result) && error)
+    *error = HresultMessage(result);
+  return SUCCEEDED(result);
+}
+
 void WanxiangModelManager::Cancel() {
   if (job_)
     job_->Cancel();
   job_.Release();
   std::error_code error;
   std::filesystem::remove(StagingPath(), error);
+  ready_to_install_ = false;
+  job_path_.clear();
 }
 
 bool WanxiangModelManager::VerifyStagedFile(std::wstring* error) const {
@@ -438,16 +596,47 @@ bool WanxiangModelManager::VerifyStagedFile(std::wstring* error) const {
 }
 
 bool WanxiangModelManager::CompleteAndInstall(std::wstring* error) {
-  if (!job_) {
+  const bool cached = ready_to_install_;
+  ready_to_install_ = false;
+  if (!job_ && !cached) {
     if (error)
       *error = L"No completed model download was found.";
     return false;
   }
+  // Preserve completed data even when a previous install transaction needs
+  // recovery. Recreate only the destination folder if BITS still has its data.
+  if (job_) {
+    std::error_code directory_error;
+    std::filesystem::create_directories(StagingPath().parent_path(),
+                                        directory_error);
+    if (directory_error) {
+      job_->Suspend();
+      if (error)
+        *error = L"无法恢复下载缓存目录，请检查目录权限和磁盘状态。";
+      return false;
+    }
+  }
+  const HRESULT completed = job_ ? job_->Complete() : S_OK;
+  if (FAILED(completed)) {
+    // Keep the BITS task for an explicit retry; do not discard downloaded data.
+    job_->Suspend();
+    if (error)
+      *error = HresultMessage(completed);
+    return false;
+  }
+  job_.Release();
+  if (!VerifyStagedFile(error)) {
+    std::error_code ignored;
+    std::filesystem::remove(StagingPath(), ignored);
+    return false;
+  }
+
   std::error_code file_error;
   const bool has_marker =
       std::filesystem::exists(CommitMarkerPath(), file_error);
   if (file_error || has_marker) {
-    job_->Cancel();
+    if (job_)
+      job_->Cancel();
     job_.Release();
     if (error)
       *error = file_error
@@ -458,32 +647,44 @@ bool WanxiangModelManager::CompleteAndInstall(std::wstring* error) {
   }
   const bool has_backup = std::filesystem::exists(BackupPath(), file_error);
   if (file_error) {
-    job_->Cancel();
+    if (job_)
+      job_->Cancel();
     job_.Release();
     if (error)
       *error = u8tow(file_error.message());
     return false;
   }
   if (has_backup) {
-    job_->Cancel();
+    if (job_)
+      job_->Cancel();
     job_.Release();
     if (error)
       *error = L"An earlier model backup still needs recovery.";
     return false;
   }
 
-  const HRESULT completed = job_->Complete();
-  job_.Release();
-  if (FAILED(completed)) {
+  // Prepare on the target volume before replacing the installed model. The
+  // per-user download cache may be on a different drive from the Rime folder.
+  const auto prepared =
+      BackupPath().parent_path() / L"wanxiang-lts-zh-hans.gram.installing";
+  std::filesystem::create_directories(prepared.parent_path(), file_error);
+  if (!file_error)
+    std::filesystem::copy_file(
+        StagingPath(), prepared,
+        std::filesystem::copy_options::overwrite_existing, file_error);
+  std::string prepared_digest;
+  if (file_error || !Sha256File(prepared, &prepared_digest) ||
+      prepared_digest != kModelSha256) {
     std::error_code ignored;
-    std::filesystem::remove(StagingPath(), ignored);
+    std::filesystem::remove(prepared, ignored);
     if (error)
-      *error = HresultMessage(completed);
+      *error =
+          L"无法将模型写入用户文件夹，请检查权限和剩余空间。下载文件已保留。";
     return false;
   }
-  if (!VerifyStagedFile(error)) {
-    std::error_code ignored;
-    std::filesystem::remove(StagingPath(), ignored);
+  if (InstalledState() == State::Modified) {
+    if (error)
+      *error = L"用户文件夹中出现了其他版本的模型，已保留原文件和下载缓存。";
     return false;
   }
 
@@ -504,7 +705,7 @@ bool WanxiangModelManager::CompleteAndInstall(std::wstring* error) {
     }
     backed_up_existing_ = true;
   }
-  std::filesystem::rename(StagingPath(), ModelPath(), file_error);
+  std::filesystem::rename(prepared, ModelPath(), file_error);
   if (file_error) {
     if (backed_up_existing_) {
       std::error_code ignored;
@@ -628,5 +829,6 @@ bool WanxiangModelManager::Commit(std::wstring* error) {
   }
   installed_this_session_ = false;
   backed_up_existing_ = false;
+  CleanCommittedDownload(StagingPath(), true);
   return true;
 }

@@ -2,9 +2,23 @@
 #include "InstallOptionsDlg.h"
 #include <atlstr.h>
 #include <ShlObj.h>
+#include <filesystem>
 #pragma comment(lib, "Shell32.lib")
 
 int uninstall(bool silent);
+
+namespace {
+std::wstring DefaultUserDirectory() {
+  wchar_t path[MAX_PATH] = {};
+  ::SHGetFolderPathW(nullptr, CSIDL_APPDATA, nullptr, SHGFP_TYPE_CURRENT, path);
+  return (std::filesystem::path(path) / L"Rime").wstring();
+}
+
+const wchar_t* FolderText(const wchar_t* chinese, const wchar_t* english) {
+  return PRIMARYLANGID(GetThreadUILanguage()) == LANG_CHINESE ? chinese
+                                                              : english;
+}
+}  // namespace
 
 InstallOptionsDialog::InstallOptionsDialog()
     : installed(false), profile(L"hans"), user_dir() {}
@@ -59,7 +73,8 @@ LRESULT InstallOptionsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   CheckRadioButton(
       IDC_RADIO_DEFAULT_DIR, IDC_RADIO_CUSTOM_DIR,
       (user_dir.empty() ? IDC_RADIO_DEFAULT_DIR : IDC_RADIO_CUSTOM_DIR));
-  dir_.SetWindowTextW(user_dir.c_str());
+  dir_.SetWindowTextW(user_dir.empty() ? DefaultUserDirectory().c_str()
+                                       : user_dir.c_str());
 
   profile_.EnableWindow(!installed);
   remove_.EnableWindow(installed);
@@ -111,7 +126,52 @@ LRESULT InstallOptionsDialog::OnOK(WORD, WORD code, HWND, BOOL&) {
     dir_.GetWindowTextW(text);
     user_dir = text;
   } else {
-    user_dir.clear();
+    user_dir = DefaultUserDirectory();
+  }
+  const std::filesystem::path folder(user_dir);
+  if (user_dir.empty() || !folder.is_absolute()) {
+    ::MessageBoxW(m_hWnd,
+                  FolderText(L"请选择完整的用户文件夹路径。",
+                             L"Choose an absolute user folder path."),
+                  FolderText(L"用户文件夹", L"User folder"),
+                  MB_OK | MB_ICONWARNING);
+    return 0;
+  }
+  std::error_code directory_error;
+  const bool exists = std::filesystem::exists(folder, directory_error);
+  if (!exists && !directory_error) {
+    const auto question =
+        user_dir + L"\n\n" +
+        FolderText(L"此文件夹不存在。是否创建并使用？",
+                   L"This folder does not exist. Create and use it?");
+    if (::MessageBoxW(m_hWnd, question.c_str(),
+                      FolderText(L"用户文件夹", L"User folder"),
+                      MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2) != IDYES)
+      return 0;
+    std::filesystem::create_directories(folder, directory_error);
+  }
+  // Probe using a unique file and delete-on-close; never overwrite user files.
+  wchar_t probe[MAX_PATH] = {};
+  bool writable = !directory_error &&
+                  ::GetTempFileNameW(user_dir.c_str(), L"rime", 0, probe);
+  if (writable) {
+    HANDLE file = ::CreateFileW(
+        probe, GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
+        FILE_ATTRIBUTE_TEMPORARY | FILE_FLAG_DELETE_ON_CLOSE, nullptr);
+    writable = file != INVALID_HANDLE_VALUE;
+    if (writable)
+      ::CloseHandle(file);
+    else
+      ::DeleteFileW(probe);
+  }
+  if (!writable) {
+    ::MessageBoxW(
+        m_hWnd,
+        FolderText(L"无法写入此用户文件夹，请检查路径、权限和磁盘空间。",
+                   L"Cannot write to this folder. Check the path, permissions "
+                   L"and disk space."),
+        FolderText(L"用户文件夹", L"User folder"), MB_OK | MB_ICONERROR);
+    return 0;
   }
   EndDialog(IDOK);
   return 0;
@@ -131,7 +191,7 @@ LRESULT InstallOptionsDialog::OnRemove(WORD, WORD code, HWND, BOOL&) {
 
 LRESULT InstallOptionsDialog::OnUseDefaultDir(WORD, WORD code, HWND, BOOL&) {
   dir_.EnableWindow(FALSE);
-  dir_.SetWindowTextW(L"");
+  dir_.SetWindowTextW(DefaultUserDirectory().c_str());
   button_custom_dir_.EnableWindow(FALSE);
   return 0;
 }
