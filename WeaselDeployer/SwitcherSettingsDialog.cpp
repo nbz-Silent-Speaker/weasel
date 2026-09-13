@@ -608,14 +608,16 @@ void SwitcherSettingsDialog::AdjustInputModeWidth() {
     input_mode_.GetLBText(index, value.data());
     SIZE extent = {};
     ::GetTextExtentPoint32W(dc, value.c_str(), length, &extent);
-    widest = (std::max)(widest, extent.cx);
+    widest = (std::max)(widest, static_cast<int>(extent.cx));
   }
   if (previous)
     ::SelectObject(dc, previous);
   ::ReleaseDC(input_mode_, dc);
   const int desired = widest + ::GetSystemMetrics(SM_CXVSCROLL) + 24;
-  const int width = (std::min)((std::max)(current.Width(), desired),
-                               current.right - available.left);
+  const int current_width = static_cast<int>(current.Width());
+  const int available_width = static_cast<int>(current.right - available.left);
+  const int width =
+      (std::min)((std::max)(current_width, desired), available_width);
   ::SetWindowPos(input_mode_, nullptr, current.right - width, current.top,
                  width, current.Height(), SWP_NOZORDER | SWP_NOACTIVATE);
   input_mode_.SetDroppedWidth((std::max)(width, desired));
@@ -1071,7 +1073,8 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   TOOLINFOW tool = {sizeof(tool)};
   tool.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
   tool.hwnd = m_hWnd;
-  tool.uId = reinterpret_cast<UINT_PTR>(GetDlgItem(IDC_HOTKEY_GRAVE));
+  HWND grave_key = GetDlgItem(IDC_HOTKEY_GRAVE);
+  tool.uId = reinterpret_cast<UINT_PTR>(grave_key);
   tooltip_text_ = LocalText(L"反引号键位于 Esc 下方、数字 1 左侧。",
                             L"反引號鍵位於 Esc 下方、數字 1 左側。",
                             L"The grave key is below Esc and left of 1.");
