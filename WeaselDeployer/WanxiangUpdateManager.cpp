@@ -13,8 +13,7 @@ constexpr wchar_t kReleasePath[] =
     L"/amzxyz/rime-wanxiang/-/badge/release.link";
 constexpr wchar_t kReleasePrefix[] =
     L"https://cnb.cool/amzxyz/rime-wanxiang/-/releases/tag/";
-constexpr wchar_t kRegistryRoot[] =
-    L"Software\\Rime\\Weasel\\PackageUpdates";
+constexpr wchar_t kRegistryRoot[] = L"Software\\Rime\\Weasel\\PackageUpdates";
 
 class InternetHandle {
  public:
@@ -32,8 +31,8 @@ class InternetHandle {
 };
 
 std::wstring RegistryPath(const std::string& schema_id) {
-  const int length = MultiByteToWideChar(CP_UTF8, 0, schema_id.c_str(), -1,
-                                         nullptr, 0);
+  const int length =
+      MultiByteToWideChar(CP_UTF8, 0, schema_id.c_str(), -1, nullptr, 0);
   std::wstring id(length > 0 ? length : 0, L'\0');
   if (length > 0) {
     MultiByteToWideChar(CP_UTF8, 0, schema_id.c_str(), -1, id.data(), length);
@@ -72,7 +71,8 @@ bool ReadRegistryQword(const wchar_t* name, ULONGLONG* value) {
                       nullptr, value, &size) == ERROR_SUCCESS;
 }
 
-bool ParseVersion(const std::wstring& text, std::array<unsigned long, 3>* parts) {
+bool ParseVersion(const std::wstring& text,
+                  std::array<unsigned long, 3>* parts) {
   size_t position =
       !text.empty() && (text[0] == L'v' || text[0] == L'V') ? 1 : 0;
   for (size_t index = 0; index < parts->size(); ++index) {
@@ -120,7 +120,7 @@ WanxiangUpdateManager::Frequency WanxiangUpdateManager::LoadFrequency(
 }
 
 bool WanxiangUpdateManager::SaveFrequency(const std::string& schema_id,
-                                           Frequency frequency) {
+                                          Frequency frequency) {
   HKEY key = nullptr;
   if (RegCreateKeyExW(HKEY_CURRENT_USER, RegistryPath(schema_id).c_str(), 0,
                       nullptr, REG_OPTION_NON_VOLATILE, KEY_SET_VALUE, nullptr,
@@ -128,9 +128,9 @@ bool WanxiangUpdateManager::SaveFrequency(const std::string& schema_id,
     return false;
   }
   const DWORD value = static_cast<DWORD>(frequency);
-  const LSTATUS result = RegSetValueExW(
-      key, L"CheckFrequency", 0, REG_DWORD,
-      reinterpret_cast<const BYTE*>(&value), sizeof(value));
+  const LSTATUS result =
+      RegSetValueExW(key, L"CheckFrequency", 0, REG_DWORD,
+                     reinterpret_cast<const BYTE*>(&value), sizeof(value));
   RegCloseKey(key);
   return result == ERROR_SUCCESS;
 }
@@ -241,9 +241,9 @@ std::wstring WanxiangUpdateManager::QueryLatestRelease(std::wstring* error) {
 #else
   constexpr DWORD kProxyMode = WINHTTP_ACCESS_TYPE_DEFAULT_PROXY;
 #endif
-  InternetHandle session(WinHttpOpen(
-      L"WeaselDeployer/UpdateCheck", kProxyMode, WINHTTP_NO_PROXY_NAME,
-      WINHTTP_NO_PROXY_BYPASS, 0));
+  InternetHandle session(WinHttpOpen(L"WeaselDeployer/UpdateCheck", kProxyMode,
+                                     WINHTTP_NO_PROXY_NAME,
+                                     WINHTTP_NO_PROXY_BYPASS, 0));
   if (!session) {
     *error = L"WinHTTP initialization failed.";
     return {};
@@ -274,10 +274,10 @@ std::wstring WanxiangUpdateManager::QueryLatestRelease(std::wstring* error) {
   }
   DWORD status = 0;
   DWORD status_size = sizeof(status);
-  if (!WinHttpQueryHeaders(request,
-                           WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
-                           WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size,
-                           WINHTTP_NO_HEADER_INDEX) ||
+  if (!WinHttpQueryHeaders(
+          request, WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER,
+          WINHTTP_HEADER_NAME_BY_INDEX, &status, &status_size,
+          WINHTTP_NO_HEADER_INDEX) ||
       status < 300 || status >= 400) {
     *error = L"The update source returned an unexpected response.";
     return {};

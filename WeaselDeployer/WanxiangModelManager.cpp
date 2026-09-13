@@ -302,8 +302,7 @@ WanxiangModelManager::Progress WanxiangModelManager::GetProgress() {
   } else if (state == BG_JOB_STATE_TRANSIENT_ERROR) {
     result.state = State::WaitingRetry;
     result.error = GetJobError(&result.error_code);
-  } else if (state == BG_JOB_STATE_ERROR ||
-             state == BG_JOB_STATE_SUSPENDED) {
+  } else if (state == BG_JOB_STATE_ERROR || state == BG_JOB_STATE_SUSPENDED) {
     result.state = State::Paused;
     if (state == BG_JOB_STATE_ERROR)
       result.error = GetJobError(&result.error_code);
@@ -321,9 +320,8 @@ bool WanxiangModelManager::Start(std::wstring* error) {
   if (job_) {
     BG_JOB_STATE state = BG_JOB_STATE_ERROR;
     HRESULT result = job_->GetState(&state);
-    if (SUCCEEDED(result) &&
-        (state == BG_JOB_STATE_CANCELLED ||
-         state == BG_JOB_STATE_ACKNOWLEDGED)) {
+    if (SUCCEEDED(result) && (state == BG_JOB_STATE_CANCELLED ||
+                              state == BG_JOB_STATE_ACKNOWLEDGED)) {
       job_.Release();
     } else if (SUCCEEDED(result) && state == BG_JOB_STATE_TRANSFERRED) {
       return true;

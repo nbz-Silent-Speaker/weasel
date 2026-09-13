@@ -51,9 +51,8 @@ int SwitcherSettingsDialog::LoadUpdateFrequency(
   return static_cast<int>(WanxiangUpdateManager::LoadFrequency(schema_id));
 }
 
-bool SwitcherSettingsDialog::SaveUpdateFrequency(
-    const std::string& schema_id,
-    int frequency) const {
+bool SwitcherSettingsDialog::SaveUpdateFrequency(const std::string& schema_id,
+                                                 int frequency) const {
   return WanxiangUpdateManager::SaveFrequency(
       schema_id, static_cast<WanxiangUpdateManager::Frequency>(frequency));
 }
@@ -73,8 +72,7 @@ std::wstring SwitcherSettingsDialog::UpdateFrequencyText(int frequency) const {
   }
 }
 
-void SwitcherSettingsDialog::SetLastUpdateCheckText(
-    const std::wstring& text) {
+void SwitcherSettingsDialog::SetLastUpdateCheckText(const std::wstring& text) {
   ::SetDlgItemTextW(m_hWnd, IDC_UPDATE_STATUS, text.c_str());
 }
 
@@ -181,8 +179,7 @@ void SwitcherSettingsDialog::ShowDetails(size_t index) {
   const bool wanxiang = schema.id == "wanxiang_lite";
   std::wstring title = schema.name;
   if (wanxiang)
-    title += L"  ·  " +
-             std::wstring(WanxiangUpdateManager::kInstalledVersion);
+    title += L"  ·  " + std::wstring(WanxiangUpdateManager::kInstalledVersion);
   ::SetDlgItemTextW(m_hWnd, IDC_SCHEMA_DETAIL_NAME, title.c_str());
   ::SetDlgItemTextW(m_hWnd, IDC_SCHEMA_DETAIL_STATUS,
                     LocalText(schema.enabled ? L"已启用" : L"未启用",
@@ -203,15 +200,16 @@ void SwitcherSettingsDialog::ShowDetails(size_t index) {
       m_hWnd, IDC_SCHEMA_PROJECT_LINKS,
       wanxiang
           ? L"<a href=\"https://github.com/amzxyz/rime-wanxiang\">GitHub</a>"
-            L"  ·  <a href=\"https://cnb.cool/amzxyz/rime-wanxiang\">CNB 国内源</a>"
+            L"  ·  <a href=\"https://cnb.cool/amzxyz/rime-wanxiang\">CNB "
+            L"国内源</a>"
           : L"");
-  ::ShowWindow(GetDlgItem(IDC_SCHEMA_PROJECT_LINKS), wanxiang ? SW_SHOW : SW_HIDE);
+  ::ShowWindow(GetDlgItem(IDC_SCHEMA_PROJECT_LINKS),
+               wanxiang ? SW_SHOW : SW_HIDE);
   ::ShowWindow(GetDlgItem(IDC_SCHEMA_UPDATE_SETTINGS),
                wanxiang ? SW_SHOW : SW_HIDE);
   if (wanxiang) {
-    const auto label =
-        LocalText(L"更新设置：", L"更新設定：", L"Update: ") +
-        UpdateFrequencyText(LoadUpdateFrequency(schema.id));
+    const auto label = LocalText(L"更新设置：", L"更新設定：", L"Update: ") +
+                       UpdateFrequencyText(LoadUpdateFrequency(schema.id));
     ::SetDlgItemTextW(m_hWnd, IDC_SCHEMA_UPDATE_SETTINGS, label.c_str());
   }
   ::ShowWindow(GetDlgItem(IDC_SCHEMA_RESTORE_PACKAGE), SW_HIDE);
@@ -254,15 +252,17 @@ std::wstring SwitcherSettingsDialog::ModelErrorText(HRESULT error_code) const {
         break;
       default:
         if (HRESULT_CODE(error_code) >= 500)
-          message = LocalText(L"下载源暂时不可用。", L"下載來源暫時無法使用。",
-                              L"The download source is temporarily unavailable.");
+          message =
+              LocalText(L"下载源暂时不可用。", L"下載來源暫時無法使用。",
+                        L"The download source is temporarily unavailable.");
         break;
     }
   }
   if (message.empty()) {
-    message = LocalText(L"下载暂时无法继续，请检查网络后重试。",
-                        L"下載暫時無法繼續，請檢查網路後重試。",
-                        L"The download cannot continue. Check the network and retry.");
+    message = LocalText(
+        L"下载暂时无法继续，请检查网络后重试。",
+        L"下載暫時無法繼續，請檢查網路後重試。",
+        L"The download cannot continue. Check the network and retry.");
   }
   return message;
 }
@@ -326,23 +326,22 @@ void SwitcherSettingsDialog::UpdateModelUi() {
                   L"The network is temporarily unavailable. The download "
                   L"will retry and keep its progress.")
             .c_str());
-    ::SetWindowTextW(
-        primary, LocalText(L"立即重试", L"立即重試", L"Retry now").c_str());
+    ::SetWindowTextW(primary,
+                     LocalText(L"立即重试", L"立即重試", L"Retry now").c_str());
     ::EnableWindow(primary, TRUE);
     ::SetWindowTextW(
         secondary,
         LocalText(L"取消下载", L"取消下載", L"Cancel download").c_str());
     ::ShowWindow(secondary, SW_SHOW);
   } else if (paused) {
-    std::wstring note =
-        LocalText(L"下载已暂停，已下载内容会保留。",
-                  L"下載已暫停，已下載內容會保留。",
-                  L"The download is paused and its progress is preserved.");
+    std::wstring note = LocalText(
+        L"下载已暂停，已下载内容会保留。", L"下載已暫停，已下載內容會保留。",
+        L"The download is paused and its progress is preserved.");
     if (FAILED(progress.error_code))
       note += L" " + ModelErrorText(progress.error_code);
     ::SetDlgItemTextW(m_hWnd, IDC_MODEL_NOTE, note.c_str());
-    ::SetWindowTextW(
-        primary, LocalText(L"继续下载", L"繼續下載", L"Continue").c_str());
+    ::SetWindowTextW(primary,
+                     LocalText(L"继续下载", L"繼續下載", L"Continue").c_str());
     ::EnableWindow(primary, TRUE);
     ::SetWindowTextW(
         secondary,
@@ -351,8 +350,7 @@ void SwitcherSettingsDialog::UpdateModelUi() {
   } else if (transferred) {
     ::SetDlgItemTextW(
         m_hWnd, IDC_MODEL_NOTE,
-        LocalText(L"下载完成，正在校验并安装。",
-                  L"下載完成，正在校驗並安裝。",
+        LocalText(L"下载完成，正在校验并安装。", L"下載完成，正在校驗並安裝。",
                   L"Download complete. Verifying and installing.")
             .c_str());
     ::SetWindowTextW(primary,
@@ -360,11 +358,10 @@ void SwitcherSettingsDialog::UpdateModelUi() {
     ::EnableWindow(primary, FALSE);
     ::ShowWindow(secondary, SW_HIDE);
   } else if (progress.state == WanxiangModelManager::State::Installed) {
-    ::SetDlgItemTextW(
-        m_hWnd, IDC_MODEL_NOTE,
-        LocalText(L"语言模型已安装。", L"語言模型已安裝。",
-                  L"The language model is installed.")
-            .c_str());
+    ::SetDlgItemTextW(m_hWnd, IDC_MODEL_NOTE,
+                      LocalText(L"语言模型已安装。", L"語言模型已安裝。",
+                                L"The language model is installed.")
+                          .c_str());
     ::SetWindowTextW(primary,
                      LocalText(L"已安装", L"已安裝", L"Installed").c_str());
     ::EnableWindow(primary, FALSE);
@@ -375,9 +372,10 @@ void SwitcherSettingsDialog::UpdateModelUi() {
   } else if (progress.state == WanxiangModelManager::State::Modified) {
     ::SetDlgItemTextW(
         m_hWnd, IDC_MODEL_NOTE,
-        LocalText(L"检测到用户修改的模型文件，不会自动覆盖。",
-                  L"偵測到使用者修改的模型檔案，不會自動覆蓋。",
-                  L"A modified model file was found and will not be overwritten.")
+        LocalText(
+            L"检测到用户修改的模型文件，不会自动覆盖。",
+            L"偵測到使用者修改的模型檔案，不會自動覆蓋。",
+            L"A modified model file was found and will not be overwritten.")
             .c_str());
     ::SetWindowTextW(primary, LocalText(L"现有文件已修改", L"現有檔案已修改",
                                         L"File modified")
@@ -572,21 +570,20 @@ LRESULT SwitcherSettingsDialog::OnTimer(UINT, WPARAM timer, LPARAM, BOOL&) {
 LRESULT SwitcherSettingsDialog::OnCheckUpdates(WORD, WORD, HWND, BOOL&) {
   HWND button = GetDlgItem(IDC_CHECK_SCHEME_UPDATES);
   ::EnableWindow(button, FALSE);
-  ::SetWindowTextW(
-      button, LocalText(L"正在检查…", L"正在檢查…", L"Checking…").c_str());
-  SetLastUpdateCheckText(
-      LocalText(L"正在检查可更新方案…", L"正在檢查可更新方案…",
-                L"Checking managed schemas…"));
+  ::SetWindowTextW(button,
+                   LocalText(L"正在检查…", L"正在檢查…", L"Checking…").c_str());
+  SetLastUpdateCheckText(LocalText(L"正在检查可更新方案…",
+                                   L"正在檢查可更新方案…",
+                                   L"Checking managed schemas…"));
   RedrawWindow(nullptr, nullptr,
                RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
 
   const auto result = WanxiangUpdateManager::CheckNow();
   if (!result.success) {
-    SetLastUpdateCheckText(
-        LocalText(L"检查失败，请稍后重试", L"檢查失敗，請稍後重試",
-                  L"Check failed. Try again later."));
-    LOG(ERROR) << "Unable to check Wanxiang releases: "
-               << wtou8(result.error);
+    SetLastUpdateCheckText(LocalText(L"检查失败，请稍后重试",
+                                     L"檢查失敗，請稍後重試",
+                                     L"Check failed. Try again later."));
+    LOG(ERROR) << "Unable to check Wanxiang releases: " << wtou8(result.error);
   } else if (!result.update_available) {
     SetLastUpdateCheckText(
         LocalText(L"刚刚检查 · 所有可更新方案均为最新版本",
@@ -607,9 +604,9 @@ LRESULT SwitcherSettingsDialog::OnCheckUpdates(WORD, WORD, HWND, BOOL&) {
 }
 
 LRESULT SwitcherSettingsDialog::OnUpdateSettings(WORD,
-                                                  WORD,
-                                                  HWND control,
-                                                  BOOL&) {
+                                                 WORD,
+                                                 HWND control,
+                                                 BOOL&) {
   if (selected_schema_ >= schemas_.size())
     return 0;
   const auto& schema = schemas_[selected_schema_];
@@ -632,9 +629,9 @@ LRESULT SwitcherSettingsDialog::OnUpdateSettings(WORD,
 
   RECT rect = {};
   GetWindowRect(control, &rect);
-  const UINT command = TrackPopupMenu(
-      menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, rect.left,
-      rect.bottom, 0, m_hWnd, nullptr);
+  const UINT command =
+      TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
+                     rect.left, rect.bottom, 0, m_hWnd, nullptr);
   DestroyMenu(menu);
   if (command < kUpdateMenuFirst ||
       command > kUpdateMenuFirst + kUpdateDisabled) {
@@ -644,8 +641,7 @@ LRESULT SwitcherSettingsDialog::OnUpdateSettings(WORD,
   if (!SaveUpdateFrequency(schema.id, frequency)) {
     ::MessageBoxW(
         m_hWnd,
-        LocalText(L"无法保存此方案的更新设置。",
-                  L"無法儲存此方案的更新設定。",
+        LocalText(L"无法保存此方案的更新设置。", L"無法儲存此方案的更新設定。",
                   L"Unable to save update settings for this schema.")
             .c_str(),
         LocalText(L"保存失败", L"儲存失敗", L"Save failed").c_str(),
@@ -659,8 +655,8 @@ LRESULT SwitcherSettingsDialog::OnUpdateSettings(WORD,
 }
 
 LRESULT SwitcherSettingsDialog::OnProjectLink(int,
-                                               LPNMHDR notification,
-                                               BOOL&) {
+                                              LPNMHDR notification,
+                                              BOOL&) {
   const auto* link = reinterpret_cast<LPNMLINK>(notification);
   if (!link)
     return 0;
