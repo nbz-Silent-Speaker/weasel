@@ -522,6 +522,14 @@ void Server::SetTrayRefreshCallback(std::function<void()> callback) {
   m_pImpl->SetTrayRefreshCallback(callback);
 }
 
+void Server::SetSettingsChangedCallback(std::function<void()> callback) {
+  m_pImpl->SetSettingsChangedCallback(callback);
+}
+
+void Server::SetSystemStateChangedCallback(std::function<void()> callback) {
+  m_pImpl->SetSystemStateChangedCallback(callback);
+}
+
 HWND Server::GetHWnd() {
   return m_pImpl->m_hWnd;
 }

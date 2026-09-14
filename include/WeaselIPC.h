@@ -177,6 +177,8 @@ class Server {
   // Callback invoked on the server message thread when a tray icon refresh is
   // requested from a pipe worker thread.
   void SetTrayRefreshCallback(std::function<void()> callback);
+  void SetSettingsChangedCallback(std::function<void()> callback);
+  void SetSystemStateChangedCallback(std::function<void()> callback);
 
  private:
   ServerImpl* m_pImpl;
