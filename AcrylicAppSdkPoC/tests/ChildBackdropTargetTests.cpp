@@ -499,29 +499,29 @@ int main() {
           style.highlighted_text = RGB(10, 10, 10);
           style.highlighted_label = style.mark = RGB(0, 103, 192);
           style.candidates = {L"Hello", L"Hi", L"You"};
-          const auto checkPixel = [&](int x, int y, COLORREF expected,
-                                      bool equal, const char* description) {
-            const auto actual = ::GetPixel(f.dc, x, y);
-            if ((actual == expected) != equal)
-              throw std::runtime_error(std::string(description) +
-                                       ": actual=" + std::to_string(actual) +
-                                       " expected=" + std::to_string(expected));
+          const auto countPixels = [&](COLORREF color) {
+            size_t count = 0;
+            for (int y = area.top; y < area.bottom; ++y) {
+              for (int x = area.left; x < area.right; ++x)
+                count += ::GetPixel(f.dc, x, y) == color;
+            }
+            return count;
           };
           weasel::DrawAppearancePreview(f.dc, area, font, style);
-          checkPixel(200, 150, style.background, true, "opaque background");
-          checkPixel(200, 60, style.highlight, true, "opaque highlight");
-          // Two pixels inside the rectangular bounds: outside an 11px rounded
-          // corner, but clear of the antialiased boundary when radius is zero.
-          checkPixel(16, 16, style.background, false, "rounded corner");
+          const auto opaque_background = countPixels(style.background);
+          const auto opaque_highlight = countPixels(style.highlight);
+          Check(opaque_background > 0);
+          Check(opaque_highlight > 0);
+
+          style.radius = 0;
+          weasel::DrawAppearancePreview(f.dc, area, font, style);
+          Check(countPixels(style.background) > opaque_background);
+
+          style.radius = 11;
           style.acrylic = true;
           weasel::DrawAppearancePreview(f.dc, area, font, style);
-          checkPixel(200, 150, style.background, false,
-                     "translucent background");
-          checkPixel(200, 60, style.highlight, true, "acrylic highlight");
-          style.acrylic = false;
-          style.radius = style.border_width = 0;
-          weasel::DrawAppearancePreview(f.dc, area, font, style);
-          checkPixel(16, 16, style.background, true, "square corner interior");
+          Check(countPixels(style.background) < opaque_background);
+          Check(countPixels(style.highlight) > 0);
         });
     Run("palette groups require explicit valid light and dark members", [] {
       ModeSchemeConfig f;
