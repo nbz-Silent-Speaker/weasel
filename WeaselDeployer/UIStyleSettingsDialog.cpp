@@ -237,13 +237,15 @@ void UIStyleSettingsDialog::ShowEditor(bool single) {
   HWND family = GetDlgItem(IDC_COLOR_FAMILY);
   HWND light = GetDlgItem(IDC_COLOR_LIGHT);
   HWND dark = GetDlgItem(IDC_COLOR_DARK);
+  HWND light_label = GetDlgItem(IDC_LIGHT_LABEL);
+  HWND dark_label = GetDlgItem(IDC_DARK_LABEL);
   for (HWND combo : {family, light, dark})
     ::ShowWindow(combo, SW_HIDE);
   ::ShowWindow(single ? light : family, SW_SHOW);
   if (single)
     ::ShowWindow(dark, SW_SHOW);
-  ::ShowWindow(GetDlgItem(IDC_LIGHT_LABEL), SW_SHOW);
-  ::ShowWindow(GetDlgItem(IDC_DARK_LABEL), single ? SW_SHOW : SW_HIDE);
+  ::ShowWindow(light_label, SW_SHOW);
+  ::ShowWindow(dark_label, single ? SW_SHOW : SW_HIDE);
   RefreshPreview();
   HWND card = GetDlgItem(IDC_APPEARANCE_CARD);
   if (card) {
@@ -252,8 +254,8 @@ void UIStyleSettingsDialog::ShowEditor(bool single) {
     ::RedrawWindow(card, nullptr, nullptr,
                    RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
   }
-  for (HWND control : {GetDlgItem(IDC_LIGHT_LABEL), GetDlgItem(IDC_DARK_LABEL),
-                       family, light, dark}) {
+  const HWND controls[] = {light_label, dark_label, family, light, dark};
+  for (HWND control : controls) {
     if (::IsWindowVisible(control))
       ::RedrawWindow(control, nullptr, nullptr,
                      RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
