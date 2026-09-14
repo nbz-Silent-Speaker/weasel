@@ -47,6 +47,7 @@ LRESULT UIStyleSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
     CComboBox(GetDlgItem(id)).SetItemHeight(-1, item_height_);
   RefreshMode();
   ready_ = true;
+  settings_navigation::Install(m_hWnd, settings_navigation::Page::Appearance);
   CenterWindow();
   return TRUE;
 }
@@ -253,6 +254,40 @@ LRESULT UIStyleSettingsDialog::OnCancel(WORD, WORD, HWND, BOOL&) {
 }
 
 LRESULT UIStyleSettingsDialog::OnClose(UINT, WPARAM, LPARAM, BOOL&) {
+  EndDialog(IDCANCEL);
+  return 0;
+}
+
+LRESULT UIStyleSettingsDialog::OnNavigate(WORD, WORD id, HWND, BOOL&) {
+  const auto page = settings_navigation::PageFromCommand(id);
+  if (page == settings_navigation::Page::Appearance)
+    return 0;
+  if (draft_.changed() &&
+      ::MessageBoxW(
+          m_hWnd,
+          settings_navigation::LocalText(
+              L"外观设置尚未应用。是否放弃这些更改？",
+              L"外觀設定尚未套用。是否放棄這些變更？",
+              L"Appearance changes have not been applied. Discard them?")
+              .c_str(),
+          settings_navigation::LocalText(L"未应用的设置", L"未套用的設定",
+                                         L"Unapplied settings")
+              .c_str(),
+          MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) {
+    return 0;
+  }
+  if (!settings_navigation::Launch(page)) {
+    ::MessageBoxW(m_hWnd,
+                  settings_navigation::LocalText(
+                      L"无法打开设置页面。", L"無法開啟設定頁面。",
+                      L"Could not open the settings page.")
+                      .c_str(),
+                  settings_navigation::LocalText(L"小狼毫设置", L"小狼毫設定",
+                                                 L"Weasel settings")
+                      .c_str(),
+                  MB_OK | MB_ICONERROR);
+    return 0;
+  }
   EndDialog(IDCANCEL);
   return 0;
 }

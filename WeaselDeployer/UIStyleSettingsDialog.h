@@ -1,5 +1,6 @@
 #pragma once
 #include "resource.h"
+#include "SettingsNavigation.h"
 #include "UIStyleSettings.h"
 #include <WeaselAppearanceDraft.h>
 
@@ -28,6 +29,9 @@ class UIStyleSettingsDialog : public CDialogImpl<UIStyleSettingsDialog> {
   COMMAND_ID_HANDLER(IDC_EDIT_SINGLE, OnEditor)
   COMMAND_HANDLER(IDC_COLOR_FAMILY, CBN_SELCHANGE, OnGroup)
   COMMAND_RANGE_HANDLER(IDC_COLOR_LIGHT, IDC_COLOR_DARK, OnSingle)
+  COMMAND_RANGE_HANDLER(settings_navigation::kInput,
+                        settings_navigation::kStatusIcons,
+                        OnNavigate)
   END_MSG_MAP()
   LRESULT OnInitDialog(UINT, WPARAM, LPARAM, BOOL&);
   LRESULT OnClose(UINT, WPARAM, LPARAM, BOOL&);
@@ -42,6 +46,7 @@ class UIStyleSettingsDialog : public CDialogImpl<UIStyleSettingsDialog> {
   LRESULT OnEditor(WORD, WORD, HWND, BOOL&);
   LRESULT OnGroup(WORD, WORD, HWND, BOOL&);
   LRESULT OnSingle(WORD, WORD, HWND, BOOL&);
+  LRESULT OnNavigate(WORD, WORD id, HWND, BOOL&);
   struct PaletteEntry {
     CString label;
     int index;

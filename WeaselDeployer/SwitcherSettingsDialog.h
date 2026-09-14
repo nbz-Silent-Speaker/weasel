@@ -9,6 +9,7 @@
 
 #include "WanxiangModelManager.h"
 #include "WanxiangUpdateManager.h"
+#include "SettingsNavigation.h"
 
 class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
  public:
@@ -35,6 +36,9 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
   COMMAND_HANDLER(IDC_INPUT_MODE, CBN_SELCHANGE, OnInputModeChanged)
   COMMAND_ID_HANDLER(IDOK, OnOK)
   COMMAND_ID_HANDLER(IDCANCEL, OnCloseCommand)
+  COMMAND_RANGE_HANDLER(settings_navigation::kInput,
+                        settings_navigation::kStatusIcons,
+                        OnNavigate)
   NOTIFY_HANDLER(IDC_SCHEMA_LIST, LVN_ITEMCHANGED, OnSchemaListItemChanged)
   NOTIFY_HANDLER(IDC_SCHEMA_PROJECT_LINKS, NM_CLICK, OnProjectLink)
   NOTIFY_HANDLER(IDC_SCHEMA_PROJECT_LINKS, NM_RETURN, OnProjectLink)
@@ -58,6 +62,7 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
   LRESULT OnInputModeChanged(WORD, WORD, HWND, BOOL&);
   LRESULT OnOK(WORD, WORD, HWND, BOOL&);
   LRESULT OnCloseCommand(WORD, WORD, HWND, BOOL&);
+  LRESULT OnNavigate(WORD, WORD id, HWND, BOOL&);
   LRESULT OnSchemaListItemChanged(int, LPNMHDR, BOOL&);
   LRESULT OnProjectLink(int, LPNMHDR, BOOL&);
   LRESULT OnUserFolderLink(int, LPNMHDR, BOOL&);
@@ -130,7 +135,6 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
   bool close_after_apply_ = false;
   bool model_operation_failed_ = false;
   bool model_update_available_ = false;
-  bool scheme_update_available_ = false;
   bool check_button_accent_ = false;
   bool model_button_accent_ = false;
   bool model_status_active_ = false;

@@ -316,8 +316,7 @@ bool WanxiangUpdateManager::LoadCachedResult(Result* result) {
   cached.model_update_available =
       model_installed && (cached.latest_model_sha256 != installed_sha256 ||
                           cached.latest_model_size != installed_size);
-  cached.update_available =
-      cached.scheme_update_available || cached.model_update_available;
+  cached.update_available = cached.model_update_available;
   *result = std::move(cached);
   return true;
 }
@@ -433,10 +432,8 @@ WanxiangUpdateManager::Result WanxiangUpdateManager::CheckNow() {
   result.model_update_available =
       model_installed &&
       (model.sha256 != installed_sha256 || model.size != installed_size);
-  result.update_available =
-      result.scheme_update_available || result.model_update_available;
-  WriteAvailableCount(static_cast<unsigned int>(result.scheme_update_available +
-                                                result.model_update_available));
+  result.update_available = result.model_update_available;
+  WriteAvailableCount(result.model_update_available ? 1u : 0u);
   return result;
 }
 

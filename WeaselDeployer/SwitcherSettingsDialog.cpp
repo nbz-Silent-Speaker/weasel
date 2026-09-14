@@ -163,37 +163,19 @@ class PackageUpdateDialog : public CDialogImpl<PackageUpdateDialog> {
   }
 
   LRESULT OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
-    HWND scheme = GetDlgItem(IDC_UPDATE_SCHEME);
     HWND model = GetDlgItem(IDC_UPDATE_MODEL);
-    ::ShowWindow(GetDlgItem(IDC_UPDATE_SCHEME_GROUP),
-                 result_.scheme_update_available ? SW_SHOW : SW_HIDE);
+    ::ShowWindow(GetDlgItem(IDC_UPDATE_SCHEME_GROUP), SW_HIDE);
+    ::ShowWindow(GetDlgItem(IDC_UPDATE_SCHEME), SW_HIDE);
     ::ShowWindow(GetDlgItem(IDC_UPDATE_MODEL_GROUP),
                  result_.model_update_available ? SW_SHOW : SW_HIDE);
-    ::ShowWindow(scheme, result_.scheme_update_available ? SW_SHOW : SW_HIDE);
     ::ShowWindow(model, result_.model_update_available ? SW_SHOW : SW_HIDE);
-    if (!result_.scheme_update_available && result_.model_update_available) {
+    if (result_.model_update_available) {
       MoveControl(IDC_UPDATE_MODEL_GROUP, 14, 28, 372, 36);
       MoveControl(IDC_UPDATE_MODEL, 24, 40, 350, 16);
       MoveControl(IDOK, 218, 72, 92, 18);
       MoveControl(IDCANCEL, 316, 72, 72, 18);
       ::ShowWindow(GetDlgItem(IDC_UPDATE_SUMMARY), SW_HIDE);
       ResizeClient(400, 102);
-    } else if (result_.scheme_update_available &&
-               !result_.model_update_available) {
-      MoveControl(IDC_UPDATE_SUMMARY, 18, 70, 364, 16);
-      MoveControl(IDCANCEL, 316, 92, 72, 18);
-      ::ShowWindow(GetDlgItem(IDOK), SW_HIDE);
-      ::SetWindowTextW(GetDlgItem(IDCANCEL),
-                       Localize(L"关闭", L"關閉", L"Close").c_str());
-      ResizeClient(400, 122);
-    }
-    if (result_.scheme_update_available) {
-      std::wstring label = Localize(
-          L"万象拼音 Lite（需由包含新版方案的安装包更新）",
-          L"萬象拼音 Lite（需由包含新版方案的安裝程式更新）",
-          L"Wanxiang Lite (update with a Weasel installer that includes it)");
-      ::SetWindowTextW(scheme, label.c_str());
-      ::EnableWindow(scheme, FALSE);
     }
     if (result_.model_update_available) {
       wchar_t size[128] = {};
@@ -207,15 +189,7 @@ class PackageUpdateDialog : public CDialogImpl<PackageUpdateDialog> {
       ::SetWindowTextW(model, size);
       ::SendMessageW(model, BM_SETCHECK, BST_CHECKED, 0);
     }
-    ::SetDlgItemTextW(
-        m_hWnd, IDC_UPDATE_SUMMARY,
-        result_.scheme_update_available
-            ? Localize(L"方案文件会保留当前安全版本；语法模型可在此直接更新。",
-                       L"方案檔案會保留目前安全版本；語法模型可在此直接更新。",
-                       L"Schema files stay on the current safe version. The "
-                       L"grammar model can be updated here.")
-                  .c_str()
-            : L"");
+    ::SetDlgItemTextW(m_hWnd, IDC_UPDATE_SUMMARY, L"");
     UpdateButton();
     CenterWindow(GetParent());
     return TRUE;
@@ -1548,14 +1522,13 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   ::ShowWindow(GetDlgItem(IDC_IMPORT_SCHEME), SW_HIDE);
   WanxiangUpdateManager::Result cached;
   if (WanxiangUpdateManager::LoadCachedResult(&cached)) {
-    scheme_update_available_ = cached.scheme_update_available;
     model_update_available_ = cached.model_update_available;
     latest_model_sha256_ = cached.latest_model_sha256;
     latest_model_size_ = cached.latest_model_size;
     if (!latest_model_sha256_.empty() && latest_model_size_)
       model_manager_.ConfigureTarget(latest_model_sha256_, latest_model_size_);
-    WanxiangUpdateManager::StoreAvailableCount(static_cast<unsigned int>(
-        scheme_update_available_ + model_update_available_));
+    WanxiangUpdateManager::StoreAvailableCount(model_update_available_ ? 1u
+                                                                       : 0u);
   }
 
   Populate();
@@ -1590,6 +1563,7 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   UpdateCheckButton();
   SetTimer(kModelTimer, 500);
 
+  settings_navigation::Install(m_hWnd, settings_navigation::Page::Input);
   CenterWindow();
   BringWindowToTop();
   return TRUE;
@@ -1623,6 +1597,28 @@ LRESULT SwitcherSettingsDialog::OnCloseCommand(WORD, WORD, HWND, BOOL&) {
   return 0;
 }
 
+LRESULT SwitcherSettingsDialog::OnNavigate(WORD, WORD id, HWND, BOOL&) {
+  const auto page = settings_navigation::PageFromCommand(id);
+  if (page == settings_navigation::Page::Input || apply_operation_)
+    return 0;
+  if (!ConfirmDiscardChanges())
+    return 0;
+  if (!settings_navigation::Launch(page)) {
+    ::MessageBoxW(
+        m_hWnd,
+        LocalText(L"无法打开设置页面。", L"無法開啟設定頁面。",
+                  L"Could not open the settings page.")
+            .c_str(),
+        LocalText(L"小狼毫设置", L"小狼毫設定", L"Weasel settings").c_str(),
+        MB_OK | MB_ICONERROR);
+    return 0;
+  }
+  DiscardPendingModel();
+  KillTimer(kModelTimer);
+  EndDialog(IDCANCEL);
+  return 0;
+}
+
 LRESULT SwitcherSettingsDialog::OnTimer(UINT, WPARAM timer, LPARAM, BOOL&) {
   if (timer != kModelTimer)
     return 0;
@@ -1646,7 +1642,7 @@ LRESULT SwitcherSettingsDialog::OnTimer(UINT, WPARAM timer, LPARAM, BOOL&) {
 }
 
 LRESULT SwitcherSettingsDialog::OnCheckUpdates(WORD, WORD, HWND, BOOL&) {
-  if (scheme_update_available_ || model_update_available_) {
+  if (model_update_available_) {
     ShowUpdateList();
     return 0;
   }
@@ -1688,7 +1684,6 @@ void SwitcherSettingsDialog::FinishUpdateCheck() {
         LocalText(L"检查更新", L"檢查更新", L"Check for updates").c_str(),
         MB_OK | MB_ICONINFORMATION);
   } else {
-    scheme_update_available_ = result.scheme_update_available;
     model_update_available_ = result.model_update_available;
     latest_model_sha256_ = result.latest_model_sha256;
     latest_model_size_ = result.latest_model_size;
@@ -1713,8 +1708,7 @@ void SwitcherSettingsDialog::UpdateCheckButton() {
     ::EnableWindow(button, FALSE);
     return;
   }
-  const int count = static_cast<int>(scheme_update_available_) +
-                    static_cast<int>(model_update_available_);
+  const int count = static_cast<int>(model_update_available_);
   std::wstring label;
   if (count) {
     label = LocalText(L"更新 · ", L"更新 · ", L"Updates · ") +
@@ -1771,8 +1765,8 @@ void SwitcherSettingsDialog::UpdateLastCheckText() {
 void SwitcherSettingsDialog::ShowUpdateList() {
   WanxiangUpdateManager::Result result;
   result.success = true;
-  result.update_available = scheme_update_available_ || model_update_available_;
-  result.scheme_update_available = scheme_update_available_;
+  result.update_available = model_update_available_;
+  result.scheme_update_available = false;
   result.model_update_available = model_update_available_;
   result.latest_model_sha256 = latest_model_sha256_;
   result.latest_model_size = latest_model_size_;
@@ -2183,8 +2177,7 @@ void SwitcherSettingsDialog::FinishApply() {
       pending_model_action_ = PendingModelAction::None;
       model_operation_failed_ = false;
       model_update_available_ = false;
-      WanxiangUpdateManager::StoreAvailableCount(scheme_update_available_ ? 1u
-                                                                          : 0u);
+      WanxiangUpdateManager::StoreAvailableCount(0);
       UpdateCheckButton();
       UpdateLastCheckText();
       UpdateModelUi();

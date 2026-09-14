@@ -1,6 +1,7 @@
 #pragma once
 
 #include "resource.h"
+#include "SettingsNavigation.h"
 
 #include <WeaselUserSettings.h>
 
@@ -31,6 +32,9 @@ class FontSettingsDialog : public CDialogImpl<FontSettingsDialog> {
   COMMAND_ID_HANDLER(IDC_FONT_RESTORE, OnRestore)
   COMMAND_ID_HANDLER(IDC_FONT_APPLY, OnApply)
   COMMAND_ID_HANDLER(IDCANCEL, OnCloseCommand)
+  COMMAND_RANGE_HANDLER(settings_navigation::kInput,
+                        settings_navigation::kStatusIcons,
+                        OnNavigate)
   END_MSG_MAP()
 
   LRESULT OnInitDialog(UINT, WPARAM, LPARAM, BOOL&);
@@ -44,6 +48,7 @@ class FontSettingsDialog : public CDialogImpl<FontSettingsDialog> {
   LRESULT OnRestore(WORD, WORD, HWND, BOOL&);
   LRESULT OnApply(WORD, WORD, HWND, BOOL&);
   LRESULT OnCloseCommand(WORD, WORD, HWND, BOOL&);
+  LRESULT OnNavigate(WORD, WORD id, HWND, BOOL&);
 
   void Localize();
   void EnumerateFonts();
