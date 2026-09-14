@@ -686,6 +686,13 @@ void SwitcherSettingsDialog::ShowDetails(size_t index) {
   RECT author_rect =
       links.empty() ? RECT{210, 233, 428, 245} : RECT{302, 233, 428, 245};
   ::MapDialogRect(m_hWnd, &author_rect);
+  if (::GetDlgItem(m_hWnd, settings_navigation::kInput)) {
+    const int navigation_offset = static_cast<int>(
+        settings_navigation::MapDialogUnits(
+            m_hWnd, 0, 0, settings_navigation::kSidebarWidthDlu, 0)
+            .right);
+    ::OffsetRect(&author_rect, navigation_offset, 0);
+  }
   ::SetWindowPos(GetDlgItem(IDC_SCHEMA_AUTHOR), nullptr, author_rect.left,
                  author_rect.top, author_rect.right - author_rect.left,
                  author_rect.bottom - author_rect.top,
@@ -1603,6 +1610,16 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
        IDCANCEL,
        WeaselUserDataPath().wstring(),
        {IDC_SWITCHER_TITLE, IDC_USER_DATA_LABEL, IDC_USER_DATA_FOLDER}});
+  const int navigation_offset = static_cast<int>(
+      settings_navigation::MapDialogUnits(
+          m_hWnd, 0, 0, settings_navigation::kSidebarWidthDlu, 0)
+          .right);
+  model_secondary_rect_.OffsetRect(navigation_offset, 0);
+  model_primary_rect_.OffsetRect(navigation_offset, 0);
+  model_active_secondary_rect_.OffsetRect(navigation_offset, 0);
+  model_active_primary_rect_.OffsetRect(navigation_offset, 0);
+  input_mode_base_rect_.OffsetRect(navigation_offset, 0);
+  UpdateModelUi();
   UpdateApplyButton();
   CenterWindow();
   BringWindowToTop();
