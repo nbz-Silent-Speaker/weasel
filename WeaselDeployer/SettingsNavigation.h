@@ -211,7 +211,7 @@ inline void Install(HWND dialog, Page active, const InstallOptions& options) {
   const auto vertical = [&](int dlu) {
     return MapDialogUnits(dialog, 0, 0, 0, dlu).bottom;
   };
-  const int margin = std::max(vertical(7), sidebar_width / 15);
+  const int margin = (std::max)(vertical(7), sidebar_width / 15);
   const int content_width = sidebar_width - margin * 2;
   Create(dialog, L"STATIC",
          LocalText(L"小狼毫设置", L"小狼毫設定", L"Weasel settings"), SS_LEFT,
