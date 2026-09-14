@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <WeaselIPCData.h>
+#include <WeaselUserSettings.h>
 #include <vector>
 #include <regex>
 #include <iterator>
@@ -122,12 +123,8 @@ class DirectWriteResources {
                            const int& nCount,
                            IDWriteTextFormat1* const txtFormat,
                            const float& width,
-                           const float& height) {
-    return pDWFactory->CreateTextLayout(
-        text.c_str(), nCount, txtFormat, width, height,
-        reinterpret_cast<IDWriteTextLayout**>(
-            pTextLayout.ReleaseAndGetAddressOf()));
-  }
+                           const float& height);
+  void ReloadUserSettings();
   void DrawRect(D2D1_RECT_F* const rect,
                 const float& strokeWidth = 1.0f,
                 ID2D1StrokeStyle* const sstyle = (ID2D1StrokeStyle*)0) {
@@ -170,6 +167,7 @@ class DirectWriteResources {
 
  private:
   UIStyle& _style;
+  FontSettings font_settings_;
   void _ParseFontFace(const std::wstring& fontFaceStr,
                       DWRITE_FONT_WEIGHT& fontWeight,
                       DWRITE_FONT_STYLE& fontStyle);

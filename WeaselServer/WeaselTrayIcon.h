@@ -18,7 +18,8 @@ struct WeaselTrayIconState {
       : valid(false),
         display_tray_icon(false),
         disabled(false),
-        ascii_mode(false) {}
+        ascii_mode(false),
+        caps_lock(false) {}
 
   static WeaselTrayIconState From(const weasel::UIStyle& style,
                                   const weasel::Status& status) {
@@ -35,6 +36,7 @@ struct WeaselTrayIconState {
   bool operator==(const WeaselTrayIconState& rhs) const {
     return valid == rhs.valid && display_tray_icon == rhs.display_tray_icon &&
            disabled == rhs.disabled && ascii_mode == rhs.ascii_mode &&
+           caps_lock == rhs.caps_lock &&
            current_zhung_icon == rhs.current_zhung_icon &&
            current_ascii_icon == rhs.current_ascii_icon;
   }
@@ -47,6 +49,7 @@ struct WeaselTrayIconState {
   bool display_tray_icon;
   bool disabled;
   bool ascii_mode;
+  bool caps_lock;
   std::wstring current_zhung_icon;
   std::wstring current_ascii_icon;
 };
@@ -57,10 +60,13 @@ class WeaselTrayIcon : public CSystemTray {
     INITIAL,
     ZHUNG,
     ASCII,
+    ZHUNG_CAPS,
+    ASCII_CAPS,
     DISABLED,
   };
 
   WeaselTrayIcon(weasel::UI& ui);
+  ~WeaselTrayIcon();
 
   BOOL Create(HWND hTargetWnd);
 
@@ -71,11 +77,13 @@ class WeaselTrayIcon : public CSystemTray {
 
   // Runs on the server message thread (no g_api_mutex held).
   void ApplyRefresh();
+  void ReloadSettings();
+  void PollSystemState();
 
  protected:
   virtual void CustomizeMenu(HMENU hMenu);
 
-  void Refresh(const WeaselTrayIconState& state);
+  void Refresh(const WeaselTrayIconState& state, bool force = false);
 
   weasel::UIStyle& m_style;
   weasel::Status& m_status;
@@ -83,6 +91,8 @@ class WeaselTrayIcon : public CSystemTray {
   std::wstring m_schema_zhung_icon;
   std::wstring m_schema_ascii_icon;
   bool m_disabled;
+  WeaselTrayIconState m_last_state;
+  ULONG_PTR m_graphics_token = 0;
 
   // Guarded by m_state_mutex.
   bool m_refresh_enabled = true;

@@ -129,6 +129,10 @@ static int Run(LPTSTR lpCmdLine) {
   if (!wcscmp(L"/settings", lpCmdLine))
     return configurator.ConfigureColorScheme(
         weasel::ColorSchemeTarget::Default);
+  if (!wcscmp(L"/fonts", lpCmdLine))
+    return configurator.ConfigureFonts();
+  if (!wcscmp(L"/status-icons", lpCmdLine))
+    return configurator.ConfigureStatusIcons();
   if (!wcscmp(L"/acrylic-color", lpCmdLine))
     return configurator.ConfigureColorScheme(
         weasel::ColorSchemeTarget::Acrylic);

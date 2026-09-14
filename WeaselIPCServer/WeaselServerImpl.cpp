@@ -3,6 +3,7 @@
 #include <mutex>
 #include <Windows.h>
 #include <resource.h>
+#include <WeaselUserSettings.h>
 #include <WeaselUtility.h>
 
 namespace weasel {
@@ -28,6 +29,10 @@ using namespace weasel;
 
 extern CAppModule _Module;
 
+namespace {
+constexpr UINT_PTR kSystemStateTimer = 0x5749;
+}
+
 ServerImpl::ServerImpl()
     : m_pRequestHandler(NULL),
       m_darkMode(IsUserDarkMode()),
@@ -49,6 +54,7 @@ void ServerImpl::_Finailize() {
   }
 
   if (IsWindow()) {
+    KillTimer(kSystemStateTimer);
     DestroyWindow();
   }
 }
@@ -65,12 +71,36 @@ LRESULT ServerImpl::OnColorChange(UINT uMsg,
   return 0;
 }
 
+LRESULT ServerImpl::OnRegisteredMessage(UINT uMsg,
+                                        WPARAM wParam,
+                                        LPARAM lParam,
+                                        BOOL& bHandled) {
+  if (uMsg == UserSettingsChangedMessage()) {
+    if (m_settingsChangedCallback)
+      m_settingsChangedCallback();
+    return 0;
+  }
+  bHandled = FALSE;
+  return 0;
+}
+
 LRESULT ServerImpl::OnCreate(UINT uMsg,
                              WPARAM wParam,
                              LPARAM lParam,
                              BOOL& bHandled) {
   // not neccessary...
   ::SetWindowText(m_hWnd, WEASEL_IPC_WINDOW);
+  SetTimer(kSystemStateTimer, 250);
+  return 0;
+}
+
+LRESULT ServerImpl::OnTimer(UINT, WPARAM wParam, LPARAM, BOOL& bHandled) {
+  if (wParam == kSystemStateTimer) {
+    if (m_systemStateChangedCallback)
+      m_systemStateChangedCallback();
+    return 0;
+  }
+  bHandled = FALSE;
   return 0;
 }
 
@@ -86,6 +116,7 @@ LRESULT ServerImpl::OnDestroy(UINT uMsg,
                               WPARAM wParam,
                               LPARAM lParam,
                               BOOL& bHandled) {
+  KillTimer(kSystemStateTimer);
   bHandled = FALSE;
   return 1;
 }

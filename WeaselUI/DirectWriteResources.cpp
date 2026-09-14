@@ -17,6 +17,7 @@ vector<wstring> ws_split(const wstring& in, const wstring& delim) {
 DirectWriteResources::DirectWriteResources(weasel::UIStyle& style,
                                            UINT dpi = 96)
     : _style(style),
+      font_settings_(FontSettings::Load()),
       dpiScaleFontPoint(0),
       dpiScaleLayout(0),
       pD2d1Factory(NULL),
@@ -58,6 +59,94 @@ DirectWriteResources::DirectWriteResources(weasel::UIStyle& style,
 }
 
 DirectWriteResources::~DirectWriteResources() {}
+
+namespace {
+bool IsChineseCodePoint(UINT32 codepoint) {
+  return (codepoint >= 0x2e80 && codepoint <= 0x303f) ||
+         (codepoint >= 0x31c0 && codepoint <= 0x31ef) ||
+         (codepoint >= 0x3400 && codepoint <= 0x4dbf) ||
+         (codepoint >= 0x4e00 && codepoint <= 0x9fff) ||
+         (codepoint >= 0xf900 && codepoint <= 0xfaff) ||
+         (codepoint >= 0x20000 && codepoint <= 0x2fa1f) ||
+         (codepoint >= 0xff01 && codepoint <= 0xff60);
+}
+
+FontRole TextRole(const DirectWriteResources& resources,
+                  IDWriteTextFormat1* format) {
+  if (format == resources.pPreeditTextFormat.Get())
+    return FontRole::Preedit;
+  if (format == resources.pLabelTextFormat.Get())
+    return FontRole::Label;
+  if (format == resources.pCommentTextFormat.Get())
+    return FontRole::Comment;
+  return FontRole::Candidate;
+}
+}  // namespace
+
+HRESULT DirectWriteResources::CreateTextLayout(
+    const std::wstring& text,
+    const int& nCount,
+    IDWriteTextFormat1* const txtFormat,
+    const float& width,
+    const float& height) {
+  const HRESULT result = pDWFactory->CreateTextLayout(
+      text.c_str(), nCount, txtFormat, width, height,
+      reinterpret_cast<IDWriteTextLayout**>(
+          pTextLayout.ReleaseAndGetAddressOf()));
+  if (FAILED(result) || !pTextLayout || !font_settings_.enabled)
+    return result;
+
+  const UINT32 count =
+      static_cast<UINT32>((std::min)(text.size(), static_cast<size_t>(nCount)));
+  const FontRole role = TextRole(*this, txtFormat);
+  UINT32 start = 0;
+  while (start < count) {
+    const auto language_at = [&](UINT32 index) {
+      UINT32 codepoint = text[index];
+      if (codepoint >= 0xd800 && codepoint <= 0xdbff && index + 1 < count) {
+        const UINT32 low = text[index + 1];
+        if (low >= 0xdc00 && low <= 0xdfff) {
+          codepoint = 0x10000 + ((codepoint - 0xd800) << 10) + (low - 0xdc00);
+        }
+      }
+      return IsChineseCodePoint(codepoint) ? FontLanguage::Chinese
+                                           : FontLanguage::Latin;
+    };
+    const FontLanguage language = language_at(start);
+    UINT32 end = start + 1;
+    if (text[start] >= 0xd800 && text[start] <= 0xdbff && end < count &&
+        text[end] >= 0xdc00 && text[end] <= 0xdfff) {
+      ++end;
+    }
+    while (end < count && language_at(end) == language) {
+      if (text[end] >= 0xd800 && text[end] <= 0xdbff && end + 1 < count &&
+          text[end + 1] >= 0xdc00 && text[end + 1] <= 0xdfff) {
+        end += 2;
+      } else {
+        ++end;
+      }
+    }
+    const auto& choice = font_settings_.At(role, language);
+    const DWRITE_TEXT_RANGE range{start, end - start};
+    if (!choice.family.empty())
+      pTextLayout->SetFontFamilyName(choice.family.c_str(), range);
+    pTextLayout->SetFontSize(choice.point * dpiScaleFontPoint, range);
+    pTextLayout->SetFontWeight(choice.shape == FontShape::Bold
+                                   ? DWRITE_FONT_WEIGHT_BOLD
+                                   : DWRITE_FONT_WEIGHT_NORMAL,
+                               range);
+    pTextLayout->SetFontStyle(choice.shape == FontShape::Italic
+                                  ? DWRITE_FONT_STYLE_ITALIC
+                                  : DWRITE_FONT_STYLE_NORMAL,
+                              range);
+    start = end;
+  }
+  return result;
+}
+
+void DirectWriteResources::ReloadUserSettings() {
+  font_settings_ = FontSettings::Load();
+}
 
 HRESULT DirectWriteResources::InitResources(const wstring& label_font_face,
                                             const int& label_font_point,

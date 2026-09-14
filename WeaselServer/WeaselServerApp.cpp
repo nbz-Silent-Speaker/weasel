@@ -36,6 +36,9 @@ int WeaselServerApp::Run() {
 
   tray_icon.Create(m_server.GetHWnd());
   m_server.SetTrayRefreshCallback([this]() { tray_icon.ApplyRefresh(); });
+  m_server.SetSettingsChangedCallback([this]() { tray_icon.ReloadSettings(); });
+  m_server.SetSystemStateChangedCallback(
+      [this]() { tray_icon.PollSystemState(); });
   tray_icon.RequestRefresh();
 
   execute_hidden(install_dir() / L"WeaselDeployer.exe",

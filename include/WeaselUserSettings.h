@@ -2,6 +2,11 @@
 
 #include <windows.h>
 
+#include <algorithm>
+#include <array>
+#include <string>
+#include <utility>
+
 #pragma comment(lib, "Advapi32.lib")
 #pragma comment(lib, "User32.lib")
 
@@ -12,6 +17,15 @@ namespace weasel {
 inline constexpr wchar_t kUserSettingsKey[] =
     L"Software\\Rime\\Weasel\\UserSettings";
 inline constexpr wchar_t kAcrylicEnabledSetting[] = L"AcrylicEnabled";
+inline constexpr wchar_t kStatusIconChineseSetting[] = L"StatusIconChinese";
+inline constexpr wchar_t kStatusIconEnglishSetting[] = L"StatusIconEnglish";
+inline constexpr wchar_t kStatusIconChineseCapsSetting[] =
+    L"StatusIconChineseCaps";
+inline constexpr wchar_t kStatusIconEnglishCapsSetting[] =
+    L"StatusIconEnglishCaps";
+inline constexpr wchar_t kStatusIconCapsBadgeSetting[] = L"StatusIconCapsBadge";
+inline constexpr wchar_t kStatusIconCapsModeSetting[] = L"StatusIconCapsMode";
+inline constexpr wchar_t kFontSettingsEnabledSetting[] = L"FontSettingsEnabled";
 
 class UserSettingsStore {
  public:
@@ -55,9 +69,276 @@ class UserSettingsStore {
     return result;
   }
 
+  std::wstring ReadString(const wchar_t* name,
+                          const std::wstring& fallback = {}) const {
+    HKEY key = nullptr;
+    LSTATUS result = ::RegOpenKeyExW(root_, key_, 0,
+                                     KEY_QUERY_VALUE | KEY_WOW64_64KEY, &key);
+    if (result != ERROR_SUCCESS)
+      return fallback;
+    DWORD type = 0;
+    DWORD bytes = 0;
+    result = ::RegQueryValueExW(key, name, nullptr, &type, nullptr, &bytes);
+    if (result != ERROR_SUCCESS || (type != REG_SZ && type != REG_EXPAND_SZ) ||
+        bytes < sizeof(wchar_t)) {
+      ::RegCloseKey(key);
+      return fallback;
+    }
+    std::wstring value(bytes / sizeof(wchar_t), L'\0');
+    result = ::RegQueryValueExW(key, name, nullptr, &type,
+                                reinterpret_cast<BYTE*>(value.data()), &bytes);
+    ::RegCloseKey(key);
+    if (result != ERROR_SUCCESS)
+      return fallback;
+    while (!value.empty() && value.back() == L'\0')
+      value.pop_back();
+    return value;
+  }
+
+  LSTATUS WriteString(const wchar_t* name, const std::wstring& value) const {
+    HKEY key = nullptr;
+    LSTATUS result = ::RegCreateKeyExW(root_, key_, 0, nullptr, 0,
+                                       KEY_SET_VALUE | KEY_WOW64_64KEY, nullptr,
+                                       &key, nullptr);
+    if (result != ERROR_SUCCESS)
+      return result;
+    if (value.empty()) {
+      result = ::RegDeleteValueW(key, name);
+      if (result == ERROR_FILE_NOT_FOUND)
+        result = ERROR_SUCCESS;
+    } else {
+      const DWORD bytes =
+          static_cast<DWORD>((value.size() + 1) * sizeof(wchar_t));
+      result =
+          ::RegSetValueExW(key, name, 0, REG_SZ,
+                           reinterpret_cast<const BYTE*>(value.c_str()), bytes);
+    }
+    ::RegCloseKey(key);
+    return result;
+  }
+
+  DWORD ReadDword(const wchar_t* name, DWORD fallback) const {
+    HKEY key = nullptr;
+    LSTATUS result = ::RegOpenKeyExW(root_, key_, 0,
+                                     KEY_QUERY_VALUE | KEY_WOW64_64KEY, &key);
+    if (result != ERROR_SUCCESS)
+      return fallback;
+    DWORD type = 0;
+    DWORD value = 0;
+    DWORD bytes = sizeof(value);
+    result = ::RegQueryValueExW(key, name, nullptr, &type,
+                                reinterpret_cast<BYTE*>(&value), &bytes);
+    ::RegCloseKey(key);
+    return result == ERROR_SUCCESS && type == REG_DWORD &&
+                   bytes == sizeof(value)
+               ? value
+               : fallback;
+  }
+
+  LSTATUS WriteDword(const wchar_t* name, DWORD value) const {
+    HKEY key = nullptr;
+    LSTATUS result = ::RegCreateKeyExW(root_, key_, 0, nullptr, 0,
+                                       KEY_SET_VALUE | KEY_WOW64_64KEY, nullptr,
+                                       &key, nullptr);
+    if (result != ERROR_SUCCESS)
+      return result;
+    result =
+        ::RegSetValueExW(key, name, 0, REG_DWORD,
+                         reinterpret_cast<const BYTE*>(&value), sizeof(value));
+    ::RegCloseKey(key);
+    return result;
+  }
+
  private:
   HKEY root_;
   const wchar_t* key_;
+};
+
+enum class StatusIconCapsBadge : DWORD { LetterA = 0, Dot = 1 };
+enum class StatusIconCapsMode : DWORD { Automatic = 0, Custom = 1 };
+
+struct StatusIconSettings {
+  std::wstring chinese;
+  std::wstring english;
+  std::wstring chinese_caps;
+  std::wstring english_caps;
+  StatusIconCapsBadge caps_badge = StatusIconCapsBadge::LetterA;
+  StatusIconCapsMode caps_mode = StatusIconCapsMode::Automatic;
+
+  static StatusIconSettings Load() {
+    const UserSettingsStore store;
+    StatusIconSettings settings;
+    settings.chinese = store.ReadString(kStatusIconChineseSetting);
+    settings.english = store.ReadString(kStatusIconEnglishSetting);
+    settings.chinese_caps = store.ReadString(kStatusIconChineseCapsSetting);
+    settings.english_caps = store.ReadString(kStatusIconEnglishCapsSetting);
+    settings.caps_badge = store.ReadDword(kStatusIconCapsBadgeSetting, 0) == 1
+                              ? StatusIconCapsBadge::Dot
+                              : StatusIconCapsBadge::LetterA;
+    settings.caps_mode = store.ReadDword(kStatusIconCapsModeSetting, 0) == 1
+                             ? StatusIconCapsMode::Custom
+                             : StatusIconCapsMode::Automatic;
+    return settings;
+  }
+
+  LSTATUS Save() const {
+    const UserSettingsStore store;
+    for (const auto& value : {
+             std::pair{kStatusIconChineseSetting, chinese},
+             std::pair{kStatusIconEnglishSetting, english},
+             std::pair{kStatusIconChineseCapsSetting, chinese_caps},
+             std::pair{kStatusIconEnglishCapsSetting, english_caps},
+         }) {
+      const LSTATUS result = store.WriteString(value.first, value.second);
+      if (result != ERROR_SUCCESS)
+        return result;
+    }
+    LSTATUS result = store.WriteDword(kStatusIconCapsBadgeSetting,
+                                      static_cast<DWORD>(caps_badge));
+    if (result != ERROR_SUCCESS)
+      return result;
+    return store.WriteDword(kStatusIconCapsModeSetting,
+                            static_cast<DWORD>(caps_mode));
+  }
+
+  bool operator==(const StatusIconSettings& other) const {
+    return chinese == other.chinese && english == other.english &&
+           chinese_caps == other.chinese_caps &&
+           english_caps == other.english_caps &&
+           caps_badge == other.caps_badge && caps_mode == other.caps_mode;
+  }
+
+  bool operator!=(const StatusIconSettings& other) const {
+    return !(*this == other);
+  }
+};
+
+enum class FontRole : size_t { Preedit = 0, Candidate, Label, Comment, Count };
+enum class FontLanguage : size_t { Chinese = 0, Latin, Count };
+enum class FontShape : DWORD { Regular = 0, Bold, Italic };
+
+struct FontChoice {
+  std::wstring family;
+  DWORD point = 11;
+  FontShape shape = FontShape::Regular;
+
+  bool operator==(const FontChoice& other) const {
+    return family == other.family && point == other.point &&
+           shape == other.shape;
+  }
+  bool operator!=(const FontChoice& other) const { return !(*this == other); }
+};
+
+struct FontSettings {
+  static constexpr size_t kRoleCount = static_cast<size_t>(FontRole::Count);
+  static constexpr size_t kLanguageCount =
+      static_cast<size_t>(FontLanguage::Count);
+  static constexpr size_t kChoiceCount = kRoleCount * kLanguageCount;
+
+  bool enabled = false;
+  std::array<FontChoice, kChoiceCount> choices{};
+
+  static constexpr size_t Index(FontRole role, FontLanguage language) {
+    return static_cast<size_t>(role) * kLanguageCount +
+           static_cast<size_t>(language);
+  }
+
+  FontChoice& At(FontRole role, FontLanguage language) {
+    return choices[Index(role, language)];
+  }
+  const FontChoice& At(FontRole role, FontLanguage language) const {
+    return choices[Index(role, language)];
+  }
+
+  static FontSettings Defaults() {
+    FontSettings settings;
+    constexpr DWORD points[kRoleCount] = {11, 11, 9, 10};
+    for (size_t role = 0; role < kRoleCount; ++role) {
+      settings.choices[role * kLanguageCount] = {
+          L"Microsoft YaHei", points[role], FontShape::Regular};
+      settings.choices[role * kLanguageCount + 1] = {L"Segoe UI", points[role],
+                                                     FontShape::Regular};
+    }
+    return settings;
+  }
+
+  static FontSettings Load() {
+    static constexpr const wchar_t* kFamilyNames[kChoiceCount] = {
+        L"FontPreeditChineseFamily",   L"FontPreeditLatinFamily",
+        L"FontCandidateChineseFamily", L"FontCandidateLatinFamily",
+        L"FontLabelChineseFamily",     L"FontLabelLatinFamily",
+        L"FontCommentChineseFamily",   L"FontCommentLatinFamily",
+    };
+    static constexpr const wchar_t* kPointNames[kChoiceCount] = {
+        L"FontPreeditChinesePoint",   L"FontPreeditLatinPoint",
+        L"FontCandidateChinesePoint", L"FontCandidateLatinPoint",
+        L"FontLabelChinesePoint",     L"FontLabelLatinPoint",
+        L"FontCommentChinesePoint",   L"FontCommentLatinPoint",
+    };
+    static constexpr const wchar_t* kShapeNames[kChoiceCount] = {
+        L"FontPreeditChineseShape",   L"FontPreeditLatinShape",
+        L"FontCandidateChineseShape", L"FontCandidateLatinShape",
+        L"FontLabelChineseShape",     L"FontLabelLatinShape",
+        L"FontCommentChineseShape",   L"FontCommentLatinShape",
+    };
+    FontSettings settings = Defaults();
+    const UserSettingsStore store;
+    settings.enabled = store.ReadBool(kFontSettingsEnabledSetting, false);
+    if (!settings.enabled)
+      return settings;
+    for (size_t i = 0; i < kChoiceCount; ++i) {
+      settings.choices[i].family =
+          store.ReadString(kFamilyNames[i], settings.choices[i].family);
+      settings.choices[i].point = (std::max)(
+          6ul, (std::min)(72ul, store.ReadDword(kPointNames[i],
+                                                settings.choices[i].point)));
+      const DWORD shape = store.ReadDword(kShapeNames[i], 0);
+      settings.choices[i].shape = shape <= static_cast<DWORD>(FontShape::Italic)
+                                      ? static_cast<FontShape>(shape)
+                                      : FontShape::Regular;
+    }
+    return settings;
+  }
+
+  LSTATUS Save() const {
+    static constexpr const wchar_t* kFamilyNames[kChoiceCount] = {
+        L"FontPreeditChineseFamily",   L"FontPreeditLatinFamily",
+        L"FontCandidateChineseFamily", L"FontCandidateLatinFamily",
+        L"FontLabelChineseFamily",     L"FontLabelLatinFamily",
+        L"FontCommentChineseFamily",   L"FontCommentLatinFamily",
+    };
+    static constexpr const wchar_t* kPointNames[kChoiceCount] = {
+        L"FontPreeditChinesePoint",   L"FontPreeditLatinPoint",
+        L"FontCandidateChinesePoint", L"FontCandidateLatinPoint",
+        L"FontLabelChinesePoint",     L"FontLabelLatinPoint",
+        L"FontCommentChinesePoint",   L"FontCommentLatinPoint",
+    };
+    static constexpr const wchar_t* kShapeNames[kChoiceCount] = {
+        L"FontPreeditChineseShape",   L"FontPreeditLatinShape",
+        L"FontCandidateChineseShape", L"FontCandidateLatinShape",
+        L"FontLabelChineseShape",     L"FontLabelLatinShape",
+        L"FontCommentChineseShape",   L"FontCommentLatinShape",
+    };
+    const UserSettingsStore store;
+    for (size_t i = 0; i < kChoiceCount; ++i) {
+      LSTATUS result = store.WriteString(kFamilyNames[i], choices[i].family);
+      if (result != ERROR_SUCCESS)
+        return result;
+      result = store.WriteDword(kPointNames[i], choices[i].point);
+      if (result != ERROR_SUCCESS)
+        return result;
+      result = store.WriteDword(kShapeNames[i],
+                                static_cast<DWORD>(choices[i].shape));
+      if (result != ERROR_SUCCESS)
+        return result;
+    }
+    return store.WriteBool(kFontSettingsEnabledSetting, enabled);
+  }
+
+  bool operator==(const FontSettings& other) const {
+    return enabled == other.enabled && choices == other.choices;
+  }
+  bool operator!=(const FontSettings& other) const { return !(*this == other); }
 };
 
 struct UserSettings {

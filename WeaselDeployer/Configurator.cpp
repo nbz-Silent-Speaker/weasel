@@ -1,7 +1,9 @@
 ﻿#include "stdafx.h"
 #include "WeaselDeployer.h"
 #include "Configurator.h"
+#include "FontSettingsDialog.h"
 #include "SwitcherSettingsDialog.h"
+#include "StatusIconSettingsDialog.h"
 #include "UIStyleSettings.h"
 #include "UIStyleSettingsDialog.h"
 #include "DictManagementDialog.h"
@@ -146,6 +148,18 @@ int Configurator::ConfigureColorScheme(weasel::ColorSchemeTarget target) {
     return 1;
   }
   UIStyleSettingsDialog dialog(&settings);
+  dialog.DoModal();
+  return 0;
+}
+
+int Configurator::ConfigureFonts() {
+  FontSettingsDialog dialog;
+  dialog.DoModal();
+  return 0;
+}
+
+int Configurator::ConfigureStatusIcons() {
+  StatusIconSettingsDialog dialog;
   dialog.DoModal();
   return 0;
 }

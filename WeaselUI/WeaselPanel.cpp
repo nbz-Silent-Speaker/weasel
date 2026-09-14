@@ -3995,7 +3995,10 @@ LRESULT WeaselPanel::OnUserSettingsChanged(UINT uMsg,
     bHandled = FALSE;
     return 0;
   }
+  if (pDWR)
+    pDWR->ReloadUserSettings();
   Refresh();
+  RedrawWindow();
   return 0;
 }
 

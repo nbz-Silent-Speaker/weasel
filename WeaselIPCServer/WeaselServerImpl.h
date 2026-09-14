@@ -28,8 +28,10 @@ class ServerImpl : public CWindowImpl<ServerImpl, CWindow, ServerWinTraits>
   MESSAGE_HANDLER(WM_ENDSESSION, OnEndSystemSession)
   MESSAGE_HANDLER(WM_DWMCOLORIZATIONCOLORCHANGED, OnColorChange)
   MESSAGE_HANDLER(WM_SETTINGCHANGE, OnColorChange)
+  MESSAGE_HANDLER(WM_TIMER, OnTimer)
   MESSAGE_HANDLER(WM_COMMAND, OnCommand)
   MESSAGE_HANDLER(WM_WEASEL_SERVICE_NOTIFY, OnServiceNotifyMessage)
+  MESSAGE_RANGE_HANDLER(0xC000, 0xFFFF, OnRegisteredMessage)
   END_MSG_MAP()
 
   LRESULT OnColorChange(UINT uMsg,
@@ -37,6 +39,7 @@ class ServerImpl : public CWindowImpl<ServerImpl, CWindow, ServerWinTraits>
                         LPARAM lParam,
                         BOOL& bHandled);
   LRESULT OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+  LRESULT OnTimer(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
   LRESULT OnClose(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
   LRESULT OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
   LRESULT OnQueryEndSystemSession(UINT uMsg,
@@ -52,6 +55,10 @@ class ServerImpl : public CWindowImpl<ServerImpl, CWindow, ServerWinTraits>
                                  WPARAM wParam,
                                  LPARAM lParam,
                                  BOOL& bHandled);
+  LRESULT OnRegisteredMessage(UINT uMsg,
+                              WPARAM wParam,
+                              LPARAM lParam,
+                              BOOL& bHandled);
   DWORD OnCommand(WEASEL_IPC_COMMAND uMsg, DWORD wParam, DWORD lParam);
   DWORD OnEcho(WEASEL_IPC_COMMAND uMsg, DWORD wParam, DWORD lParam);
   DWORD OnStartSession(WEASEL_IPC_COMMAND uMsg, DWORD wParam, DWORD lParam);
@@ -94,6 +101,12 @@ class ServerImpl : public CWindowImpl<ServerImpl, CWindow, ServerWinTraits>
   void SetTrayRefreshCallback(std::function<void()> callback) {
     m_trayRefreshCallback = callback;
   }
+  void SetSettingsChangedCallback(std::function<void()> callback) {
+    m_settingsChangedCallback = callback;
+  }
+  void SetSystemStateChangedCallback(std::function<void()> callback) {
+    m_systemStateChangedCallback = callback;
+  }
 
  private:
   void _Finailize();
@@ -105,6 +118,8 @@ class ServerImpl : public CWindowImpl<ServerImpl, CWindow, ServerWinTraits>
   RequestHandler* m_pRequestHandler;  // reference
   std::map<UINT, CommandHandler> m_MenuHandlers;
   std::function<void()> m_trayRefreshCallback;
+  std::function<void()> m_settingsChangedCallback;
+  std::function<void()> m_systemStateChangedCallback;
   HMODULE m_hUser32Module;
   SecurityAttribute sa;
   BOOL m_darkMode;
