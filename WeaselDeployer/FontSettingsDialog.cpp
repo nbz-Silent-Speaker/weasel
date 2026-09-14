@@ -427,8 +427,9 @@ void FontSettingsDialog::DrawPreview(const DRAWITEMSTRUCT& draw) {
   const wchar_t* comments[] = {L"", L"常用", L"English", L"", L""};
   if (preview_vertical_) {
     const int row_top = bounds.top + (std::max)(22, height / 5);
-    const int row_height =
-        (std::max)(1, (bounds.bottom - padding - row_top) / 5);
+    const int measured_row_height =
+        static_cast<int>((bounds.bottom - padding - row_top) / 5);
+    const int row_height = measured_row_height > 1 ? measured_row_height : 1;
     for (int index = 0; index < 5; ++index) {
       y = row_top + index * row_height;
       if (index == 0) {
