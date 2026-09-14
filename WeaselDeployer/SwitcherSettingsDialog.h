@@ -105,6 +105,8 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
     bool initial_enabled = false;
   };
 
+  enum class PendingModelAction { None, Install, Remove };
+
   RimeLeversApi* api_;
   RimeSwitcherSettings* settings_;
   bool loaded_;
@@ -119,19 +121,18 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
   std::shared_ptr<UpdateCheck> update_check_;
   struct ApplyOperation {
     int result = 1;
-    bool model_install_failed = false;
-    std::wstring model_install_error;
+    PendingModelAction model_action = PendingModelAction::None;
     std::atomic<bool> done{false};
   };
   std::shared_ptr<ApplyOperation> apply_operation_;
   bool close_after_apply_ = false;
-  bool model_install_failed_ = false;
+  bool model_operation_failed_ = false;
   bool model_update_available_ = false;
   bool scheme_update_available_ = false;
   bool check_button_accent_ = false;
   bool model_button_accent_ = false;
   bool model_status_active_ = false;
-  bool model_pending_apply_ = false;
+  PendingModelAction pending_model_action_ = PendingModelAction::None;
   unsigned long long latest_model_size_ = 0;
   std::wstring latest_model_sha256_;
   bool loading_input_mode_ = false;

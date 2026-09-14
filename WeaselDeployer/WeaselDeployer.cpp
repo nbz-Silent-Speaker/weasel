@@ -97,7 +97,7 @@ static int Run(LPTSTR lpCmdLine) {
                 << wtou8(result.latest_tag);
     }
     if (result.model_update_available) {
-      LOG(INFO) << "A newer Wanxiang language model is available: "
+      LOG(INFO) << "A newer Wanxiang grammar model is available: "
                 << wtou8(result.latest_model_sha256) << " ("
                 << result.latest_model_size << " bytes)";
     }

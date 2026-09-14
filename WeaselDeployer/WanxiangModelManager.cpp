@@ -17,7 +17,7 @@
 #include <WeaselUtility.h>
 
 namespace {
-constexpr wchar_t kJobName[] = L"Weasel Wanxiang LTS Model";
+constexpr wchar_t kJobName[] = L"Weasel Wanxiang LTS Grammar Model";
 constexpr wchar_t kModelFileName[] = L"wanxiang-lts-zh-hans.gram";
 constexpr wchar_t kCompletionArgument[] = L"/model-download-complete";
 constexpr wchar_t kUpdateRegistry[] = L"Software\\Rime\\Weasel\\PackageUpdates";
@@ -714,19 +714,21 @@ bool WanxiangModelManager::VerifyStagedFile(std::wstring* error) const {
   const auto size = std::filesystem::file_size(StagingPath(), file_error);
   if (file_error || size != target_size_) {
     if (error)
-      *error = L"Downloaded model size does not match the verified package.";
+      *error =
+          L"Downloaded grammar model size does not match the verified package.";
     return false;
   }
   std::string digest;
   if (!Sha256File(StagingPath(), &digest)) {
     if (error)
-      *error = L"Unable to calculate the downloaded model checksum.";
+      *error = L"Unable to calculate the downloaded grammar model checksum.";
     return false;
   }
   if (digest != target_sha256_) {
     if (error)
       *error =
-          L"Downloaded model checksum does not match the verified CNB file.";
+          L"Downloaded grammar model checksum does not match the verified CNB "
+          L"file.";
     return false;
   }
   return true;
@@ -735,7 +737,7 @@ bool WanxiangModelManager::VerifyStagedFile(std::wstring* error) const {
 bool WanxiangModelManager::CompleteDownload(std::wstring* error) {
   if (!job_ && !VerifyStagedFile(nullptr)) {
     if (error)
-      *error = L"No completed model download was found.";
+      *error = L"No completed grammar model download was found.";
     return false;
   }
   // Preserve completed data even when a previous install transaction needs
@@ -785,7 +787,8 @@ bool WanxiangModelManager::CompleteAndInstall(std::wstring* error) {
       *error = file_error
                    ? u8tow(file_error.message())
                    : std::wstring(
-                         L"An earlier model transaction still needs cleanup.");
+                         L"An earlier grammar model transaction still needs "
+                         L"cleanup.");
     return false;
   }
   const bool has_backup = std::filesystem::exists(BackupPath(), file_error);
@@ -802,7 +805,7 @@ bool WanxiangModelManager::CompleteAndInstall(std::wstring* error) {
       job_->Cancel();
     job_.Release();
     if (error)
-      *error = L"An earlier model backup still needs recovery.";
+      *error = L"An earlier grammar model backup still needs recovery.";
     return false;
   }
 
@@ -822,13 +825,15 @@ bool WanxiangModelManager::CompleteAndInstall(std::wstring* error) {
     std::filesystem::remove(prepared, ignored);
     if (error)
       *error =
-          L"无法将模型写入用户文件夹，请检查权限和剩余空间。下载文件已保留。";
+          L"无法将语法模型写入用户文件夹，请检查权限和剩余空间。下载文件已保留"
+          L"。";
     return false;
   }
   if (InstalledState() == State::Modified &&
       !IsManagedInstalledModel(ModelPath())) {
     if (error)
-      *error = L"用户文件夹中出现了其他版本的模型，已保留原文件和下载缓存。";
+      *error =
+          L"用户文件夹中出现了其他版本的语法模型，已保留原文件和下载缓存。";
     return false;
   }
 
@@ -890,7 +895,8 @@ bool WanxiangModelManager::RemoveInstalled(std::wstring* error) {
       *error = file_error
                    ? u8tow(file_error.message())
                    : std::wstring(
-                         L"An earlier model transaction still needs cleanup.");
+                         L"An earlier grammar model transaction still needs "
+                         L"cleanup.");
     return false;
   }
   const bool has_backup = std::filesystem::exists(BackupPath(), file_error);
@@ -901,7 +907,7 @@ bool WanxiangModelManager::RemoveInstalled(std::wstring* error) {
   }
   if (has_backup) {
     if (error)
-      *error = L"An earlier model backup still needs recovery.";
+      *error = L"An earlier grammar model backup still needs recovery.";
     return false;
   }
   file_error.clear();
@@ -963,7 +969,7 @@ bool WanxiangModelManager::Commit(std::wstring* error) {
       marker.flush();
       if (!marker) {
         if (error)
-          *error = L"Unable to create the model transaction marker.";
+          *error = L"Unable to create the grammar model transaction marker.";
         return false;
       }
     }

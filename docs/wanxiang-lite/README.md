@@ -8,7 +8,7 @@
 ## 固定来源
 
 - Lite 方案包：万象官方 CNB `v17.10.0` 发布包；
-- 可选语言模型：万象官方 CNB 简体 LTS 模型；
+- 可选语法模型：万象官方 CNB 简体 LTS 模型；
 - 两个下载均在 `data/packages/wanxiang-lite.json` 中固定 URL、字节数和
   SHA256；
 - 构建脚本只提取清单允许的 64 个文件，排除上游的全局配置和示例 custom

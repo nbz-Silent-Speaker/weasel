@@ -11,7 +11,7 @@
   },
   "model": {
     "id": "wanxiang-lts-zh-hans",
-    "display_name": "万象简体 LTS 语言模型",
+    "display_name": "万象简体 LTS 语法模型",
     "file_name": "wanxiang-lts-zh-hans.gram",
     "url": "https://cnb.cool/amzxyz/rime-wanxiang/-/releases/download/model/wanxiang-lts-zh-hans.gram",
     "size": 420343852,

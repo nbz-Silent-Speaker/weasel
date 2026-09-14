@@ -142,9 +142,9 @@
       "id": "wanxiang-lts-zh-hans",
       "kind": "language_model",
       "name": {
-        "zh_CN": "万象简体 LTS 语言模型",
-        "zh_TW": "萬象簡體 LTS 語言模型",
-        "en": "Wanxiang Simplified Chinese LTS Language Model"
+        "zh_CN": "万象简体 LTS 语法模型",
+        "zh_TW": "萬象簡體 LTS 語法模型",
+        "en": "Wanxiang Simplified Chinese LTS Grammar Model"
       },
       "summary": {
         "zh_CN": "可选的长句与上下文预测模型",

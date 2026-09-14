@@ -16,7 +16,8 @@ $digest = ([BitConverter]::ToString($sha.ComputeHash($fixture))).Replace('-', ''
 $sha.Dispose()
 $cpp = [IO.File]::ReadAllText((Join-Path $source 'WanxiangModelManager.cpp'))
 $cpp = $cpp.Replace('9f80530f470033cfb6d4b44bb861b540f64100426f92dd0f87140883632a3d93', $digest)
-$cpp = $cpp.Replace('Weasel Wanxiang LTS Model', ('Weasel model tests ' + [guid]::NewGuid()))
+$cpp = $cpp.Replace('Weasel Wanxiang LTS Grammar Model',
+    ('Weasel grammar model tests ' + [guid]::NewGuid()))
 Write-TestFile 'WanxiangModelManager.cpp' $cpp
 $header = [IO.File]::ReadAllText((Join-Path $source 'WanxiangModelManager.h'))
 $header = $header.Replace('420343852', '4096')

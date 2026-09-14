@@ -198,9 +198,10 @@ class PackageUpdateDialog : public CDialogImpl<PackageUpdateDialog> {
     if (result_.model_update_available) {
       wchar_t size[128] = {};
       swprintf_s(size,
-                 Localize(L"万象简体 LTS 语言模型 · %.1f MB · CNB",
-                          L"萬象簡體 LTS 語言模型 · %.1f MB · CNB",
-                          L"Wanxiang Simplified LTS model · %.1f MB · CNB")
+                 Localize(L"万象简体 LTS 语法模型 · %.1f MB · CNB",
+                          L"萬象簡體 LTS 語法模型 · %.1f MB · CNB",
+                          L"Wanxiang Simplified LTS grammar model · %.1f MB · "
+                          L"CNB")
                      .c_str(),
                  result_.latest_model_size / 1000000.0);
       ::SetWindowTextW(model, size);
@@ -209,10 +210,10 @@ class PackageUpdateDialog : public CDialogImpl<PackageUpdateDialog> {
     ::SetDlgItemTextW(
         m_hWnd, IDC_UPDATE_SUMMARY,
         result_.scheme_update_available
-            ? Localize(L"方案文件会保留当前安全版本；语言模型可在此直接更新。",
-                       L"方案檔案會保留目前安全版本；語言模型可在此直接更新。",
+            ? Localize(L"方案文件会保留当前安全版本；语法模型可在此直接更新。",
+                       L"方案檔案會保留目前安全版本；語法模型可在此直接更新。",
                        L"Schema files stay on the current safe version. The "
-                       L"model can be updated here.")
+                       L"grammar model can be updated here.")
                   .c_str()
             : L"");
     UpdateButton();
@@ -434,11 +435,12 @@ std::wstring SwitcherSettingsDialog::UpdateFrequencyText(int frequency) const {
 bool SwitcherSettingsDialog::ConfirmDiscardChanges() {
   if (!HasPendingChanges())
     return true;
-  const std::wstring message = LocalText(
-      L"存在尚未应用的设置或模型更改。关闭并恢复到应用前状态吗？",
-      L"存在尚未套用的設定或模型變更。關閉並恢復到套用前狀態嗎？",
-      L"Some settings or model changes have not been applied. Close and "
-      L"restore the previous state?");
+  const std::wstring message =
+      LocalText(L"存在尚未应用的设置或语法模型更改。关闭并恢复到应用前状态吗？",
+                L"存在尚未套用的設定或語法模型變更。關閉並恢復到套用前狀態嗎？",
+                L"Some settings or grammar model changes have not been "
+                L"applied. Close and "
+                L"restore the previous state?");
   return ::MessageBoxW(
              m_hWnd, message.c_str(),
              LocalText(L"放弃更改", L"放棄變更", L"Discard changes").c_str(),
@@ -453,7 +455,8 @@ bool SwitcherSettingsDialog::HasSchemaSelectionChanges() const {
 
 bool SwitcherSettingsDialog::HasPendingChanges() const {
   return HasSchemaSelectionChanges() || input_mode_modified_ ||
-         update_frequency_modified_ || model_pending_apply_;
+         update_frequency_modified_ ||
+         pending_model_action_ != PendingModelAction::None;
 }
 
 void SwitcherSettingsDialog::UpdateApplyButton() {
@@ -462,14 +465,15 @@ void SwitcherSettingsDialog::UpdateApplyButton() {
 }
 
 void SwitcherSettingsDialog::DiscardPendingModel() {
-  if (!model_pending_apply_)
+  if (pending_model_action_ == PendingModelAction::None)
     return;
   std::wstring error;
   if (!model_manager_.Rollback(&error)) {
-    LOG(ERROR) << "Unable to roll back an unapplied Wanxiang model: "
+    LOG(ERROR) << "Unable to roll back an unapplied Wanxiang model change: "
                << wtou8(error);
   }
-  model_pending_apply_ = false;
+  pending_model_action_ = PendingModelAction::None;
+  model_operation_failed_ = false;
 }
 
 bool SwitcherSettingsDialog::RestorePersistedSettings() {
@@ -887,15 +891,13 @@ void SwitcherSettingsDialog::UpdateModelUi() {
   set_text(IDC_MODEL_DESCRIPTION, model_summary);
   set_text(IDC_MODEL_SOURCE, L"");
   ::ShowWindow(GetDlgItem(IDC_MODEL_SOURCE), SW_HIDE);
-  const bool pending_transfer =
-      model_pending_apply_ && state == State::Transferred;
-  const bool active = !pending_transfer &&
-                      (state == State::Downloading ||
-                       state == State::WaitingRetry || state == State::Paused ||
-                       state == State::Transferred || state == State::Error);
+  const bool active = state == State::Downloading ||
+                      state == State::WaitingRetry || state == State::Paused ||
+                      state == State::Transferred || state == State::Error;
   model_status_active_ = (active && state != State::Downloading) ||
                          state == State::RestartRequired ||
-                         model_install_failed_ || model_pending_apply_ ||
+                         model_operation_failed_ ||
+                         pending_model_action_ != PendingModelAction::None ||
                          (state == State::Modified && !model_update_available_);
   ::ShowWindow(GetDlgItem(IDC_MODEL_PROGRESS), active ? SW_SHOW : SW_HIDE);
   ::ShowWindow(GetDlgItem(IDC_MODEL_PROGRESS_TEXT), active ? SW_SHOW : SW_HIDE);
@@ -918,10 +920,11 @@ void SwitcherSettingsDialog::UpdateModelUi() {
   }
   switch (state) {
     case State::Downloading:
-      note = LocalText(L"下载完成后自动校验；点击“应用”完成安装和重新部署。",
-                       L"下載完成後自動校驗；點擊「套用」完成安裝和重新部署。",
-                       L"The download is verified automatically; select Apply "
-                       L"to install and redeploy.");
+      note = LocalText(
+          L"下载完成后自动校验并安装；点击“应用”完成重新部署。",
+          L"下載完成後自動校驗並安裝；點擊「套用」完成重新部署。",
+          L"The download is verified and installed automatically; select "
+          L"Apply to redeploy.");
       download_status = LocalText(L"正在下载", L"正在下載", L"Downloading");
       if (last_progress_tick_ && progress.transferred >= last_progress_bytes_) {
         const ULONGLONG now = ::GetTickCount64();
@@ -1001,55 +1004,67 @@ void SwitcherSettingsDialog::UpdateModelUi() {
       primary = LocalText(L"重试", L"重試", L"Retry");
       break;
     case State::Transferred:
-      if (model_pending_apply_) {
-        note = LocalText(L"已安装 · 待应用", L"已安裝 · 待套用",
-                         L"Installed · Apply pending");
-      } else {
-        note = LocalText(L"下载完成，正在校验。", L"下載完成，正在校驗。",
-                         L"Verifying the downloaded model.");
-        primary = LocalText(L"正在校验", L"正在校驗", L"Verifying");
-        enabled = false;
-      }
+      note = LocalText(L"下载完成，正在校验。", L"下載完成，正在校驗。",
+                       L"Verifying the downloaded grammar model.");
+      primary = LocalText(L"正在校验", L"正在校驗", L"Verifying");
+      enabled = false;
       break;
     case State::Installed:
-      secondary = LocalText(L"移除模型", L"移除模型", L"Remove model");
-      if (model_pending_apply_) {
-        note = LocalText(L"已安装 · 待应用", L"已安裝 · 待套用",
-                         L"Installed · Apply pending");
-        secondary.clear();
-      }
+      secondary =
+          LocalText(L"移除语法模型", L"移除語法模型", L"Remove grammar model");
       break;
     case State::Modified:
-      note = model_update_available_
-                 ? L""
-                 : LocalText(L"现有模型不是此处管理的版本。",
-                             L"現有模型不是此處管理的版本。",
-                             L"The existing model is not managed here.");
-      secondary = LocalText(L"移除模型", L"移除模型", L"Remove model");
+      note =
+          model_update_available_
+              ? L""
+              : LocalText(L"现有语法模型不是此处管理的版本。",
+                          L"現有語法模型不是此處管理的版本。",
+                          L"The existing grammar model is not managed here.");
+      secondary =
+          LocalText(L"移除语法模型", L"移除語法模型", L"Remove grammar model");
       break;
     default:
-      note = LocalText(L"下载完成后自动校验；点击“应用”完成安装和重新部署。",
-                       L"下載完成後自動校驗；點擊「套用」完成安裝和重新部署。",
-                       L"The download is verified automatically; select Apply "
-                       L"to install and redeploy.");
-      primary = LocalText(L"下载模型", L"下載模型", L"Download model");
+      note = LocalText(
+          L"下载完成后自动校验并安装；点击“应用”完成重新部署。",
+          L"下載完成後自動校驗並安裝；點擊「套用」完成重新部署。",
+          L"The download is verified and installed automatically; select "
+          L"Apply to redeploy.");
+      primary = LocalText(L"下载语法模型", L"下載語法模型",
+                          L"Download grammar model");
       break;
   }
-  if (model_update_available_ && !model_pending_apply_ &&
+  if (model_update_available_ &&
+      pending_model_action_ == PendingModelAction::None &&
       (state == State::Installed || state == State::Modified)) {
-    primary = LocalText(L"更新模型", L"更新模型", L"Update model");
+    primary =
+        LocalText(L"更新语法模型", L"更新語法模型", L"Update grammar model");
     enabled = true;
     model_button_accent_ = true;
+  }
+  if (pending_model_action_ == PendingModelAction::Install) {
+    note = LocalText(L"已安装 · 待应用", L"已安裝 · 待套用",
+                     L"Installed · Apply pending");
+    primary.clear();
+    secondary.clear();
+  } else if (pending_model_action_ == PendingModelAction::Remove) {
+    note = LocalText(L"已移除 · 待应用", L"已移除 · 待套用",
+                     L"Removed · Apply pending");
+    primary.clear();
+    secondary = LocalText(L"取消移除", L"取消移除", L"Undo removal");
   }
   if ((active && state != State::Transferred) ||
       state == State::RestartRequired)
     secondary = LocalText(L"取消下载", L"取消下載", L"Cancel download");
-  if (model_install_failed_) {
-    if (model_pending_apply_) {
+  if (model_operation_failed_) {
+    if (pending_model_action_ == PendingModelAction::Install) {
       note = LocalText(L"安装未完成，请点击“应用”重试。",
                        L"安裝未完成，請點擊「套用」重試。",
                        L"Installation did not finish. Select Apply to retry.");
       primary.clear();
+    } else if (pending_model_action_ == PendingModelAction::Remove) {
+      note = LocalText(L"移除未完成，请点击“应用”重试。",
+                       L"移除未完成，請點擊「套用」重試。",
+                       L"Removal did not finish. Select Apply to retry.");
     } else {
       note = LocalText(
           L"安装未完成。检查用户文件夹后重试，已校验的下载会复用。",
@@ -1281,7 +1296,8 @@ LRESULT SwitcherSettingsDialog::OnCtlColorStatic(UINT,
   const bool card = id == IDC_SCHEMA_DETAIL_NAME ||
                     id == IDC_SCHEMA_DETAIL_VERSION || id == IDC_MODEL_NAME ||
                     id == IDC_MODEL_DESCRIPTION || id == IDC_MODEL_SOURCE ||
-                    id == IDC_MODEL_NOTE || id == IDC_MODEL_DOWNLOAD_STATUS ||
+                    id == IDC_MODEL_NOTE || id == IDC_MODEL_PROGRESS_TEXT ||
+                    id == IDC_MODEL_DOWNLOAD_STATUS ||
                     id == IDC_SCHEMA_PROJECT_LINKS || id == IDC_SCHEMA_AUTHOR ||
                     id == IDC_SCHEMA_SHORTCUT_LABEL || id == IDC_HOTKEY_PLUS ||
                     id == IDC_HOTKEY_OR;
@@ -1324,19 +1340,19 @@ LRESULT SwitcherSettingsDialog::OnButtonCustomDraw(int control_id,
   return CDRF_NEWFONT;
 }
 void SwitcherSettingsDialog::FinishModelDownload() {
-  model_install_failed_ = true;
+  model_operation_failed_ = true;
   std::wstring error;
-  if (!model_manager_.CompleteDownload(&error)) {
+  if (!model_manager_.CompleteAndInstall(&error)) {
     ::MessageBoxW(m_hWnd, error.c_str(),
-                  LocalText(L"模型校验失败", L"模型校驗失敗",
-                            L"Model verification failed")
+                  LocalText(L"语法模型校验失败", L"語法模型校驗失敗",
+                            L"Grammar model verification failed")
                       .c_str(),
                   MB_OK | MB_ICONERROR);
     UpdateModelUi();
     return;
   }
-  model_install_failed_ = false;
-  model_pending_apply_ = true;
+  model_operation_failed_ = false;
+  pending_model_action_ = PendingModelAction::Install;
   UpdateApplyButton();
   UpdateModelUi();
 }
@@ -1523,7 +1539,8 @@ LRESULT SwitcherSettingsDialog::OnTimer(UINT, WPARAM timer, LPARAM, BOOL&) {
     return 0;
   FinishUpdateCheck();
   const auto progress = model_manager_.GetProgress();
-  if (!model_install_failed_ && !model_pending_apply_ &&
+  if (!model_operation_failed_ &&
+      pending_model_action_ == PendingModelAction::None &&
       progress.state == WanxiangModelManager::State::Transferred) {
     UpdateModelUi();
     KillTimer(kModelTimer);
@@ -1671,10 +1688,11 @@ void SwitcherSettingsDialog::ShowUpdateList() {
   if (dialog.DoModal(m_hWnd) != IDOK || !dialog.selection().model)
     return;
   std::wstring error;
-  model_install_failed_ = false;
+  model_operation_failed_ = false;
   if (!latest_model_sha256_.empty() && latest_model_size_)
     model_manager_.ConfigureTarget(latest_model_sha256_, latest_model_size_);
-  if (!model_manager_.Start(&error)) {
+  const bool started = model_manager_.Start(&error);
+  if (!started) {
     ::MessageBoxW(
         m_hWnd, error.c_str(),
         LocalText(L"无法开始更新", L"無法開始更新", L"Unable to update")
@@ -1682,6 +1700,8 @@ void SwitcherSettingsDialog::ShowUpdateList() {
         MB_OK | MB_ICONERROR);
   }
   UpdateModelUi();
+  if (started && schema_list_.IsWindow())
+    schema_list_.SetFocus();
 }
 
 LRESULT SwitcherSettingsDialog::OnUpdateSettingsChanged(WORD,
@@ -1762,7 +1782,7 @@ LRESULT SwitcherSettingsDialog::OnInputModeChanged(WORD, WORD, HWND, BOOL&) {
 
 LRESULT SwitcherSettingsDialog::OnModelPrimary(WORD, WORD, HWND, BOOL&) {
   std::wstring error;
-  model_install_failed_ = false;
+  model_operation_failed_ = false;
   const auto state = model_manager_.GetProgress().state;
   if (state == WanxiangModelManager::State::Transferred) {
     FinishModelDownload();
@@ -1779,10 +1799,31 @@ LRESULT SwitcherSettingsDialog::OnModelPrimary(WORD, WORD, HWND, BOOL&) {
         MB_OK | MB_ICONERROR);
   }
   UpdateModelUi();
+  if (success && schema_list_.IsWindow())
+    schema_list_.SetFocus();
   return 0;
 }
 
 LRESULT SwitcherSettingsDialog::OnModelSecondary(WORD, WORD, HWND, BOOL&) {
+  if (pending_model_action_ == PendingModelAction::Remove) {
+    std::wstring error;
+    if (!model_manager_.Rollback(&error)) {
+      model_operation_failed_ = true;
+      ::MessageBoxW(
+          m_hWnd, error.c_str(),
+          LocalText(L"无法取消移除", L"無法取消移除", L"Unable to undo removal")
+              .c_str(),
+          MB_OK | MB_ICONERROR);
+      UpdateModelUi();
+      return 0;
+    }
+    pending_model_action_ = PendingModelAction::None;
+    model_operation_failed_ = false;
+    UpdateApplyButton();
+    UpdateModelUi();
+    return 0;
+  }
+
   const auto state = model_manager_.GetProgress().state;
   if (state == WanxiangModelManager::State::Downloading ||
       state == WanxiangModelManager::State::WaitingRetry ||
@@ -1790,18 +1831,18 @@ LRESULT SwitcherSettingsDialog::OnModelSecondary(WORD, WORD, HWND, BOOL&) {
       state == WanxiangModelManager::State::RestartRequired ||
       state == WanxiangModelManager::State::Error) {
     model_manager_.Cancel();
-    model_install_failed_ = false;
+    model_operation_failed_ = false;
     UpdateModelUi();
     return 0;
   }
 
   const int answer = ::MessageBoxW(
       m_hWnd,
-      LocalText(L"确定移除已安装的语言模型吗？",
-                L"確定移除已安裝的語言模型嗎？",
-                L"Remove the installed language model?")
+      LocalText(L"确定移除已安装的语法模型吗？",
+                L"確定移除已安裝的語法模型嗎？",
+                L"Remove the installed grammar model?")
           .c_str(),
-      LocalText(L"移除语言模型", L"移除語言模型", L"Remove language model")
+      LocalText(L"移除语法模型", L"移除語法模型", L"Remove grammar model")
           .c_str(),
       MB_YESNO | MB_ICONQUESTION);
   if (answer != IDYES)
@@ -1809,71 +1850,16 @@ LRESULT SwitcherSettingsDialog::OnModelSecondary(WORD, WORD, HWND, BOOL&) {
 
   std::wstring error;
   if (!model_manager_.RemoveInstalled(&error)) {
-    ::MessageBoxW(
-        m_hWnd, error.c_str(),
-        LocalText(L"无法移除模型", L"無法移除模型", L"Unable to remove model")
-            .c_str(),
-        MB_OK | MB_ICONERROR);
+    ::MessageBoxW(m_hWnd, error.c_str(),
+                  LocalText(L"无法移除语法模型", L"無法移除語法模型",
+                            L"Unable to remove grammar model")
+                      .c_str(),
+                  MB_OK | MB_ICONERROR);
     return 0;
   }
-  Configurator configurator;
-  if (configurator.UpdateWorkspace(true) != 0) {
-    std::wstring rollback_error;
-    const bool file_restored = model_manager_.Rollback(&rollback_error);
-    const bool restored =
-        file_restored && configurator.UpdateWorkspace(false) == 0;
-    std::wstring message =
-        restored
-            ? LocalText(
-                  L"重新部署失败，语言模型已经恢复。",
-                  L"重新部署失敗，語言模型已經恢復。",
-                  L"Deployment failed and the language model was restored.")
-            : LocalText(
-                  L"重新部署和自动恢复均失败，请保留当前文件并查看部署日志。",
-                  L"重新部署和自動恢復均失敗，請保留目前檔案並查看部署記錄。",
-                  L"Deployment and automatic recovery both failed. Keep the "
-                  L"current files and review the deployment log.");
-    if (!rollback_error.empty())
-      message += L"\n" + rollback_error;
-    ::MessageBoxW(
-        m_hWnd, message.c_str(),
-        LocalText(L"移除失败", L"移除失敗", L"Removal failed").c_str(),
-        MB_OK | MB_ICONERROR);
-  } else {
-    std::wstring commit_error;
-    if (!model_manager_.Commit(&commit_error)) {
-      std::wstring rollback_error;
-      const bool file_restored = model_manager_.Rollback(&rollback_error);
-      const bool restored =
-          file_restored && configurator.UpdateWorkspace(false) == 0;
-      std::wstring message =
-          restored
-              ? LocalText(L"模型已移除，但无法完成操作记录，模型已经恢复。",
-                          L"模型已移除，但無法完成操作記錄，模型已經恢復。",
-                          L"The model was removed, but the operation could not "
-                          L"be finalized. The model was restored.")
-              : LocalText(
-                    L"模型已移除，但无法完成操作记录和自动恢复，请查看部署日志"
-                    L"。",
-                    L"模型已移除，但無法完成操作記錄和自動恢復，請查看部署記錄"
-                    L"。",
-                    L"The model was removed, but finalization and automatic "
-                    L"recovery failed. Review the deployment log.");
-      if (!commit_error.empty())
-        message += L"\n" + commit_error;
-      if (!rollback_error.empty())
-        message += L"\n" + rollback_error;
-      ::MessageBoxW(
-          m_hWnd, message.c_str(),
-          LocalText(L"移除失败", L"移除失敗", L"Removal failed").c_str(),
-          MB_OK | MB_ICONERROR);
-    } else {
-      model_update_available_ = false;
-      WanxiangUpdateManager::StoreAvailableCount(scheme_update_available_ ? 1u
-                                                                          : 0u);
-      UpdateCheckButton();
-    }
-  }
+  pending_model_action_ = PendingModelAction::Remove;
+  model_operation_failed_ = false;
+  UpdateApplyButton();
   UpdateModelUi();
   return 0;
 }
@@ -1935,17 +1921,12 @@ bool SwitcherSettingsDialog::ApplyChanges() {
         MB_OK | MB_ICONERROR);
     return false;
   }
-  const bool install_model = model_pending_apply_;
+  const PendingModelAction model_action = pending_model_action_;
   SetApplyingUi(true);
   apply_operation_ = std::make_shared<ApplyOperation>();
+  apply_operation_->model_action = model_action;
   try {
-    std::thread([this, operation = apply_operation_, install_model]() {
-      if (install_model &&
-          !model_manager_.CompleteAndInstall(&operation->model_install_error)) {
-        operation->model_install_failed = true;
-        operation->done.store(true);
-        return;
-      }
+    std::thread([operation = apply_operation_]() {
       Configurator configurator;
       operation->result = configurator.UpdateWorkspace(false);
       operation->done.store(true);
@@ -1990,34 +1971,11 @@ void SwitcherSettingsDialog::FinishApply() {
   if (!apply_operation_ || !apply_operation_->done.load())
     return;
   const int deployment_result = apply_operation_->result;
-  const bool install_failed = apply_operation_->model_install_failed;
-  const std::wstring install_error = apply_operation_->model_install_error;
+  const PendingModelAction model_action = apply_operation_->model_action;
   apply_operation_.reset();
-  bool success = !install_failed && deployment_result == 0;
-  if (install_failed) {
-    const bool settings_restored = RestorePersistedSettings();
-    model_install_failed_ = true;
-    std::wstring message = install_error;
-    if (!settings_restored) {
-      message += LocalText(
-          L"\n同时无法恢复先前的设置，请保留当前文件并查看部署日志。",
-          L"\n同時無法恢復先前的設定，請保留目前檔案並查看部署記錄。",
-          L"\nThe previous settings could not be restored. Keep the current "
-          L"files and review the deployment log.");
-    }
-    if (!close_after_apply_) {
-      ::MessageBoxW(m_hWnd, message.c_str(),
-                    LocalText(L"无法安装语言模型", L"無法安裝語言模型",
-                              L"Cannot install language model")
-                        .c_str(),
-                    MB_OK | MB_ICONERROR);
-    } else {
-      LOG(ERROR) << "Background model installation failed after the settings "
-                    "window closed: "
-                 << wtou8(message);
-    }
-  } else if (!success) {
-    const bool had_pending_model = model_pending_apply_;
+  bool success = deployment_result == 0;
+  if (!success) {
+    const bool had_pending_model = model_action != PendingModelAction::None;
     std::wstring rollback_error;
     const bool file_restored =
         !had_pending_model || model_manager_.Rollback(&rollback_error);
@@ -2027,28 +1985,36 @@ void SwitcherSettingsDialog::FinishApply() {
         configurator.UpdateWorkspace(false) == 0;
     const bool restored =
         file_restored && settings_restored && previous_state_deployed;
-    if (had_pending_model) {
-      model_pending_apply_ = true;
-      model_install_failed_ = true;
+    if (restored) {
+      pending_model_action_ = PendingModelAction::None;
+      model_operation_failed_ = model_action == PendingModelAction::Install;
+    } else if (had_pending_model) {
+      model_operation_failed_ = true;
     }
-    std::wstring message =
-        restored
-            ? had_pending_model
-                  ? LocalText(
-                        L"重新部署失败，设置和语言模型已经恢复。下载缓存已保留"
-                        L"，可重试。",
-                        L"重新部署失敗，設定和語言模型已經恢復。下載快取已保留"
-                        L"，可重試。",
-                        L"Deployment failed. Settings and the previous model "
-                        L"were restored, and the download cache was kept.")
-                  : LocalText(L"重新部署失败，设置已经恢复。",
-                              L"重新部署失敗，設定已經恢復。",
-                              L"Deployment failed and settings were restored.")
-            : LocalText(
-                  L"重新部署和自动恢复均失败，请保留当前文件并查看部署日志。",
-                  L"重新部署和自動恢復均失敗，請保留目前檔案並查看部署記錄。",
-                  L"Deployment and automatic recovery both failed. Keep the "
-                  L"current files and review the deployment log.");
+    std::wstring message;
+    if (!restored) {
+      message = LocalText(
+          L"重新部署和自动恢复均失败，请保留当前文件并查看部署日志。",
+          L"重新部署和自動恢復均失敗，請保留目前檔案並查看部署記錄。",
+          L"Deployment and automatic recovery both failed. Keep the current "
+          L"files and review the deployment log.");
+    } else if (model_action == PendingModelAction::Install) {
+      message = LocalText(
+          L"重新部署失败，设置和语法模型已经恢复。下载缓存已保留，可重试。",
+          L"重新部署失敗，設定和語法模型已經恢復。下載快取已保留，可重試。",
+          L"Deployment failed. Settings and the previous grammar model were "
+          L"restored, and the download cache was kept.");
+    } else if (model_action == PendingModelAction::Remove) {
+      message = LocalText(
+          L"重新部署失败，设置和语法模型已经恢复，可重试移除。",
+          L"重新部署失敗，設定和語法模型已經恢復，可重試移除。",
+          L"Deployment failed. Settings and the grammar model were restored; "
+          L"the removal can be retried.");
+    } else {
+      message = LocalText(L"重新部署失败，设置已经恢复。",
+                          L"重新部署失敗，設定已經恢復。",
+                          L"Deployment failed and settings were restored.");
+    }
     if (!rollback_error.empty())
       message += L"\n" + rollback_error;
     if (!close_after_apply_) {
@@ -2062,7 +2028,7 @@ void SwitcherSettingsDialog::FinishApply() {
                  << wtou8(message);
     }
   }
-  if (success && model_pending_apply_) {
+  if (success && model_action != PendingModelAction::None) {
     std::wstring commit_error;
     if (!model_manager_.Commit(&commit_error)) {
       std::wstring rollback_error;
@@ -2073,21 +2039,29 @@ void SwitcherSettingsDialog::FinishApply() {
           configurator.UpdateWorkspace(false) == 0;
       const bool restored =
           file_restored && settings_restored && previous_state_deployed;
-      model_pending_apply_ = true;
-      model_install_failed_ = true;
+      if (restored) {
+        pending_model_action_ = PendingModelAction::None;
+        model_operation_failed_ = model_action == PendingModelAction::Install;
+      } else {
+        model_operation_failed_ = true;
+      }
       std::wstring message =
           restored
-              ? LocalText(L"模型已经部署，但无法完成安装记录，原文件已经恢复。",
-                          L"模型已經部署，但無法完成安裝記錄，原檔案已經恢復。",
-                          L"The model was deployed, but installation could "
-                          L"not be finalized. The previous model was restored.")
+              ? LocalText(
+                    L"语法模型已经部署，但无法完成安装记录，原文件已经恢复。",
+                    L"語法模型已經部署，但無法完成安裝記錄，原檔案已經恢復。",
+                    L"The grammar model was deployed, but installation "
+                    L"could not be finalized. The previous grammar model "
+                    L"was restored.")
               : LocalText(
-                    L"模型已经部署，但安装记录和自动恢复均失败，请查看部署日志"
+                    L"语法模型已经部署，但安装记录和自动恢复均失败，请查看部署"
+                    L"日志"
                     L"。",
-                    L"模型已經部署，但安裝記錄和自動恢復均失敗，請查看部署記錄"
+                    L"語法模型已經部署，但安裝記錄和自動恢復均失敗，請查看部署"
+                    L"記錄"
                     L"。",
-                    L"The model was deployed, but finalization and automatic "
-                    L"recovery failed. Review the deployment log.");
+                    L"The grammar model was deployed, but finalization and "
+                    L"automatic recovery failed. Review the deployment log.");
       if (!commit_error.empty())
         message += L"\n" + commit_error;
       if (!rollback_error.empty())
@@ -2103,8 +2077,8 @@ void SwitcherSettingsDialog::FinishApply() {
       }
       success = false;
     } else {
-      model_pending_apply_ = false;
-      model_install_failed_ = false;
+      pending_model_action_ = PendingModelAction::None;
+      model_operation_failed_ = false;
       model_update_available_ = false;
       WanxiangUpdateManager::StoreAvailableCount(scheme_update_available_ ? 1u
                                                                           : 0u);
@@ -2120,7 +2094,7 @@ void SwitcherSettingsDialog::FinishApply() {
     update_frequency_modified_ = false;
   }
   SetApplyingUi(false);
-  ::EnableWindow(GetDlgItem(IDOK), success ? FALSE : TRUE);
+  UpdateApplyButton();
   if (close_after_apply_) {
     KillTimer(kModelTimer);
     EndDialog(IDCANCEL);
