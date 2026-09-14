@@ -15,12 +15,16 @@ void LayoutAppearancePage(HWND dialog) {
               settings_navigation::kBottomActionTopDlu,
               settings_navigation::kActionButtonWidthDlu,
               settings_navigation::kButtonHeightDlu);
-  MoveControl(dialog, IDC_ACRYLIC_ENABLED, 28, 25, 132, 12);
-  MoveControl(dialog, IDC_EDIT_GROUP, 28, 47, 84,
+  MoveControl(dialog, IDC_ACRYLIC_ENABLED, 28, 25, 108, 12);
+  MoveControl(dialog, IDC_EDIT_GROUP, 28, 47,
+              settings_navigation::kSecondaryButtonWidthDlu,
               settings_navigation::kButtonHeightDlu);
-  MoveControl(dialog, IDC_EDIT_SINGLE, 116, 47, 84,
+  MoveControl(dialog, IDC_EDIT_SINGLE,
+              28 + settings_navigation::kSecondaryButtonWidthDlu +
+                  settings_navigation::kToggleGapDlu,
+              47, settings_navigation::kSecondaryButtonWidthDlu,
               settings_navigation::kButtonHeightDlu);
-  MoveControl(dialog, IDC_COLOR_FAMILY, 28, 72, 234, 120);
+  MoveControl(dialog, IDC_COLOR_FAMILY, 28, 82, 234, 120);
   MoveControl(dialog, IDC_LIGHT_LABEL, 28, 70, 234, 11);
   MoveControl(dialog, IDC_DARK_LABEL, 278, 70, 234, 11);
   MoveControl(dialog, IDC_COLOR_LIGHT, 28, 82, 234, 120);
@@ -28,8 +32,8 @@ void LayoutAppearancePage(HWND dialog) {
   MoveControl(dialog, IDC_SELECTION_HINT, 28, 233, 484, 11);
   MoveControl(dialog, IDC_APPEARANCE_LIGHT_PREVIEW_LABEL, 28, 111, 234, 11);
   MoveControl(dialog, IDC_APPEARANCE_DARK_PREVIEW_LABEL, 278, 111, 234, 11);
-  MoveControl(dialog, IDC_PREVIEW_LIGHT, 28, 124, 234, 96);
-  MoveControl(dialog, IDC_PREVIEW_DARK, 278, 124, 234, 96);
+  MoveControl(dialog, IDC_PREVIEW_LIGHT, 28, 124, 234, 106);
+  MoveControl(dialog, IDC_PREVIEW_DARK, 278, 124, 234, 106);
 }
 }  // namespace
 
@@ -83,6 +87,7 @@ LRESULT UIStyleSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
                         .c_str());
   settings_navigation::StyleCard(m_hWnd, IDC_APPEARANCE_CARD);
   settings_navigation::StyleActionButton(m_hWnd, IDC_RESTORE_APPEARANCE);
+  settings_navigation::StyleCheckbox(m_hWnd, IDC_ACRYLIC_ENABLED);
   settings_navigation::StyleToggle(m_hWnd, IDC_EDIT_GROUP);
   settings_navigation::StyleToggle(m_hWnd, IDC_EDIT_SINGLE);
   for (UINT id : {IDC_COLOR_FAMILY, IDC_COLOR_LIGHT, IDC_COLOR_DARK})
@@ -219,11 +224,40 @@ void UIStyleSettingsDialog::ShowEditor(bool single) {
   single_[draft_.acrylic() ? 0 : 1] = single;
   CheckDlgButton(IDC_EDIT_GROUP, single ? BST_UNCHECKED : BST_CHECKED);
   CheckDlgButton(IDC_EDIT_SINGLE, single ? BST_CHECKED : BST_UNCHECKED);
-  ::ShowWindow(GetDlgItem(IDC_COLOR_FAMILY), single ? SW_HIDE : SW_SHOW);
-  for (int id :
-       {IDC_COLOR_LIGHT, IDC_COLOR_DARK, IDC_LIGHT_LABEL, IDC_DARK_LABEL})
-    ::ShowWindow(GetDlgItem(id), single ? SW_SHOW : SW_HIDE);
+  ::SetDlgItemTextW(
+      m_hWnd, IDC_LIGHT_LABEL,
+      settings_navigation::LocalText(single ? L"浅色方案" : L"配色方案",
+                                     single ? L"淺色方案" : L"配色方案",
+                                     single ? L"Light scheme" : L"Scheme")
+          .c_str());
+  ::SetDlgItemTextW(
+      m_hWnd, IDC_DARK_LABEL,
+      settings_navigation::LocalText(L"深色方案", L"深色方案", L"Dark scheme")
+          .c_str());
+  HWND family = GetDlgItem(IDC_COLOR_FAMILY);
+  HWND light = GetDlgItem(IDC_COLOR_LIGHT);
+  HWND dark = GetDlgItem(IDC_COLOR_DARK);
+  for (HWND combo : {family, light, dark})
+    ::ShowWindow(combo, SW_HIDE);
+  ::ShowWindow(single ? light : family, SW_SHOW);
+  if (single)
+    ::ShowWindow(dark, SW_SHOW);
+  ::ShowWindow(GetDlgItem(IDC_LIGHT_LABEL), SW_SHOW);
+  ::ShowWindow(GetDlgItem(IDC_DARK_LABEL), single ? SW_SHOW : SW_HIDE);
   RefreshPreview();
+  HWND card = GetDlgItem(IDC_APPEARANCE_CARD);
+  if (card) {
+    ::SetWindowPos(card, HWND_BOTTOM, 0, 0, 0, 0,
+                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    ::RedrawWindow(card, nullptr, nullptr,
+                   RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
+  }
+  for (HWND control : {GetDlgItem(IDC_LIGHT_LABEL), GetDlgItem(IDC_DARK_LABEL),
+                       family, light, dark}) {
+    if (::IsWindowVisible(control))
+      ::RedrawWindow(control, nullptr, nullptr,
+                     RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
+  }
 }
 void UIStyleSettingsDialog::RefreshPreview() {
   bool mismatch = false;
@@ -248,6 +282,8 @@ void UIStyleSettingsDialog::RefreshPreview() {
                                            L"Changes ready to apply")
           : settings_navigation::LocalText(L"所有设置已应用", L"所有設定已套用",
                                            L"All settings applied"));
+  if (ready_)
+    PreparePreviews();
   ::InvalidateRect(GetDlgItem(IDC_PREVIEW_LIGHT), nullptr, FALSE);
   ::InvalidateRect(GetDlgItem(IDC_PREVIEW_DARK), nullptr, FALSE);
 }
@@ -255,6 +291,7 @@ void UIStyleSettingsDialog::RefreshPreview() {
 LRESULT UIStyleSettingsDialog::OnMaterial(WORD, WORD, HWND, BOOL&) {
   if (ready_) {
     draft_.SetAcrylic(IsDlgButtonChecked(IDC_ACRYLIC_ENABLED) == BST_CHECKED);
+    InvalidatePreviewCache();
     RefreshMode();
   }
   return 0;
@@ -273,6 +310,7 @@ LRESULT UIStyleSettingsDialog::OnGroup(WORD, WORD, HWND, BOOL&) {
   }
   const auto& group = settings_->groups()[index];
   draft_.SelectPair(group.light, group.dark);
+  InvalidatePreviewCache();
   FillGroups();
   FillSingles();
   RefreshPreview();
@@ -295,6 +333,7 @@ LRESULT UIStyleSettingsDialog::OnSingle(WORD notification,
     return 0;
   draft_.SelectSingle(id == IDC_COLOR_DARK,
                       settings_->schemes()[index].color_scheme_id);
+  InvalidatePreviewCache();
   FillGroups();
   FillSingles();
   RefreshPreview();
@@ -308,6 +347,7 @@ LRESULT UIStyleSettingsDialog::OnEditor(WORD, WORD id, HWND, BOOL&) {
 
 LRESULT UIStyleSettingsDialog::OnReset(WORD, WORD, HWND, BOOL&) {
   draft_.ResetCurrent();
+  InvalidatePreviewCache();
   RefreshMode();
   return 0;
 }
@@ -353,6 +393,11 @@ LRESULT UIStyleSettingsDialog::OnNavigate(WORD, WORD id, HWND, BOOL&) {
 }
 
 LRESULT UIStyleSettingsDialog::OnDestroy(UINT, WPARAM, LPARAM, BOOL& handled) {
+  for (HBITMAP& bitmap : preview_bitmaps_) {
+    if (bitmap)
+      ::DeleteObject(bitmap);
+    bitmap = nullptr;
+  }
   if (graphics_token_)
     Gdiplus::GdiplusShutdown(graphics_token_);
   graphics_token_ = 0;
@@ -400,6 +445,7 @@ LRESULT UIStyleSettingsDialog::OnSave(WORD, WORD id, HWND, BOOL&) {
     }
   }
   draft_.Load(applied, weasel::UserSettings::Load().acrylic);
+  InvalidatePreviewCache();
   RefreshMode();
   if (id == IDOK)
     EndDialog(IDOK);
@@ -497,28 +543,13 @@ void UIStyleSettingsDialog::DrawCombo(const DRAWITEMSTRUCT& draw) {
   ::RestoreDC(draw.hDC, saved);
 }
 
-LRESULT UIStyleSettingsDialog::OnDrawItem(UINT,
-                                          WPARAM,
-                                          LPARAM param,
-                                          BOOL& handled) {
-  const auto draw = reinterpret_cast<DRAWITEMSTRUCT*>(param);
-  if (draw->CtlID == IDC_APPEARANCE_CARD) {
-    settings_navigation::DrawCard(*draw);
-    return TRUE;
-  }
-  if (draw->CtlID == IDC_COLOR_FAMILY || draw->CtlID == IDC_COLOR_LIGHT ||
-      draw->CtlID == IDC_COLOR_DARK) {
-    DrawCombo(*draw);
-    return TRUE;
-  }
-  if (draw->CtlID != IDC_PREVIEW_LIGHT && draw->CtlID != IDC_PREVIEW_DARK) {
-    handled = FALSE;
-    return 0;
-  }
-  if (!graphics_token_)
-    return TRUE;
+void UIStyleSettingsDialog::InvalidatePreviewCache() {
+  preview_dirty_.fill(true);
+}
+
+weasel::AppearancePreview UIStyleSettingsDialog::PreviewStyle(bool dark) {
   weasel::AppearancePreview preview{};
-  preview.dark = draw->CtlID == IDC_PREVIEW_DARK;
+  preview.dark = dark;
   preview.acrylic = draft_.acrylic();
   preview.horizontal = settings_->PreviewStyleBool("horizontal", false);
   auto scheme = draft_.current(preview.dark);
@@ -529,8 +560,9 @@ LRESULT UIStyleSettingsDialog::OnDrawItem(UINT,
     if (scheme.empty() && preview.acrylic)
       scheme = actual[preview.dark ? 3 : 2];
   }
-  const auto color = [&](const char* key, COLORREF light, COLORREF dark) {
-    return settings_->PreviewColor(scheme, key, preview.dark ? dark : light);
+  const auto color = [&](const char* key, COLORREF light, COLORREF dark_color) {
+    return settings_->PreviewColor(scheme, key,
+                                   preview.dark ? dark_color : light);
   };
   preview.background = color("back_color", RGB(249, 249, 249), RGB(44, 44, 44));
   preview.border = color("border_color", RGB(213, 213, 213), RGB(80, 80, 80));
@@ -570,6 +602,84 @@ LRESULT UIStyleSettingsDialog::OnDrawItem(UINT,
   preview.candidates = {static_cast<LPCWSTR>(Text(IDS_APPEARANCE_SAMPLE)),
                         static_cast<LPCWSTR>(Text(IDS_APPEARANCE_SAMPLE_2)),
                         static_cast<LPCWSTR>(Text(IDS_APPEARANCE_SAMPLE_3))};
-  weasel::DrawAppearancePreview(draw->hDC, draw->rcItem, GetFont(), preview);
+  return preview;
+}
+
+void UIStyleSettingsDialog::PreparePreview(size_t index) {
+  if (!graphics_token_ || index >= preview_bitmaps_.size())
+    return;
+  HWND control = GetDlgItem(index ? IDC_PREVIEW_DARK : IDC_PREVIEW_LIGHT);
+  RECT bounds{};
+  if (!control || !::GetClientRect(control, &bounds))
+    return;
+  const int width = bounds.right - bounds.left;
+  const int height = bounds.bottom - bounds.top;
+  if (width <= 0 || height <= 0)
+    return;
+  if (!preview_dirty_[index] && preview_bitmaps_[index] &&
+      preview_sizes_[index].cx == width && preview_sizes_[index].cy == height)
+    return;
+
+  HDC target = ::GetDC(control);
+  HDC buffer = target ? ::CreateCompatibleDC(target) : nullptr;
+  HBITMAP bitmap =
+      buffer ? ::CreateCompatibleBitmap(target, width, height) : nullptr;
+  if (buffer && bitmap) {
+    const HGDIOBJ previous = ::SelectObject(buffer, bitmap);
+    const RECT preview_bounds{0, 0, width, height};
+    weasel::DrawAppearancePreview(buffer, preview_bounds, GetFont(),
+                                  PreviewStyle(index != 0));
+    ::SelectObject(buffer, previous);
+    if (preview_bitmaps_[index])
+      ::DeleteObject(preview_bitmaps_[index]);
+    preview_bitmaps_[index] = bitmap;
+    preview_sizes_[index] = {width, height};
+    preview_dirty_[index] = false;
+    bitmap = nullptr;
+  }
+  if (bitmap)
+    ::DeleteObject(bitmap);
+  if (buffer)
+    ::DeleteDC(buffer);
+  if (target)
+    ::ReleaseDC(control, target);
+}
+
+void UIStyleSettingsDialog::PreparePreviews() {
+  PreparePreview(0);
+  PreparePreview(1);
+}
+
+LRESULT UIStyleSettingsDialog::OnDrawItem(UINT,
+                                          WPARAM,
+                                          LPARAM param,
+                                          BOOL& handled) {
+  const auto draw = reinterpret_cast<DRAWITEMSTRUCT*>(param);
+  if (draw->CtlID == IDC_APPEARANCE_CARD) {
+    settings_navigation::DrawCard(*draw);
+    return TRUE;
+  }
+  if (draw->CtlID == IDC_COLOR_FAMILY || draw->CtlID == IDC_COLOR_LIGHT ||
+      draw->CtlID == IDC_COLOR_DARK) {
+    DrawCombo(*draw);
+    return TRUE;
+  }
+  if (draw->CtlID != IDC_PREVIEW_LIGHT && draw->CtlID != IDC_PREVIEW_DARK) {
+    handled = FALSE;
+    return 0;
+  }
+  const size_t index = draw->CtlID == IDC_PREVIEW_DARK ? 1 : 0;
+  PreparePreview(index);
+  if (!preview_bitmaps_[index])
+    return TRUE;
+  HDC buffer = ::CreateCompatibleDC(draw->hDC);
+  if (buffer) {
+    const HGDIOBJ previous = ::SelectObject(buffer, preview_bitmaps_[index]);
+    ::BitBlt(draw->hDC, draw->rcItem.left, draw->rcItem.top,
+             draw->rcItem.right - draw->rcItem.left,
+             draw->rcItem.bottom - draw->rcItem.top, buffer, 0, 0, SRCCOPY);
+    ::SelectObject(buffer, previous);
+    ::DeleteDC(buffer);
+  }
   return TRUE;
 }

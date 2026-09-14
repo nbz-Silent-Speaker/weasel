@@ -4,6 +4,10 @@
 #include "UIStyleSettings.h"
 #include <WeaselAppearanceDraft.h>
 
+namespace weasel {
+struct AppearancePreview;
+}
+
 class UIStyleSettingsDialog : public CDialogImpl<UIStyleSettingsDialog> {
  public:
   enum { IDD = IDD_STYLE_SETTING };
@@ -60,6 +64,10 @@ class UIStyleSettingsDialog : public CDialogImpl<UIStyleSettingsDialog> {
   void FillSingles();
   void RefreshMode();
   void RefreshPreview();
+  void InvalidatePreviewCache();
+  void PreparePreviews();
+  void PreparePreview(size_t index);
+  weasel::AppearancePreview PreviewStyle(bool dark);
   bool ConfirmDiscard() const;
   void ShowEditor(bool single);
   void DrawCombo(const DRAWITEMSTRUCT& draw);
@@ -70,6 +78,9 @@ class UIStyleSettingsDialog : public CDialogImpl<UIStyleSettingsDialog> {
   std::array<std::vector<PaletteEntry>, 2> singles_;
   std::array<bool, 2> single_{};
   ULONG_PTR graphics_token_ = 0;
+  std::array<HBITMAP, 2> preview_bitmaps_{};
+  std::array<SIZE, 2> preview_sizes_{};
+  std::array<bool, 2> preview_dirty_{true, true};
   int item_height_ = 24;
   bool saved_ = false;
   bool deployed_ = false;

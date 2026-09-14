@@ -32,6 +32,7 @@ inline constexpr int kFirstCardTopDlu = 14;
 inline constexpr int kActionButtonWidthDlu = 80;
 inline constexpr int kSecondaryButtonWidthDlu = 68;
 inline constexpr int kTransientButtonWidthDlu = 60;
+inline constexpr int kToggleGapDlu = 2;
 inline constexpr int kButtonHeightDlu = 18;
 inline constexpr int kComboWidthDlu = 80;
 inline constexpr int kCardRadiusDlu = 8;
@@ -128,6 +129,10 @@ struct NavState {
 };
 
 struct ToggleState {
+  bool hover = false;
+};
+
+struct CheckboxState {
   bool hover = false;
 };
 
@@ -295,6 +300,100 @@ inline LRESULT CALLBACK ToggleProc(HWND window,
   return ::DefSubclassProc(window, message, wparam, lparam);
 }
 
+inline LRESULT CALLBACK CheckboxProc(HWND window,
+                                     UINT message,
+                                     WPARAM wparam,
+                                     LPARAM lparam,
+                                     UINT_PTR,
+                                     DWORD_PTR data) {
+  auto* state = reinterpret_cast<CheckboxState*>(data);
+  if (message == WM_MOUSEMOVE && !state->hover) {
+    state->hover = true;
+    TRACKMOUSEEVENT tracking{sizeof(tracking), TME_LEAVE, window, 0};
+    ::TrackMouseEvent(&tracking);
+    ::InvalidateRect(window, nullptr, FALSE);
+  } else if (message == WM_MOUSELEAVE) {
+    state->hover = false;
+    ::InvalidateRect(window, nullptr, FALSE);
+  } else if (message == WM_ERASEBKGND) {
+    return 1;
+  } else if (message == BM_SETCHECK || message == WM_ENABLE ||
+             message == WM_SETFOCUS || message == WM_KILLFOCUS) {
+    const LRESULT result = ::DefSubclassProc(window, message, wparam, lparam);
+    ::InvalidateRect(window, nullptr, FALSE);
+    return result;
+  } else if (message == WM_PAINT) {
+    PAINTSTRUCT paint{};
+    HDC dc = ::BeginPaint(window, &paint);
+    RECT bounds{};
+    ::GetClientRect(window, &bounds);
+    const bool enabled = ::IsWindowEnabled(window) != FALSE;
+    const bool checked =
+        ::SendMessageW(window, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    const COLORREF surface = ::GetSysColor(COLOR_WINDOW);
+    const COLORREF accent = ::GetSysColor(COLOR_HIGHLIGHT);
+    ::FillRect(dc, &bounds, ::GetSysColorBrush(COLOR_WINDOW));
+
+    const int scale = ::GetDeviceCaps(dc, LOGPIXELSX);
+    const int measured_size = ::MulDiv(14, scale, 96);
+    const int box_size = (std::min)(bounds.bottom - bounds.top - 2,
+                                    (std::max)(measured_size, 12));
+    const int box_top = (bounds.bottom - bounds.top - box_size) / 2;
+    RECT box{bounds.left, box_top, bounds.left + box_size, box_top + box_size};
+    const COLORREF fill = !enabled       ? ::GetSysColor(COLOR_BTNFACE)
+                          : checked      ? accent
+                          : state->hover ? Mix(accent, surface, 18)
+                                         : surface;
+    const COLORREF border =
+        checked ? accent : Mix(::GetSysColor(COLOR_3DSHADOW), surface, 96);
+    HBRUSH brush = ::CreateSolidBrush(fill);
+    HPEN pen = ::CreatePen(PS_SOLID, 1, border);
+    const HGDIOBJ previous_brush = ::SelectObject(dc, brush);
+    const HGDIOBJ previous_pen = ::SelectObject(dc, pen);
+    const int radius = (std::max)(2, ::MulDiv(3, scale, 96));
+    ::RoundRect(dc, box.left, box.top, box.right, box.bottom, radius, radius);
+    ::SelectObject(dc, previous_pen);
+    ::SelectObject(dc, previous_brush);
+    ::DeleteObject(pen);
+    ::DeleteObject(brush);
+
+    if (checked) {
+      HPEN check_pen =
+          ::CreatePen(PS_SOLID, (std::max)(2, ::MulDiv(2, scale, 96)),
+                      ::GetSysColor(COLOR_HIGHLIGHTTEXT));
+      const HGDIOBJ previous = ::SelectObject(dc, check_pen);
+      ::MoveToEx(dc, box.left + box_size * 2 / 9, box.top + box_size / 2,
+                 nullptr);
+      ::LineTo(dc, box.left + box_size * 4 / 9, box.top + box_size * 7 / 10);
+      ::LineTo(dc, box.left + box_size * 8 / 10, box.top + box_size * 3 / 10);
+      ::SelectObject(dc, previous);
+      ::DeleteObject(check_pen);
+    }
+
+    wchar_t label[128]{};
+    ::GetWindowTextW(window, label, static_cast<int>(_countof(label)));
+    HFONT font =
+        reinterpret_cast<HFONT>(::SendMessageW(window, WM_GETFONT, 0, 0));
+    const HGDIOBJ previous_font = font ? ::SelectObject(dc, font) : nullptr;
+    ::SetBkMode(dc, TRANSPARENT);
+    ::SetTextColor(dc, enabled ? ::GetSysColor(COLOR_WINDOWTEXT)
+                               : ::GetSysColor(COLOR_GRAYTEXT));
+    RECT text_bounds = bounds;
+    text_bounds.left = box.right + ::MulDiv(6, scale, 96);
+    ::DrawTextW(
+        dc, label, -1, &text_bounds,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    if (previous_font)
+      ::SelectObject(dc, previous_font);
+    ::EndPaint(window, &paint);
+    return 0;
+  } else if (message == WM_NCDESTROY) {
+    ::RemoveWindowSubclass(window, CheckboxProc, 3);
+    delete state;
+  }
+  return ::DefSubclassProc(window, message, wparam, lparam);
+}
+
 inline HWND Create(HWND dialog,
                    const wchar_t* class_name,
                    const std::wstring& text,
@@ -357,6 +456,19 @@ inline void StyleToggle(HWND dialog, WORD id) {
       delete state;
   }
   RoundDlu(dialog, id, kControlRadiusDlu);
+}
+
+inline void StyleCheckbox(HWND dialog, WORD id) {
+  HWND control = ::GetDlgItem(dialog, id);
+  if (!control)
+    return;
+  DWORD_PTR existing = 0;
+  if (!::GetWindowSubclass(control, CheckboxProc, 3, &existing)) {
+    auto* state = new CheckboxState;
+    if (!::SetWindowSubclass(control, CheckboxProc, 3,
+                             reinterpret_cast<DWORD_PTR>(state)))
+      delete state;
+  }
 }
 
 inline void StyleCombo(HWND dialog, WORD id) {
