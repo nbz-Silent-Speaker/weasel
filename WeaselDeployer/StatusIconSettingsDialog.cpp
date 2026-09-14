@@ -4,6 +4,7 @@
 #include <WeaselUtility.h>
 
 #include <algorithm>
+#include <cwchar>
 #include <cwctype>
 #include <filesystem>
 #include <gdiplus.h>
@@ -77,7 +78,7 @@ HICON AddBadge(HICON base, weasel::StatusIconCapsBadge badge) {
   Gdiplus::SolidBrush fill(Gdiplus::Color(255, 213, 67, 62));
   Gdiplus::Pen outline(Gdiplus::Color(235, 255, 255, 255), 2.0f);
   if (badge == weasel::StatusIconCapsBadge::Dot) {
-    const Gdiplus::RectF dot(21.0f, 2.0f, 9.0f, 9.0f);
+    const Gdiplus::RectF dot(20.0f, 4.0f, 8.0f, 8.0f);
     graphics.FillEllipse(&fill, dot);
     graphics.DrawEllipse(&outline, dot);
   } else {
@@ -105,6 +106,80 @@ bool IsSupportedIcon(const std::filesystem::path& path) {
                  });
   return extension == L".png" || extension == L".ico";
 }
+
+void AddRoundedRectangle(Gdiplus::GraphicsPath* path,
+                         const Gdiplus::Rect& rectangle,
+                         int radius) {
+  const int diameter = radius * 2;
+  path->AddArc(rectangle.X, rectangle.Y, diameter, diameter, 180, 90);
+  path->AddArc(rectangle.GetRight() - diameter, rectangle.Y, diameter, diameter,
+               270, 90);
+  path->AddArc(rectangle.GetRight() - diameter,
+               rectangle.GetBottom() - diameter, diameter, diameter, 0, 90);
+  path->AddArc(rectangle.X, rectangle.GetBottom() - diameter, diameter,
+               diameter, 90, 90);
+  path->CloseFigure();
+}
+
+void LayoutStatusIconPage(HWND dialog) {
+  using settings_navigation::MoveControl;
+  MoveControl(dialog, IDC_STATUS_RESTORE,
+              settings_navigation::kTopActionLeftDlu,
+              settings_navigation::kTopActionTopDlu,
+              settings_navigation::kActionButtonWidthDlu,
+              settings_navigation::kButtonHeightDlu);
+  MoveControl(dialog, IDC_STATUS_BASE_CARD, settings_navigation::kPageInsetDlu,
+              settings_navigation::kFirstCardTopDlu,
+              settings_navigation::kPageBodyWidthDlu, 62);
+  MoveControl(dialog, IDC_STATUS_BASE_TITLE, 26, 42, 210, 12);
+  MoveControl(dialog, IDC_STATUS_CHINESE_LABEL, 28, 59, 120, 12);
+  MoveControl(dialog, IDC_STATUS_CHINESE_ICON, 396, 54, 20, 20);
+  MoveControl(dialog, IDC_STATUS_CHINESE_CHANGE, 432, 55,
+              settings_navigation::kActionButtonWidthDlu,
+              settings_navigation::kButtonHeightDlu);
+  MoveControl(dialog, IDC_STATUS_ENGLISH_LABEL, 28, 78, 120, 12);
+  MoveControl(dialog, IDC_STATUS_ENGLISH_ICON, 396, 73, 20, 20);
+  MoveControl(dialog, IDC_STATUS_ENGLISH_CHANGE, 432, 74,
+              settings_navigation::kActionButtonWidthDlu,
+              settings_navigation::kButtonHeightDlu);
+
+  MoveControl(dialog, IDC_STATUS_CAPS_CARD, settings_navigation::kPageInsetDlu,
+              104, settings_navigation::kPageBodyWidthDlu, 76);
+  MoveControl(dialog, IDC_STATUS_CAPS_TITLE, 26, 112, 160, 12);
+  MoveControl(dialog, IDC_STATUS_CAPS_AUTOMATIC, 286, 109, 108,
+              settings_navigation::kButtonHeightDlu);
+  MoveControl(dialog, IDC_STATUS_CAPS_CUSTOM, 398, 109, 114,
+              settings_navigation::kButtonHeightDlu);
+  MoveControl(dialog, IDC_STATUS_BADGE_LETTER, 28, 133, 112, 16);
+  MoveControl(dialog, IDC_STATUS_BADGE_DOT, 28, 155, 112, 16);
+  MoveControl(dialog, IDC_STATUS_AUTO_CHINESE_ICON, 396, 130, 20, 20);
+  MoveControl(dialog, IDC_STATUS_AUTO_CHINESE_LABEL, 424, 134, 88, 12);
+  MoveControl(dialog, IDC_STATUS_AUTO_ENGLISH_ICON, 396, 152, 20, 20);
+  MoveControl(dialog, IDC_STATUS_AUTO_ENGLISH_LABEL, 424, 156, 88, 12);
+  MoveControl(dialog, IDC_STATUS_CHINESE_CAPS_LABEL, 28, 134, 160, 12);
+  MoveControl(dialog, IDC_STATUS_CHINESE_CAPS_ICON, 396, 129, 20, 20);
+  MoveControl(dialog, IDC_STATUS_CHINESE_CAPS_CHANGE, 432, 130,
+              settings_navigation::kActionButtonWidthDlu,
+              settings_navigation::kButtonHeightDlu);
+  MoveControl(dialog, IDC_STATUS_ENGLISH_CAPS_LABEL, 28, 156, 160, 12);
+  MoveControl(dialog, IDC_STATUS_ENGLISH_CAPS_ICON, 396, 151, 20, 20);
+  MoveControl(dialog, IDC_STATUS_ENGLISH_CAPS_CHANGE, 432, 152,
+              settings_navigation::kActionButtonWidthDlu,
+              settings_navigation::kButtonHeightDlu);
+
+  MoveControl(dialog, IDC_STATUS_TASKBAR_CARD,
+              settings_navigation::kPageInsetDlu, 188,
+              settings_navigation::kPageBodyWidthDlu, 60);
+  MoveControl(dialog, IDC_STATUS_TASKBAR_TITLE, 26, 196, 100, 12);
+  MoveControl(dialog, IDC_STATUS_PREVIEW_CHINESE, 150, 193, 56,
+              settings_navigation::kButtonHeightDlu);
+  MoveControl(dialog, IDC_STATUS_PREVIEW_ENGLISH, 210, 193, 56,
+              settings_navigation::kButtonHeightDlu);
+  MoveControl(dialog, IDC_STATUS_PREVIEW_CHINESE_CAPS, 270, 193, 78,
+              settings_navigation::kButtonHeightDlu);
+  MoveControl(dialog, IDC_STATUS_PREVIEW_ENGLISH_CAPS, 352, 193, 78,
+              settings_navigation::kButtonHeightDlu);
+}
 }  // namespace
 
 std::wstring StatusIconSettingsDialog::LocalText(const wchar_t* simplified,
@@ -115,6 +190,7 @@ std::wstring StatusIconSettingsDialog::LocalText(const wchar_t* simplified,
 }
 
 LRESULT StatusIconSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
+  LayoutStatusIconPage(m_hWnd);
   Gdiplus::GdiplusStartupInput startup;
   if (Gdiplus::GdiplusStartup(&graphics_token_, &startup, nullptr) !=
       Gdiplus::Ok) {
@@ -126,11 +202,7 @@ LRESULT StatusIconSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
 
   LOGFONTW title{};
   ::GetObjectW(GetFont(), sizeof(title), &title);
-  title.lfHeight = title.lfHeight * 4 / 3;
   title.lfWeight = FW_SEMIBOLD;
-  if (title_font_.CreateFontIndirect(&title))
-    CWindow(GetDlgItem(IDC_STATUS_TITLE)).SetFont(title_font_);
-  title.lfHeight = title.lfHeight * 3 / 4;
   if (heading_font_.CreateFontIndirect(&title)) {
     for (UINT id : {IDC_STATUS_BASE_TITLE, IDC_STATUS_CAPS_TITLE,
                     IDC_STATUS_TASKBAR_TITLE}) {
@@ -140,14 +212,18 @@ LRESULT StatusIconSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
 
   Localize();
   for (UINT id :
-       {IDC_STATUS_BASE_CARD, IDC_STATUS_CAPS_CARD, IDC_STATUS_TASKBAR_CARD}) {
-    ApplyRoundedRegion(id, 8);
-  }
+       {IDC_STATUS_BASE_CARD, IDC_STATUS_CAPS_CARD, IDC_STATUS_TASKBAR_CARD})
+    settings_navigation::PrepareCard(m_hWnd, id);
   for (UINT id : {IDC_STATUS_RESTORE, IDC_STATUS_CHINESE_CHANGE,
                   IDC_STATUS_ENGLISH_CHANGE, IDC_STATUS_CHINESE_CAPS_CHANGE,
-                  IDC_STATUS_ENGLISH_CAPS_CHANGE, IDC_STATUS_APPLY, IDCANCEL}) {
-    ApplyRoundedRegion(id, 5);
-  }
+                  IDC_STATUS_ENGLISH_CAPS_CHANGE})
+    settings_navigation::StyleActionButton(m_hWnd, id);
+  for (UINT id :
+       {IDC_STATUS_CAPS_AUTOMATIC, IDC_STATUS_CAPS_CUSTOM,
+        IDC_STATUS_PREVIEW_CHINESE, IDC_STATUS_PREVIEW_ENGLISH,
+        IDC_STATUS_PREVIEW_CHINESE_CAPS, IDC_STATUS_PREVIEW_ENGLISH_CAPS})
+    settings_navigation::StyleToggle(m_hWnd, id);
+  ::ShowWindow(GetDlgItem(IDC_STATUS_TASKBAR_ICON), SW_HIDE);
   CheckRadioButton(IDC_STATUS_CAPS_AUTOMATIC, IDC_STATUS_CAPS_CUSTOM,
                    draft_.caps_mode == weasel::StatusIconCapsMode::Automatic
                        ? IDC_STATUS_CAPS_AUTOMATIC
@@ -165,7 +241,7 @@ LRESULT StatusIconSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
                                {IDC_STATUS_APPLY,
                                 IDCANCEL,
                                 WeaselUserDataPath().wstring(),
-                                {IDC_STATUS_MESSAGE}});
+                                {IDC_STATUS_TITLE, IDC_STATUS_MESSAGE}});
   RefreshApplyState();
   CenterWindow();
   return TRUE;
@@ -182,6 +258,118 @@ LRESULT StatusIconSettingsDialog::OnDestroy(UINT, WPARAM, LPARAM, BOOL&) {
     Gdiplus::GdiplusShutdown(graphics_token_);
   graphics_token_ = 0;
   return 0;
+}
+
+LRESULT StatusIconSettingsDialog::OnDrawItem(UINT,
+                                             WPARAM,
+                                             LPARAM parameter,
+                                             BOOL& handled) {
+  const auto* draw = reinterpret_cast<DRAWITEMSTRUCT*>(parameter);
+  if (draw->CtlID == IDC_STATUS_TASKBAR_CARD) {
+    DrawTaskbarPreview(*draw);
+    return TRUE;
+  }
+  if (draw->CtlID == IDC_STATUS_BASE_CARD ||
+      draw->CtlID == IDC_STATUS_CAPS_CARD) {
+    settings_navigation::DrawCard(*draw);
+    return TRUE;
+  }
+  handled = FALSE;
+  return 0;
+}
+
+LRESULT StatusIconSettingsDialog::OnStaticColor(UINT,
+                                                WPARAM dc,
+                                                LPARAM window,
+                                                BOOL& handled) {
+  const int id = ::GetDlgCtrlID(reinterpret_cast<HWND>(window));
+  if (id < IDC_STATUS_BASE_TITLE || id > IDC_STATUS_TASKBAR_TITLE) {
+    handled = FALSE;
+    return 0;
+  }
+  const auto context = reinterpret_cast<HDC>(dc);
+  ::SetBkMode(context, TRANSPARENT);
+  return reinterpret_cast<LRESULT>(::GetSysColorBrush(COLOR_WINDOW));
+}
+
+LRESULT StatusIconSettingsDialog::OnButtonColor(UINT,
+                                                WPARAM dc,
+                                                LPARAM window,
+                                                BOOL& handled) {
+  const int id = ::GetDlgCtrlID(reinterpret_cast<HWND>(window));
+  if (id < IDC_STATUS_CHINESE_CHANGE || id > IDC_STATUS_PREVIEW_ENGLISH_CAPS) {
+    handled = FALSE;
+    return 0;
+  }
+  const auto context = reinterpret_cast<HDC>(dc);
+  ::SetBkColor(context, ::GetSysColor(COLOR_WINDOW));
+  return reinterpret_cast<LRESULT>(::GetSysColorBrush(COLOR_WINDOW));
+}
+
+void StatusIconSettingsDialog::DrawTaskbarPreview(const DRAWITEMSTRUCT& draw) {
+  settings_navigation::DrawCard(draw);
+  const int width = draw.rcItem.right - draw.rcItem.left;
+  const int height = draw.rcItem.bottom - draw.rcItem.top;
+  const RECT units = settings_navigation::MapDialogUnits(m_hWnd, 0, 0, 10, 26);
+  const int padding = units.right;
+  const int top = units.bottom;
+  if (width <= padding * 2 || height <= top + padding / 2)
+    return;
+
+  using namespace Gdiplus;
+  Graphics canvas(draw.hDC);
+  canvas.SetSmoothingMode(SmoothingModeAntiAlias);
+  const Rect scene(draw.rcItem.left + padding, draw.rcItem.top + top,
+                   width - padding * 2, height - top - padding / 2);
+  GraphicsPath scene_path;
+  AddRoundedRectangle(&scene_path, scene, (std::max)(4, scene.Height / 8));
+  canvas.SetClip(&scene_path);
+  LinearGradientBrush desktop(scene, Color(255, 53, 113, 142),
+                              Color(255, 112, 78, 126), 28.0f);
+  canvas.FillRectangle(&desktop, scene);
+  const int taskbar_height = (std::max)(18, scene.Height * 2 / 5);
+  const Rect taskbar(scene.X, scene.GetBottom() - taskbar_height, scene.Width,
+                     taskbar_height);
+  SolidBrush taskbar_fill(Color(224, 28, 30, 34));
+  canvas.FillRectangle(&taskbar_fill, taskbar);
+
+  const int icon_size = (std::min)(16, taskbar_height - 4);
+  int right = taskbar.GetRight() - 8;
+  FontFamily family(L"Segoe UI");
+  Font time_font(&family, 8.0f, FontStyleRegular, UnitPixel);
+  SolidBrush foreground(Color(255, 245, 245, 245));
+  StringFormat format;
+  format.SetAlignment(StringAlignmentFar);
+  format.SetLineAlignment(StringAlignmentCenter);
+  SYSTEMTIME now{};
+  ::GetLocalTime(&now);
+  wchar_t clock_text[32]{};
+  swprintf_s(clock_text, L"%02d:%02d  %04d/%02d/%02d", now.wHour, now.wMinute,
+             now.wYear, now.wMonth, now.wDay);
+  const RectF clock(static_cast<REAL>(right - 66), static_cast<REAL>(taskbar.Y),
+                    64.0f, static_cast<REAL>(taskbar.Height));
+  canvas.DrawString(clock_text, -1, &time_font, clock, &format, &foreground);
+  right -= 76;
+
+  Pen glyph(Color(255, 238, 238, 238), 1.2f);
+  const int center_y = taskbar.Y + taskbar.Height / 2;
+  canvas.DrawEllipse(&glyph, right - 12, center_y - 5, 9, 9);
+  canvas.DrawLine(&glyph, right - 8, center_y - 8, right - 8, center_y - 6);
+  right -= 22;
+  for (int bar = 0; bar < 3; ++bar) {
+    canvas.DrawLine(&glyph, right - 12 + bar * 4, center_y + 5,
+                    right - 12 + bar * 4, center_y + 2 - bar * 3);
+  }
+  canvas.Flush(FlushIntentionSync);
+  right -= 24;
+  if (preview_icons_[6]) {
+    ::DrawIconEx(draw.hDC, right - icon_size, center_y - icon_size / 2,
+                 preview_icons_[6], icon_size, icon_size, 0, nullptr,
+                 DI_NORMAL);
+  }
+  canvas.ResetClip();
+  Pen scene_border(Color(120, 255, 255, 255), 1.0f);
+  canvas.DrawPath(&scene_border, &scene_path);
 }
 
 void StatusIconSettingsDialog::Localize() {
@@ -339,6 +527,7 @@ void StatusIconSettingsDialog::RefreshPreviews() {
       break;
   }
   SetPreviewIcon(IDC_STATUS_TASKBAR_ICON, taskbar);
+  ::InvalidateRect(GetDlgItem(IDC_STATUS_TASKBAR_CARD), nullptr, FALSE);
 }
 
 void StatusIconSettingsDialog::RefreshApplyState() {
@@ -355,24 +544,6 @@ void StatusIconSettingsDialog::RefreshApplyState() {
                                   L"Changes ready to apply")
                       : LocalText(L"所有设置已应用", L"所有設定已套用",
                                   L"All settings applied"));
-}
-
-void StatusIconSettingsDialog::ApplyRoundedRegion(UINT control,
-                                                  int radius_dlu) {
-  HWND window = GetDlgItem(control);
-  if (!window)
-    return;
-  RECT bounds = {};
-  ::GetClientRect(window, &bounds);
-  RECT radius = {0, 0, radius_dlu, radius_dlu};
-  MapDialogRect(&radius);
-  HRGN region =
-      ::CreateRoundRectRgn(bounds.left, bounds.top, bounds.right + 1,
-                           bounds.bottom + 1, radius.right, radius.bottom);
-  if (!region)
-    return;
-  if (!::SetWindowRgn(window, region, TRUE))
-    ::DeleteObject(region);
 }
 
 bool StatusIconSettingsDialog::ChooseIconFile(std::wstring* path) {

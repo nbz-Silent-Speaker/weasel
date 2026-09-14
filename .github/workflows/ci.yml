@@ -32,6 +32,11 @@ jobs:
         shell: bash
         run: ./clang-format.sh -i
 
+      - name: Verify settings layout contract
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: pwsh
+        run: ./WeaselDeployer/tests/CheckSettingsLayout.ps1
+
   build:
     needs: lint
     runs-on: windows-2022

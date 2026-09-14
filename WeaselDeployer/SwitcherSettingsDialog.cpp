@@ -118,6 +118,37 @@ std::wstring Localize(const wchar_t* simplified,
              : traditional;
 }
 
+void LayoutInputPage(HWND dialog) {
+  using settings_navigation::MoveControl;
+  MoveControl(dialog, IDC_SCHEMA_LIST_LABEL, settings_navigation::kPageInsetDlu,
+              10, 170, 10);
+  MoveControl(dialog, IDC_SCHEMA_DETAIL_LABEL, 196, 10, 330, 10);
+  MoveControl(dialog, IDC_SCHEMA_LIST_PANEL, settings_navigation::kPageInsetDlu,
+              24, 170, 224);
+  MoveControl(dialog, IDC_SCHEMA_DETAIL_GROUP, 196, 24, 330, 224);
+  MoveControl(dialog, IDC_SCHEMA_LIST, 16, 26, 166, 200);
+  MoveControl(dialog, IDC_SCHEMA_DETAIL_NAME, 210, 36, 142, 12);
+  MoveControl(dialog, IDC_SCHEMA_DETAIL_VERSION, 354, 36, 58, 12);
+  MoveControl(dialog, IDC_INPUT_MODE, 432, 32,
+              settings_navigation::kComboWidthDlu,
+              settings_navigation::kButtonHeightDlu);
+  MoveControl(dialog, IDC_SCHEMA_DESCRIPTION, 210, 52, 302, 66);
+  MoveControl(dialog, IDC_MODEL_GROUP, 210, 126, 302, 1);
+  MoveControl(dialog, IDC_MODEL_NAME, 210, 137, 150, 12);
+  MoveControl(dialog, IDC_MODEL_SECONDARY, 348, 134,
+              settings_navigation::kSecondaryButtonWidthDlu,
+              settings_navigation::kButtonHeightDlu);
+  MoveControl(dialog, IDC_MODEL_DOWNLOAD, 432, 134,
+              settings_navigation::kActionButtonWidthDlu,
+              settings_navigation::kButtonHeightDlu);
+  MoveControl(dialog, IDC_MODEL_DESCRIPTION, 210, 157, 302, 10);
+  MoveControl(dialog, IDC_MODEL_SOURCE, 355, 157, 157, 10);
+  MoveControl(dialog, IDC_MODEL_NOTE, 210, 170, 302, 10);
+  MoveControl(dialog, IDC_MODEL_DOWNLOAD_STATUS, 210, 185, 302, 10);
+  MoveControl(dialog, IDC_MODEL_PROGRESS, 210, 202, 124, 6);
+  MoveControl(dialog, IDC_MODEL_PROGRESS_TEXT, 336, 199, 28, 12);
+}
+
 struct UpdateSelection {
   bool model = false;
 };
@@ -1431,13 +1462,9 @@ void SwitcherSettingsDialog::FinishModelDownload() {
 }
 
 LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
+  LayoutInputPage(m_hWnd);
   LOGFONTW base_font = {};
   ::GetObjectW(GetFont(), sizeof(base_font), &base_font);
-  LOGFONTW title = base_font;
-  title.lfHeight = title.lfHeight * 4 / 3;
-  title.lfWeight = FW_SEMIBOLD;
-  if (title_font_.CreateFontIndirect(&title))
-    CWindow(GetDlgItem(IDC_SWITCHER_TITLE)).SetFont(title_font_);
   LOGFONTW heading = base_font;
   heading.lfWeight = FW_SEMIBOLD;
   if (heading_font_.CreateFontIndirect(&heading)) {
@@ -1513,8 +1540,8 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   capture_control_rect(IDC_MODEL_SECONDARY, &model_secondary_rect_);
   capture_control_rect(IDC_MODEL_DOWNLOAD, &model_primary_rect_);
   capture_control_rect(IDC_INPUT_MODE, &input_mode_base_rect_);
-  RECT active_secondary = {392, 206, 448, 224};
-  RECT active_primary = {456, 206, 512, 224};
+  RECT active_secondary = {384, 196, 444, 214};
+  RECT active_primary = {452, 196, 512, 214};
   ::MapDialogRect(m_hWnd, &active_secondary);
   ::MapDialogRect(m_hWnd, &active_primary);
   model_active_secondary_rect_ = active_secondary;
@@ -1570,11 +1597,12 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   UpdateCheckButton();
   SetTimer(kModelTimer, 500);
 
-  settings_navigation::Install(m_hWnd, settings_navigation::Page::Input,
-                               {IDOK,
-                                IDCANCEL,
-                                WeaselUserDataPath().wstring(),
-                                {IDC_USER_DATA_LABEL, IDC_USER_DATA_FOLDER}});
+  settings_navigation::Install(
+      m_hWnd, settings_navigation::Page::Input,
+      {IDOK,
+       IDCANCEL,
+       WeaselUserDataPath().wstring(),
+       {IDC_SWITCHER_TITLE, IDC_USER_DATA_LABEL, IDC_USER_DATA_FOLDER}});
   UpdateApplyButton();
   CenterWindow();
   BringWindowToTop();

@@ -86,6 +86,40 @@ int DrawPreviewText(HDC dc,
   DeleteObject(font);
   return size.cx;
 }
+
+void LayoutFontPage(HWND dialog) {
+  using settings_navigation::MoveControl;
+  MoveControl(dialog, IDC_FONT_RESTORE, settings_navigation::kTopActionLeftDlu,
+              settings_navigation::kTopActionTopDlu,
+              settings_navigation::kActionButtonWidthDlu,
+              settings_navigation::kButtonHeightDlu);
+  MoveControl(dialog, IDC_FONT_EDITOR_CARD, settings_navigation::kPageInsetDlu,
+              settings_navigation::kFirstCardTopDlu,
+              settings_navigation::kPageBodyWidthDlu, 110);
+  MoveControl(dialog, IDC_FONT_ROLE_LABEL, 24, 44, 78, 11);
+  MoveControl(dialog, IDC_FONT_ROLE, 24, 57, 78, 74);
+  MoveControl(dialog, IDC_FONT_LANGUAGE_LABEL, 108, 44, 78, 11);
+  MoveControl(dialog, IDC_FONT_LANGUAGE, 108, 57, 78, 74);
+  MoveControl(dialog, IDC_FONT_FAMILY_LABEL, 192, 44, 180, 11);
+  MoveControl(dialog, IDC_FONT_SEARCH, 192, 56, 180, 15);
+  MoveControl(dialog, IDC_FONT_FAMILY, 192, 74, 180, 57);
+  MoveControl(dialog, IDC_FONT_POINT_LABEL, 378, 44, 52, 11);
+  MoveControl(dialog, IDC_FONT_POINT, 378, 57, 52, 74);
+  MoveControl(dialog, IDC_FONT_SHAPE_LABEL, 436, 44, 76, 11);
+  MoveControl(dialog, IDC_FONT_SHAPE_REGULAR, 436, 57, 76,
+              settings_navigation::kButtonHeightDlu);
+  MoveControl(dialog, IDC_FONT_SHAPE_BOLD, 436, 80, 76,
+              settings_navigation::kButtonHeightDlu);
+  MoveControl(dialog, IDC_FONT_SHAPE_ITALIC, 436, 103, 76,
+              settings_navigation::kButtonHeightDlu);
+  MoveControl(dialog, IDC_FONT_PREVIEW_CARD, settings_navigation::kPageInsetDlu,
+              152, settings_navigation::kPageBodyWidthDlu, 96);
+  MoveControl(dialog, IDC_FONT_PREVIEW_HORIZONTAL, 24, 163, 68,
+              settings_navigation::kButtonHeightDlu);
+  MoveControl(dialog, IDC_FONT_PREVIEW_VERTICAL, 96, 163, 68,
+              settings_navigation::kButtonHeightDlu);
+  MoveControl(dialog, IDC_FONT_PREVIEW, 24, 184, 488, 53);
+}
 }  // namespace
 
 std::wstring FontSettingsDialog::LocalText(const wchar_t* simplified,
@@ -96,28 +130,32 @@ std::wstring FontSettingsDialog::LocalText(const wchar_t* simplified,
 }
 
 LRESULT FontSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
+  LayoutFontPage(m_hWnd);
   initial_ = weasel::FontSettings::Load();
   draft_ = initial_;
 
-  LOGFONTW title = {};
-  ::GetObjectW(GetFont(), sizeof(title), &title);
-  title.lfHeight = title.lfHeight * 4 / 3;
-  title.lfWeight = FW_SEMIBOLD;
-  if (title_font_.CreateFontIndirect(&title))
-    CWindow(GetDlgItem(IDC_FONT_TITLE)).SetFont(title_font_);
-  title.lfHeight = title.lfHeight * 3 / 4;
-  if (heading_font_.CreateFontIndirect(&title)) {
-    CWindow(GetDlgItem(IDC_FONT_EDITOR_TITLE)).SetFont(heading_font_);
-    CWindow(GetDlgItem(IDC_FONT_PREVIEW_TITLE)).SetFont(heading_font_);
+  LOGFONTW heading{};
+  ::GetObjectW(GetFont(), sizeof(heading), &heading);
+  heading.lfWeight = FW_SEMIBOLD;
+  if (heading_font_.CreateFontIndirect(&heading)) {
+    for (UINT id :
+         {IDC_FONT_ROLE_LABEL, IDC_FONT_LANGUAGE_LABEL, IDC_FONT_FAMILY_LABEL,
+          IDC_FONT_POINT_LABEL, IDC_FONT_SHAPE_LABEL})
+      CWindow(GetDlgItem(id)).SetFont(heading_font_);
   }
 
   Localize();
   EnumerateFonts();
   PopulateSelectors();
   for (UINT id : {IDC_FONT_EDITOR_CARD, IDC_FONT_PREVIEW_CARD})
-    ApplyRoundedRegion(id, 8);
-  for (UINT id : {IDC_FONT_RESTORE, IDC_FONT_APPLY, IDCANCEL})
-    ApplyRoundedRegion(id, 5);
+    settings_navigation::PrepareCard(m_hWnd, id);
+  settings_navigation::StyleActionButton(m_hWnd, IDC_FONT_RESTORE);
+  for (UINT id :
+       {IDC_FONT_PREVIEW_HORIZONTAL, IDC_FONT_PREVIEW_VERTICAL,
+        IDC_FONT_SHAPE_REGULAR, IDC_FONT_SHAPE_BOLD, IDC_FONT_SHAPE_ITALIC})
+    settings_navigation::StyleToggle(m_hWnd, id);
+  settings_navigation::RoundDlu(m_hWnd, IDC_FONT_PREVIEW,
+                                settings_navigation::kCardRadiusDlu);
   CheckRadioButton(IDC_FONT_PREVIEW_HORIZONTAL, IDC_FONT_PREVIEW_VERTICAL,
                    IDC_FONT_PREVIEW_HORIZONTAL);
   LoadCurrentChoice();
@@ -126,7 +164,8 @@ LRESULT FontSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
                                {IDC_FONT_APPLY,
                                 IDCANCEL,
                                 WeaselUserDataPath().wstring(),
-                                {IDC_FONT_MESSAGE}});
+                                {IDC_FONT_TITLE, IDC_FONT_EDITOR_TITLE,
+                                 IDC_FONT_PREVIEW_TITLE, IDC_FONT_MESSAGE}});
   RefreshApplyState();
   CenterWindow();
   return TRUE;
@@ -165,6 +204,11 @@ void FontSettingsDialog::Localize() {
 }
 
 void FontSettingsDialog::EnumerateFonts() {
+  static std::vector<std::wstring> cached_fonts;
+  if (!cached_fonts.empty()) {
+    fonts_ = cached_fonts;
+    return;
+  }
   std::set<std::wstring> names;
   HDC dc = ::GetDC(m_hWnd);
   LOGFONTW query = {};
@@ -173,6 +217,7 @@ void FontSettingsDialog::EnumerateFonts() {
                       0);
   ::ReleaseDC(m_hWnd, dc);
   fonts_.assign(names.begin(), names.end());
+  cached_fonts = fonts_;
 }
 
 void FontSettingsDialog::PopulateSelectors() {
@@ -333,28 +378,47 @@ LRESULT FontSettingsDialog::OnPreviewLayoutChanged(WORD, WORD id, HWND, BOOL&) {
 }
 
 void FontSettingsDialog::DrawPreview(const DRAWITEMSTRUCT& draw) {
-  HDC dc = draw.hDC;
-  RECT bounds = draw.rcItem;
+  const int width = draw.rcItem.right - draw.rcItem.left;
+  const int height = draw.rcItem.bottom - draw.rcItem.top;
+  if (width <= 0 || height <= 0)
+    return;
+  HDC buffer = ::CreateCompatibleDC(draw.hDC);
+  HBITMAP bitmap =
+      buffer ? ::CreateCompatibleBitmap(draw.hDC, width, height) : nullptr;
+  const HGDIOBJ previous_bitmap =
+      bitmap ? ::SelectObject(buffer, bitmap) : static_cast<HGDIOBJ>(nullptr);
+  HDC dc = previous_bitmap ? buffer : draw.hDC;
+  RECT bounds = previous_bitmap ? RECT{0, 0, width, height} : draw.rcItem;
   const COLORREF background = GetSysColor(COLOR_WINDOW);
   const COLORREF foreground = GetSysColor(COLOR_WINDOWTEXT);
   const COLORREF secondary = GetSysColor(COLOR_GRAYTEXT);
+  const COLORREF accent = GetSysColor(COLOR_HIGHLIGHT);
+  const COLORREF selected = settings_navigation::Mix(accent, background, 36);
   HBRUSH fill = CreateSolidBrush(background);
   FillRect(dc, &bounds, fill);
   DeleteObject(fill);
-  HPEN border = CreatePen(PS_SOLID, 1, GetSysColor(COLOR_3DLIGHT));
+  HPEN border = CreatePen(
+      PS_SOLID, 1,
+      settings_navigation::Mix(GetSysColor(COLOR_3DSHADOW), background, 72));
   HGDIOBJ old_pen = SelectObject(dc, border);
   HGDIOBJ old_brush = SelectObject(dc, GetStockObject(HOLLOW_BRUSH));
-  RoundRect(dc, bounds.left, bounds.top, bounds.right, bounds.bottom, 12, 12);
+  RoundRect(dc, bounds.left, bounds.top, bounds.right - 1, bounds.bottom - 1,
+            14, 14);
   SelectObject(dc, old_brush);
   SelectObject(dc, old_pen);
   DeleteObject(border);
+
+  HRGN clip = ::CreateRoundRectRgn(bounds.left, bounds.top, bounds.right,
+                                   bounds.bottom, 14, 14);
+  ::SelectClipRgn(dc, clip);
 
   const auto choice = [&](weasel::FontRole role,
                           weasel::FontLanguage language) {
     return draft_.At(role, language);
   };
-  int x = bounds.left + 16;
-  int y = bounds.top + 10;
+  const int padding = (std::max)(8, height / 16);
+  int x = bounds.left + padding;
+  int y = bounds.top + padding / 2;
   DrawPreviewText(
       dc, x, y, L"ni hao",
       choice(weasel::FontRole::Preedit, weasel::FontLanguage::Latin),
@@ -362,20 +426,47 @@ void FontSettingsDialog::DrawPreview(const DRAWITEMSTRUCT& draw) {
   const wchar_t* candidates[] = {L"你好", L"你号", L"hello", L"拟好", L"泥好"};
   const wchar_t* comments[] = {L"", L"常用", L"English", L"", L""};
   if (preview_vertical_) {
-    y += 24;
+    const int row_top = bounds.top + (std::max)(22, height / 5);
+    const int row_height =
+        (std::max)(1, (bounds.bottom - padding - row_top) / 5);
     for (int index = 0; index < 5; ++index) {
-      x = bounds.left + 18;
-      x += DrawPreviewText(
-               dc, x, y, std::to_wstring(index + 1) + L".",
-               choice(weasel::FontRole::Label, weasel::FontLanguage::Latin),
-               secondary) +
-           10;
+      y = row_top + index * row_height;
+      if (index == 0) {
+        RECT highlight{bounds.left + padding / 2, y, bounds.right - padding / 2,
+                       y + row_height};
+        HBRUSH highlight_brush = ::CreateSolidBrush(selected);
+        HPEN highlight_pen = ::CreatePen(PS_NULL, 0, selected);
+        const HGDIOBJ previous_brush = ::SelectObject(dc, highlight_brush);
+        const HGDIOBJ previous_pen = ::SelectObject(dc, highlight_pen);
+        ::RoundRect(dc, highlight.left, highlight.top, highlight.right,
+                    highlight.bottom, 10, 10);
+        ::SelectObject(dc, previous_pen);
+        ::SelectObject(dc, previous_brush);
+        ::DeleteObject(highlight_pen);
+        ::DeleteObject(highlight_brush);
+      }
       const auto language = index == 2 ? weasel::FontLanguage::Latin
                                        : weasel::FontLanguage::Chinese;
-      x += DrawPreviewText(dc, x, y, candidates[index],
-                           choice(weasel::FontRole::Candidate, language),
-                           foreground) +
-           12;
+      const int label_height =
+          MulDiv(static_cast<int>(choice(weasel::FontRole::Label,
+                                         weasel::FontLanguage::Latin)
+                                      .point),
+                 GetDeviceCaps(dc, LOGPIXELSY), 72);
+      const int candidate_height = MulDiv(
+          static_cast<int>(choice(weasel::FontRole::Candidate, language).point),
+          GetDeviceCaps(dc, LOGPIXELSY), 72);
+      x = bounds.left + padding;
+      x += DrawPreviewText(
+               dc, x, y + (std::max)(0, (row_height - label_height) / 2),
+               std::to_wstring(index + 1) + L".",
+               choice(weasel::FontRole::Label, weasel::FontLanguage::Latin),
+               index == 0 ? accent : secondary) +
+           padding / 2;
+      x += DrawPreviewText(
+               dc, x, y + (std::max)(0, (row_height - candidate_height) / 2),
+               candidates[index], choice(weasel::FontRole::Candidate, language),
+               foreground) +
+           padding;
       if (*comments[index]) {
         const auto comment_language = index == 2
                                           ? weasel::FontLanguage::Latin
@@ -384,24 +475,49 @@ void FontSettingsDialog::DrawPreview(const DRAWITEMSTRUCT& draw) {
                         choice(weasel::FontRole::Comment, comment_language),
                         secondary);
       }
-      y += 23;
     }
   } else {
-    y += 34;
+    const int row_top = bounds.top + height / 2;
+    const int row_height = bounds.bottom - padding - row_top;
     for (int index = 0; index < 5; ++index) {
+      if (index == 0) {
+        RECT highlight{x - padding / 2, row_top, x + width / 6,
+                       row_top + row_height};
+        HBRUSH highlight_brush = ::CreateSolidBrush(selected);
+        HPEN highlight_pen = ::CreatePen(PS_NULL, 0, selected);
+        const HGDIOBJ previous_brush = ::SelectObject(dc, highlight_brush);
+        const HGDIOBJ previous_pen = ::SelectObject(dc, highlight_pen);
+        ::RoundRect(dc, highlight.left, highlight.top, highlight.right,
+                    highlight.bottom, 10, 10);
+        ::SelectObject(dc, previous_pen);
+        ::SelectObject(dc, previous_brush);
+        ::DeleteObject(highlight_pen);
+        ::DeleteObject(highlight_brush);
+      }
       x += DrawPreviewText(
-               dc, x, y, std::to_wstring(index + 1) + L".",
+               dc, x, row_top, std::to_wstring(index + 1) + L".",
                choice(weasel::FontRole::Label, weasel::FontLanguage::Latin),
-               secondary) +
+               index == 0 ? accent : secondary) +
            5;
       const auto language = index == 2 ? weasel::FontLanguage::Latin
                                        : weasel::FontLanguage::Chinese;
-      x += DrawPreviewText(dc, x, y, candidates[index],
+      x += DrawPreviewText(dc, x, row_top, candidates[index],
                            choice(weasel::FontRole::Candidate, language),
                            foreground) +
            18;
     }
   }
+  ::SelectClipRgn(dc, nullptr);
+  ::DeleteObject(clip);
+  if (previous_bitmap) {
+    ::BitBlt(draw.hDC, draw.rcItem.left, draw.rcItem.top, width, height, buffer,
+             0, 0, SRCCOPY);
+    ::SelectObject(buffer, previous_bitmap);
+  }
+  if (bitmap)
+    ::DeleteObject(bitmap);
+  if (buffer)
+    ::DeleteDC(buffer);
 }
 
 LRESULT FontSettingsDialog::OnDrawItem(UINT,
@@ -409,12 +525,46 @@ LRESULT FontSettingsDialog::OnDrawItem(UINT,
                                        LPARAM parameter,
                                        BOOL& handled) {
   const auto* draw = reinterpret_cast<DRAWITEMSTRUCT*>(parameter);
+  if (draw->CtlID == IDC_FONT_EDITOR_CARD ||
+      draw->CtlID == IDC_FONT_PREVIEW_CARD) {
+    settings_navigation::DrawCard(*draw);
+    return TRUE;
+  }
   if (draw->CtlID != IDC_FONT_PREVIEW) {
     handled = FALSE;
     return 0;
   }
   DrawPreview(*draw);
   return TRUE;
+}
+
+LRESULT FontSettingsDialog::OnStaticColor(UINT,
+                                          WPARAM dc,
+                                          LPARAM window,
+                                          BOOL& handled) {
+  const int id = ::GetDlgCtrlID(reinterpret_cast<HWND>(window));
+  if (id < IDC_FONT_ROLE_LABEL || id > IDC_FONT_PREVIEW) {
+    handled = FALSE;
+    return 0;
+  }
+  const auto context = reinterpret_cast<HDC>(dc);
+  ::SetBkMode(context, TRANSPARENT);
+  return reinterpret_cast<LRESULT>(::GetSysColorBrush(COLOR_WINDOW));
+}
+
+LRESULT FontSettingsDialog::OnButtonColor(UINT,
+                                          WPARAM dc,
+                                          LPARAM window,
+                                          BOOL& handled) {
+  const int id = ::GetDlgCtrlID(reinterpret_cast<HWND>(window));
+  if ((id < IDC_FONT_SHAPE_REGULAR || id > IDC_FONT_SHAPE_ITALIC) &&
+      (id < IDC_FONT_PREVIEW_HORIZONTAL || id > IDC_FONT_PREVIEW_VERTICAL)) {
+    handled = FALSE;
+    return 0;
+  }
+  const auto context = reinterpret_cast<HDC>(dc);
+  ::SetBkColor(context, ::GetSysColor(COLOR_WINDOW));
+  return reinterpret_cast<LRESULT>(::GetSysColorBrush(COLOR_WINDOW));
 }
 
 LRESULT FontSettingsDialog::OnRestore(WORD, WORD, HWND, BOOL&) {
@@ -476,21 +626,4 @@ LRESULT FontSettingsDialog::OnNavigate(WORD, WORD id, HWND, BOOL&) {
     return 0;
   EndDialog(id);
   return 0;
-}
-
-void FontSettingsDialog::ApplyRoundedRegion(UINT control, int radius_dlu) {
-  HWND window = GetDlgItem(control);
-  if (!window)
-    return;
-  RECT bounds = {};
-  ::GetClientRect(window, &bounds);
-  RECT radius = {0, 0, radius_dlu, radius_dlu};
-  MapDialogRect(&radius);
-  HRGN region =
-      ::CreateRoundRectRgn(bounds.left, bounds.top, bounds.right + 1,
-                           bounds.bottom + 1, radius.right, radius.bottom);
-  if (!region)
-    return;
-  if (!::SetWindowRgn(window, region, TRUE))
-    ::DeleteObject(region);
 }

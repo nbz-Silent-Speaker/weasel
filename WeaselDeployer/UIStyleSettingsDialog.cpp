@@ -7,6 +7,35 @@
 #include <WeaselUserSettings.h>
 #include <algorithm>
 
+namespace {
+void LayoutAppearancePage(HWND dialog) {
+  using settings_navigation::MoveControl;
+  MoveControl(dialog, IDC_RESTORE_APPEARANCE,
+              settings_navigation::kTopActionLeftDlu,
+              settings_navigation::kTopActionTopDlu,
+              settings_navigation::kActionButtonWidthDlu,
+              settings_navigation::kButtonHeightDlu);
+  MoveControl(dialog, IDC_ACRYLIC_ENABLED, 28, 44, 484, 12);
+  MoveControl(dialog, IDC_MATERIAL_HINT, 40, 59, 472, 11);
+  MoveControl(dialog, IDC_EDIT_GROUP, 28, 76, 84,
+              settings_navigation::kButtonHeightDlu);
+  MoveControl(dialog, IDC_EDIT_SINGLE, 116, 76, 84,
+              settings_navigation::kButtonHeightDlu);
+  MoveControl(dialog, IDC_COLOR_FAMILY, 28, 100, 484, 140);
+  MoveControl(dialog, IDC_LIGHT_LABEL, 28, 98, 234, 11);
+  MoveControl(dialog, IDC_DARK_LABEL, 278, 98, 234, 11);
+  MoveControl(dialog, IDC_COLOR_LIGHT, 28, 111, 234, 140);
+  MoveControl(dialog, IDC_COLOR_DARK, 278, 111, 234, 140);
+  MoveControl(dialog, IDC_EDITOR_HINT, 28, 128, 484, 11);
+  MoveControl(dialog, IDC_SELECTION_HINT, 28, 140, 484, 11);
+  MoveControl(dialog, IDC_APPEARANCE_LIGHT_PREVIEW_LABEL, 28, 151, 234, 11);
+  MoveControl(dialog, IDC_APPEARANCE_DARK_PREVIEW_LABEL, 278, 151, 234, 11);
+  MoveControl(dialog, IDC_PREVIEW_LIGHT, 28, 164, 234, 66);
+  MoveControl(dialog, IDC_PREVIEW_DARK, 278, 164, 234, 66);
+  MoveControl(dialog, IDC_PREVIEW_HINT, 28, 233, 484, 12);
+}
+}  // namespace
+
 CString UIStyleSettingsDialog::Text(UINT id) const {
   CString text;
   text.LoadString(id);
@@ -14,6 +43,7 @@ CString UIStyleSettingsDialog::Text(UINT id) const {
 }
 
 LRESULT UIStyleSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
+  LayoutAppearancePage(m_hWnd);
   Gdiplus::GdiplusStartupInput startup;
   if (Gdiplus::GdiplusStartup(&graphics_token_, &startup, nullptr) !=
           Gdiplus::Ok ||
@@ -34,12 +64,31 @@ LRESULT UIStyleSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
                               group.dark == colors[mode * 2 + 1];
                      });
   }
-  LOGFONTW heading{};
-  ::GetObjectW(GetFont(), sizeof(heading), &heading);
-  heading.lfHeight = heading.lfHeight * 4 / 3;
-  heading.lfWeight = FW_SEMIBOLD;
-  if (heading_font_.CreateFontIndirect(&heading))
-    CWindow(GetDlgItem(IDC_APPEARANCE_TITLE)).SetFont(heading_font_);
+  HWND card = settings_navigation::Create(
+      m_hWnd, L"BUTTON", L"", BS_OWNERDRAW, IDC_APPEARANCE_CARD,
+      settings_navigation::MapDialogUnits(
+          m_hWnd, settings_navigation::kPageInsetDlu,
+          settings_navigation::kFirstCardTopDlu, 0, 0)
+          .left,
+      settings_navigation::MapDialogUnits(
+          m_hWnd, 0, settings_navigation::kFirstCardTopDlu, 0, 0)
+          .top,
+      settings_navigation::MapDialogUnits(
+          m_hWnd, 0, 0, settings_navigation::kPageBodyWidthDlu, 0)
+          .right,
+      settings_navigation::MapDialogUnits(m_hWnd, 0, 0, 0, 214).bottom);
+  ::SetWindowPos(card, HWND_BOTTOM, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  ::SetDlgItemTextW(m_hWnd, IDC_RESTORE_APPEARANCE,
+                    settings_navigation::LocalText(L"恢复默认", L"還原預設",
+                                                   L"Restore defaults")
+                        .c_str());
+  settings_navigation::StyleCard(m_hWnd, IDC_APPEARANCE_CARD);
+  settings_navigation::StyleActionButton(m_hWnd, IDC_RESTORE_APPEARANCE);
+  settings_navigation::StyleToggle(m_hWnd, IDC_EDIT_GROUP);
+  settings_navigation::StyleToggle(m_hWnd, IDC_EDIT_SINGLE);
+  for (UINT id : {IDC_COLOR_FAMILY, IDC_COLOR_LIGHT, IDC_COLOR_DARK})
+    settings_navigation::StyleCombo(m_hWnd, id);
   RECT unit{0, 0, 0, 14};
   MapDialogRect(&unit);
   item_height_ = unit.bottom;
@@ -49,7 +98,10 @@ LRESULT UIStyleSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   ready_ = true;
   settings_navigation::Install(
       m_hWnd, settings_navigation::Page::Appearance,
-      {IDC_APPLY, IDCANCEL, WeaselUserDataPath().wstring(), {IDOK}});
+      {IDC_APPLY,
+       IDCANCEL,
+       WeaselUserDataPath().wstring(),
+       {IDOK, IDC_APPEARANCE_TITLE, IDC_SETTINGS_DIVIDER}});
   RefreshPreview();
   CenterWindow();
   return TRUE;
@@ -374,15 +426,36 @@ LRESULT UIStyleSettingsDialog::OnStaticColor(UINT,
                                              LPARAM window,
                                              BOOL& handled) {
   const int id = ::GetDlgCtrlID(reinterpret_cast<HWND>(window));
-  if (id != IDC_MATERIAL_HINT && id != IDC_EDITOR_HINT &&
-      id != IDC_PREVIEW_HINT && id != IDC_SELECTION_HINT) {
+  const bool content = id == IDC_MATERIAL_HINT || id == IDC_EDITOR_HINT ||
+                       id == IDC_PREVIEW_HINT || id == IDC_SELECTION_HINT ||
+                       id == IDC_LIGHT_LABEL || id == IDC_DARK_LABEL ||
+                       id == IDC_APPEARANCE_LIGHT_PREVIEW_LABEL ||
+                       id == IDC_APPEARANCE_DARK_PREVIEW_LABEL;
+  if (!content) {
     handled = FALSE;
     return 0;
   }
   const auto context = reinterpret_cast<HDC>(dc);
-  ::SetTextColor(context, ::GetSysColor(COLOR_GRAYTEXT));
-  ::SetBkColor(context, ::GetSysColor(COLOR_BTNFACE));
-  return reinterpret_cast<LRESULT>(::GetSysColorBrush(COLOR_BTNFACE));
+  if (id == IDC_MATERIAL_HINT || id == IDC_EDITOR_HINT ||
+      id == IDC_PREVIEW_HINT || id == IDC_SELECTION_HINT)
+    ::SetTextColor(context, ::GetSysColor(COLOR_GRAYTEXT));
+  ::SetBkMode(context, TRANSPARENT);
+  return reinterpret_cast<LRESULT>(::GetSysColorBrush(COLOR_WINDOW));
+}
+
+LRESULT UIStyleSettingsDialog::OnButtonColor(UINT,
+                                             WPARAM dc,
+                                             LPARAM window,
+                                             BOOL& handled) {
+  const int id = ::GetDlgCtrlID(reinterpret_cast<HWND>(window));
+  if (id != IDC_ACRYLIC_ENABLED && id != IDC_EDIT_GROUP &&
+      id != IDC_EDIT_SINGLE) {
+    handled = FALSE;
+    return 0;
+  }
+  const auto context = reinterpret_cast<HDC>(dc);
+  ::SetBkColor(context, ::GetSysColor(COLOR_WINDOW));
+  return reinterpret_cast<LRESULT>(::GetSysColorBrush(COLOR_WINDOW));
 }
 
 void UIStyleSettingsDialog::DrawCombo(const DRAWITEMSTRUCT& draw) {
@@ -427,6 +500,10 @@ LRESULT UIStyleSettingsDialog::OnDrawItem(UINT,
                                           LPARAM param,
                                           BOOL& handled) {
   const auto draw = reinterpret_cast<DRAWITEMSTRUCT*>(param);
+  if (draw->CtlID == IDC_APPEARANCE_CARD) {
+    settings_navigation::DrawCard(*draw);
+    return TRUE;
+  }
   if (draw->CtlID == IDC_COLOR_FAMILY || draw->CtlID == IDC_COLOR_LIGHT ||
       draw->CtlID == IDC_COLOR_DARK) {
     DrawCombo(*draw);

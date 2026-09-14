@@ -20,6 +20,7 @@ class UIStyleSettingsDialog : public CDialogImpl<UIStyleSettingsDialog> {
   MESSAGE_HANDLER(WM_DRAWITEM, OnDrawItem)
   MESSAGE_HANDLER(WM_MEASUREITEM, OnMeasureItem)
   MESSAGE_HANDLER(WM_CTLCOLORSTATIC, OnStaticColor)
+  MESSAGE_HANDLER(WM_CTLCOLORBTN, OnButtonColor)
   COMMAND_ID_HANDLER(IDOK, OnSave)
   COMMAND_ID_HANDLER(IDC_APPLY, OnSave)
   COMMAND_ID_HANDLER(IDCANCEL, OnCancel)
@@ -39,6 +40,7 @@ class UIStyleSettingsDialog : public CDialogImpl<UIStyleSettingsDialog> {
   LRESULT OnDrawItem(UINT, WPARAM, LPARAM, BOOL&);
   LRESULT OnMeasureItem(UINT, WPARAM, LPARAM, BOOL&);
   LRESULT OnStaticColor(UINT, WPARAM, LPARAM, BOOL&);
+  LRESULT OnButtonColor(UINT, WPARAM, LPARAM, BOOL&);
   LRESULT OnSave(WORD, WORD, HWND, BOOL&);
   LRESULT OnCancel(WORD, WORD, HWND, BOOL&);
   LRESULT OnReset(WORD, WORD, HWND, BOOL&);
@@ -68,7 +70,6 @@ class UIStyleSettingsDialog : public CDialogImpl<UIStyleSettingsDialog> {
   std::array<std::vector<PaletteEntry>, 2> singles_;
   std::array<bool, 2> single_{};
   ULONG_PTR graphics_token_ = 0;
-  CFont heading_font_;
   int item_height_ = 24;
   bool saved_ = false;
   bool deployed_ = false;

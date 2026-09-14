@@ -159,6 +159,9 @@
 #define IDC_FONT_PREVIEW                1245
 #define IDC_FONT_MESSAGE                1246
 #define IDC_FONT_APPLY                  1247
+#define IDC_APPEARANCE_CARD             1248
+#define IDC_APPEARANCE_LIGHT_PREVIEW_LABEL 1249
+#define IDC_APPEARANCE_DARK_PREVIEW_LABEL 1250
 #define IDC_COLOR_SCHEME                1004
 #define IDC_SELECT_FONT                 1005
 #define IDC_PREVIEW                     1006
@@ -176,7 +179,7 @@
 #define _APS_NO_MFC                     1
 #define _APS_NEXT_RESOURCE_VALUE        209
 #define _APS_NEXT_COMMAND_VALUE         32771
-#define _APS_NEXT_CONTROL_VALUE         1248
+#define _APS_NEXT_CONTROL_VALUE         1251
 #define _APS_NEXT_SYMED_VALUE           110
 #endif
 #endif

@@ -18,6 +18,25 @@ inline constexpr WORD kStatusIcons = 30004;
 inline constexpr WORD kUserFolder = 30005;
 inline constexpr WORD kStatus = 30006;
 
+// Every settings page is hosted in the same logical content frame.  Keep
+// these values as the single source of truth so page changes cannot resize the
+// outer window.
+inline constexpr int kContentWidthDlu = 540;
+inline constexpr int kContentHeightDlu = 286;
+inline constexpr int kSidebarWidthDlu = 116;
+inline constexpr int kPageInsetDlu = 14;
+inline constexpr int kPageBodyWidthDlu = 512;
+inline constexpr int kTopActionLeftDlu = 446;
+inline constexpr int kTopActionTopDlu = 8;
+inline constexpr int kFirstCardTopDlu = 34;
+inline constexpr int kActionButtonWidthDlu = 80;
+inline constexpr int kSecondaryButtonWidthDlu = 68;
+inline constexpr int kTransientButtonWidthDlu = 60;
+inline constexpr int kButtonHeightDlu = 18;
+inline constexpr int kComboWidthDlu = 80;
+inline constexpr int kCardRadiusDlu = 8;
+inline constexpr int kControlRadiusDlu = 5;
+
 struct InstallOptions {
   WORD apply = 0;
   WORD close = IDCANCEL;
@@ -62,6 +81,37 @@ inline RECT MapDialogUnits(HWND dialog,
   return value;
 }
 
+inline void MoveControl(HWND dialog,
+                        WORD id,
+                        int left,
+                        int top,
+                        int width,
+                        int height) {
+  HWND control = ::GetDlgItem(dialog, id);
+  if (!control)
+    return;
+  const RECT bounds = MapDialogUnits(dialog, left, top, width, height);
+  ::SetWindowPos(control, nullptr, bounds.left, bounds.top,
+                 bounds.right - bounds.left, bounds.bottom - bounds.top,
+                 SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
+inline void ResizeContentFrame(HWND dialog) {
+  RECT client{};
+  RECT window{};
+  ::GetClientRect(dialog, &client);
+  ::GetWindowRect(dialog, &window);
+  const RECT content =
+      MapDialogUnits(dialog, 0, 0, kContentWidthDlu, kContentHeightDlu);
+  const int frame_width =
+      (window.right - window.left) - (client.right - client.left);
+  const int frame_height =
+      (window.bottom - window.top) - (client.bottom - client.top);
+  ::SetWindowPos(dialog, nullptr, 0, 0, content.right + frame_width,
+                 content.bottom + frame_height,
+                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+
 inline COLORREF Mix(COLORREF foreground, COLORREF background, int alpha) {
   const auto mix = [alpha](int first, int second) {
     return (first * alpha + second * (255 - alpha)) / 255;
@@ -75,6 +125,10 @@ struct NavState {
   bool active;
   bool hover;
   bool link;
+};
+
+struct ToggleState {
+  bool hover = false;
 };
 
 inline LRESULT CALLBACK NavProc(HWND window,
@@ -114,17 +168,27 @@ inline LRESULT CALLBACK NavProc(HWND window,
     HPEN pen = ::CreatePen(PS_NULL, 0, fill);
     const HGDIOBJ old_brush = ::SelectObject(dc, brush);
     const HGDIOBJ old_pen = ::SelectObject(dc, pen);
-    ::RoundRect(dc, bounds.left, bounds.top, bounds.right, bounds.bottom, 12,
-                12);
+    const int diameter = ::MulDiv(12, ::GetDeviceCaps(dc, LOGPIXELSX), 96);
+    ::RoundRect(dc, bounds.left, bounds.top, bounds.right, bounds.bottom,
+                diameter, diameter);
     ::SelectObject(dc, old_pen);
     ::SelectObject(dc, old_brush);
     ::DeleteObject(pen);
     ::DeleteObject(brush);
     if (state->active) {
-      RECT marker{bounds.left + 2, bounds.top + 8, bounds.left + 6,
-                  bounds.bottom - 8};
+      const int inset = (std::max)(4, (bounds.bottom - bounds.top) / 4);
+      const int marker_width =
+          (std::max)(3, ::MulDiv(4, ::GetDeviceCaps(dc, LOGPIXELSX), 96));
+      RECT marker{bounds.left + 2, bounds.top + inset,
+                  bounds.left + 2 + marker_width, bounds.bottom - inset};
       HBRUSH marker_brush = ::CreateSolidBrush(accent);
-      ::FillRect(dc, &marker, marker_brush);
+      HRGN marker_region = ::CreateRoundRectRgn(
+          marker.left, marker.top, marker.right, marker.bottom,
+          marker.right - marker.left, marker.right - marker.left);
+      if (marker_region) {
+        ::FillRgn(dc, marker_region, marker_brush);
+        ::DeleteObject(marker_region);
+      }
       ::DeleteObject(marker_brush);
     }
     wchar_t text[256]{};
@@ -143,6 +207,85 @@ inline LRESULT CALLBACK NavProc(HWND window,
     return 0;
   } else if (message == WM_NCDESTROY) {
     ::RemoveWindowSubclass(window, NavProc, 1);
+    delete state;
+  }
+  return ::DefSubclassProc(window, message, wparam, lparam);
+}
+
+inline LRESULT CALLBACK ToggleProc(HWND window,
+                                   UINT message,
+                                   WPARAM wparam,
+                                   LPARAM lparam,
+                                   UINT_PTR,
+                                   DWORD_PTR data) {
+  auto* state = reinterpret_cast<ToggleState*>(data);
+  if (message == WM_MOUSEMOVE && !state->hover) {
+    state->hover = true;
+    TRACKMOUSEEVENT tracking{sizeof(tracking), TME_LEAVE, window, 0};
+    ::TrackMouseEvent(&tracking);
+    ::InvalidateRect(window, nullptr, FALSE);
+  } else if (message == WM_MOUSELEAVE) {
+    state->hover = false;
+    ::InvalidateRect(window, nullptr, FALSE);
+  } else if (message == WM_ERASEBKGND) {
+    return 1;
+  } else if (message == BM_SETCHECK || message == WM_ENABLE ||
+             message == WM_SETFOCUS || message == WM_KILLFOCUS) {
+    const LRESULT result = ::DefSubclassProc(window, message, wparam, lparam);
+    ::InvalidateRect(window, nullptr, FALSE);
+    return result;
+  } else if (message == WM_PAINT) {
+    PAINTSTRUCT paint{};
+    HDC dc = ::BeginPaint(window, &paint);
+    RECT bounds{};
+    ::GetClientRect(window, &bounds);
+    const bool enabled = ::IsWindowEnabled(window) != FALSE;
+    const bool checked =
+        ::SendMessageW(window, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    const COLORREF surface = ::GetSysColor(COLOR_WINDOW);
+    const COLORREF accent = ::GetSysColor(COLOR_HIGHLIGHT);
+    const COLORREF fill = !enabled       ? ::GetSysColor(COLOR_BTNFACE)
+                          : checked      ? accent
+                          : state->hover ? Mix(accent, surface, 20)
+                                         : surface;
+    const COLORREF border =
+        checked ? accent : Mix(::GetSysColor(COLOR_3DSHADOW), surface, 76);
+    HBRUSH brush = ::CreateSolidBrush(fill);
+    HPEN pen = ::CreatePen(PS_SOLID, 1, border);
+    const HGDIOBJ previous_brush = ::SelectObject(dc, brush);
+    const HGDIOBJ previous_pen = ::SelectObject(dc, pen);
+    const int diameter = ::MulDiv(10, ::GetDeviceCaps(dc, LOGPIXELSX), 96);
+    ::RoundRect(dc, bounds.left, bounds.top, bounds.right - 1,
+                bounds.bottom - 1, diameter, diameter);
+    ::SelectObject(dc, previous_pen);
+    ::SelectObject(dc, previous_brush);
+    ::DeleteObject(pen);
+    ::DeleteObject(brush);
+
+    wchar_t label[128]{};
+    ::GetWindowTextW(window, label, static_cast<int>(_countof(label)));
+    HFONT font =
+        reinterpret_cast<HFONT>(::SendMessageW(window, WM_GETFONT, 0, 0));
+    const HGDIOBJ previous_font = font ? ::SelectObject(dc, font) : nullptr;
+    ::SetBkMode(dc, TRANSPARENT);
+    ::SetTextColor(dc, !enabled  ? ::GetSysColor(COLOR_GRAYTEXT)
+                       : checked ? ::GetSysColor(COLOR_HIGHLIGHTTEXT)
+                                 : ::GetSysColor(COLOR_WINDOWTEXT));
+    RECT text_bounds = bounds;
+    ::DrawTextW(
+        dc, label, -1, &text_bounds,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
+    if (::GetFocus() == window) {
+      RECT focus = bounds;
+      ::InflateRect(&focus, -3, -3);
+      ::DrawFocusRect(dc, &focus);
+    }
+    if (previous_font)
+      ::SelectObject(dc, previous_font);
+    ::EndPaint(window, &paint);
+    return 0;
+  } else if (message == WM_NCDESTROY) {
+    ::RemoveWindowSubclass(window, ToggleProc, 2);
     delete state;
   }
   return ::DefSubclassProc(window, message, wparam, lparam);
@@ -173,15 +316,86 @@ inline void Round(HWND control, int radius = 12) {
     return;
   RECT bounds{};
   ::GetClientRect(control, &bounds);
-  ::SetWindowRgn(control,
-                 ::CreateRoundRectRgn(bounds.left, bounds.top, bounds.right + 1,
-                                      bounds.bottom + 1, radius, radius),
-                 TRUE);
+  HRGN region = ::CreateRoundRectRgn(bounds.left, bounds.top, bounds.right + 1,
+                                     bounds.bottom + 1, radius, radius);
+  if (region && !::SetWindowRgn(control, region, TRUE))
+    ::DeleteObject(region);
+}
+
+inline void RoundDlu(HWND dialog, WORD id, int radius_dlu) {
+  HWND control = ::GetDlgItem(dialog, id);
+  if (!control)
+    return;
+  const RECT radius = MapDialogUnits(dialog, 0, 0, radius_dlu, radius_dlu);
+  Round(control, (std::max)(4, radius.right));
+}
+
+inline void StyleActionButton(HWND dialog, WORD id) {
+  RoundDlu(dialog, id, kControlRadiusDlu);
+}
+
+inline void StyleCard(HWND dialog, WORD id) {
+  RoundDlu(dialog, id, kCardRadiusDlu);
+}
+
+inline void StyleToggle(HWND dialog, WORD id) {
+  HWND control = ::GetDlgItem(dialog, id);
+  if (!control)
+    return;
+  ::SetWindowLongPtrW(control, GWL_STYLE,
+                      ::GetWindowLongPtrW(control, GWL_STYLE) | BS_PUSHLIKE);
+  DWORD_PTR existing = 0;
+  if (!::GetWindowSubclass(control, ToggleProc, 2, &existing)) {
+    auto* state = new ToggleState;
+    if (!::SetWindowSubclass(control, ToggleProc, 2,
+                             reinterpret_cast<DWORD_PTR>(state)))
+      delete state;
+  }
+  RoundDlu(dialog, id, kControlRadiusDlu);
+}
+
+inline void StyleCombo(HWND dialog, WORD id) {
+  RoundDlu(dialog, id, kControlRadiusDlu);
+}
+
+inline void PrepareCard(HWND dialog, WORD id) {
+  HWND card = ::GetDlgItem(dialog, id);
+  if (!card)
+    return;
+  LONG_PTR style = ::GetWindowLongPtrW(card, GWL_STYLE);
+  style &= ~static_cast<LONG_PTR>(BS_TYPEMASK);
+  style |= BS_OWNERDRAW;
+  ::SetWindowLongPtrW(card, GWL_STYLE, style);
+  StyleCard(dialog, id);
+}
+
+inline void DrawCard(const DRAWITEMSTRUCT& draw) {
+  RECT bounds = draw.rcItem;
+  ::FillRect(draw.hDC, &bounds, ::GetSysColorBrush(COLOR_BTNFACE));
+  bounds.right -= 1;
+  bounds.bottom -= 1;
+  const COLORREF surface = ::GetSysColor(COLOR_WINDOW);
+  const COLORREF border = Mix(::GetSysColor(COLOR_3DSHADOW), surface, 76);
+  HBRUSH brush = ::CreateSolidBrush(surface);
+  HPEN pen = ::CreatePen(PS_SOLID, 1, border);
+  const HGDIOBJ previous_brush = ::SelectObject(draw.hDC, brush);
+  const HGDIOBJ previous_pen = ::SelectObject(draw.hDC, pen);
+  const int radius = ::MulDiv(14, ::GetDeviceCaps(draw.hDC, LOGPIXELSX), 96);
+  ::RoundRect(draw.hDC, bounds.left, bounds.top, bounds.right, bounds.bottom,
+              radius, radius);
+  ::SelectObject(draw.hDC, previous_pen);
+  ::SelectObject(draw.hDC, previous_brush);
+  ::DeleteObject(pen);
+  ::DeleteObject(brush);
 }
 
 inline void Install(HWND dialog, Page active, const InstallOptions& options) {
-  constexpr int width_dlu = 126;
-  const int sidebar_width = MapDialogUnits(dialog, 0, 0, width_dlu, 0).right;
+  ResizeContentFrame(dialog);
+  ::SetWindowTextW(
+      dialog,
+      LocalText(L"小狼毫设置", L"小狼毫設定", L"Weasel settings").c_str());
+  const int sidebar_width =
+      MapDialogUnits(dialog, 0, 0, kSidebarWidthDlu, 0).right;
   struct Shift {
     HWND parent;
     int x;
@@ -211,11 +425,8 @@ inline void Install(HWND dialog, Page active, const InstallOptions& options) {
   const auto vertical = [&](int dlu) -> int {
     return static_cast<int>(MapDialogUnits(dialog, 0, 0, 0, dlu).bottom);
   };
-  const int margin = (std::max)(vertical(7), sidebar_width / 15);
+  const int margin = (std::max)(vertical(7), sidebar_width / 16);
   const int content_width = sidebar_width - margin * 2;
-  Create(dialog, L"STATIC",
-         LocalText(L"小狼毫设置", L"小狼毫設定", L"Weasel settings"), SS_LEFT,
-         0, margin, margin, content_width, vertical(14));
 
   struct Entry {
     Page page;
@@ -233,37 +444,43 @@ inline void Install(HWND dialog, Page active, const InstallOptions& options) {
       {Page::StatusIcons, kStatusIcons, L"状态图标", L"狀態圖示",
        L"Status icons"},
   };
-  const int item_height = vertical(22);
-  const int item_gap = vertical(4);
-  int top = margin + vertical(22);
+  const int item_height = vertical(19);
+  const int item_gap = vertical(3);
+  int top = margin + vertical(2);
   for (const auto& entry : entries) {
     HWND item =
         Create(dialog, L"BUTTON", LocalText(entry.zh, entry.tw, entry.en),
                BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP, entry.id, margin, top,
                content_width, item_height);
-    ::SetWindowSubclass(item, NavProc, 1,
-                        reinterpret_cast<DWORD_PTR>(
-                            new NavState{entry.page == active, false, false}));
+    auto* state = new NavState{entry.page == active, false, false};
+    if (!item || !::SetWindowSubclass(item, NavProc, 1,
+                                      reinterpret_cast<DWORD_PTR>(state)))
+      delete state;
     top += item_height + item_gap;
   }
   Create(dialog, L"STATIC", L"", SS_ETCHEDVERT, 0, sidebar_width - 1, margin, 1,
          client.bottom - margin * 2);
 
-  const int button_height = vertical(21);
-  const int close_y = client.bottom - margin - button_height;
-  const int apply_y = close_y - vertical(25);
-  const int status_y = apply_y - vertical(17);
-  const int folder_y = status_y - vertical(30);
+  const int button_height = vertical(kButtonHeightDlu);
+  const int folder_link_height = vertical(11);
+  const int folder_label_height = vertical(9);
+  const int folder_link_y = client.bottom - margin - folder_link_height;
+  const int folder_y = folder_link_y - vertical(11);
+  const int close_y = folder_y - vertical(7) - button_height;
+  const int apply_y = close_y - vertical(4) - button_height;
+  const int status_y = apply_y - vertical(15);
   Create(dialog, L"STATIC",
          LocalText(L"用户文件夹", L"使用者資料夾", L"User folder"), SS_LEFT, 0,
-         margin, folder_y, content_width, vertical(9));
+         margin, folder_y, content_width, folder_label_height);
   HWND folder =
       Create(dialog, L"BUTTON", options.user_folder,
              BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP, kUserFolder, margin,
-             folder_y + vertical(10), content_width, vertical(14));
-  ::SetWindowSubclass(
-      folder, NavProc, 1,
-      reinterpret_cast<DWORD_PTR>(new NavState{false, false, true}));
+             folder_link_y, content_width, folder_link_height);
+  auto* folder_state = new NavState{false, false, true};
+  if (!folder ||
+      !::SetWindowSubclass(folder, NavProc, 1,
+                           reinterpret_cast<DWORD_PTR>(folder_state)))
+    delete folder_state;
   Create(dialog, L"STATIC", L"", SS_CENTER, kStatus, margin, status_y,
          content_width, vertical(10));
 
@@ -273,7 +490,7 @@ inline void Install(HWND dialog, Page active, const InstallOptions& options) {
                    button_height,
                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
     ::SetWindowTextW(apply, LocalText(L"应用", L"套用", L"Apply").c_str());
-    Round(apply);
+    StyleActionButton(dialog, options.apply);
   }
   HWND close = ::GetDlgItem(dialog, options.close);
   if (!close)
@@ -285,7 +502,7 @@ inline void Install(HWND dialog, Page active, const InstallOptions& options) {
                    button_height,
                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
   ::SetWindowTextW(close, LocalText(L"关闭", L"關閉", L"Close").c_str());
-  Round(close);
+  StyleActionButton(dialog, options.close);
   for (WORD id : options.hide)
     ::ShowWindow(::GetDlgItem(dialog, id), SW_HIDE);
 }

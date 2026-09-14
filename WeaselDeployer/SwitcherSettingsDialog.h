@@ -167,7 +167,6 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
   CComboBox input_mode_;
   CComboBox update_frequency_;
   CToolTipCtrl tooltip_;
-  CFont title_font_;
   CFont heading_font_;
   CBrush description_brush_;
 };

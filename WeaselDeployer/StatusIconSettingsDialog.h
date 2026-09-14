@@ -17,6 +17,9 @@ class StatusIconSettingsDialog : public CDialogImpl<StatusIconSettingsDialog> {
   MESSAGE_HANDLER(WM_INITDIALOG, OnInitDialog)
   MESSAGE_HANDLER(WM_CLOSE, OnClose)
   MESSAGE_HANDLER(WM_DESTROY, OnDestroy)
+  MESSAGE_HANDLER(WM_DRAWITEM, OnDrawItem)
+  MESSAGE_HANDLER(WM_CTLCOLORSTATIC, OnStaticColor)
+  MESSAGE_HANDLER(WM_CTLCOLORBTN, OnButtonColor)
   COMMAND_ID_HANDLER(IDC_STATUS_CHINESE_CHANGE, OnChooseIcon)
   COMMAND_ID_HANDLER(IDC_STATUS_ENGLISH_CHANGE, OnChooseIcon)
   COMMAND_ID_HANDLER(IDC_STATUS_CHINESE_CAPS_CHANGE, OnChooseIcon)
@@ -43,6 +46,9 @@ class StatusIconSettingsDialog : public CDialogImpl<StatusIconSettingsDialog> {
   LRESULT OnInitDialog(UINT, WPARAM, LPARAM, BOOL&);
   LRESULT OnClose(UINT, WPARAM, LPARAM, BOOL&);
   LRESULT OnDestroy(UINT, WPARAM, LPARAM, BOOL&);
+  LRESULT OnDrawItem(UINT, WPARAM, LPARAM, BOOL&);
+  LRESULT OnStaticColor(UINT, WPARAM, LPARAM, BOOL&);
+  LRESULT OnButtonColor(UINT, WPARAM, LPARAM, BOOL&);
   LRESULT OnChooseIcon(WORD, WORD id, HWND, BOOL&);
   LRESULT OnCapsModeChanged(WORD, WORD, HWND, BOOL&);
   LRESULT OnBadgeChanged(WORD, WORD, HWND, BOOL&);
@@ -56,8 +62,8 @@ class StatusIconSettingsDialog : public CDialogImpl<StatusIconSettingsDialog> {
   void RefreshMode();
   void RefreshPreviews();
   void RefreshApplyState();
-  void ApplyRoundedRegion(UINT control, int radius_dlu);
   void SetPreviewIcon(UINT control, HICON icon);
+  void DrawTaskbarPreview(const DRAWITEMSTRUCT& draw);
   HICON ResolveIcon(const std::wstring& custom, bool english, bool caps) const;
   bool ChooseIconFile(std::wstring* path);
   bool Persist(std::wstring* error);
@@ -74,6 +80,5 @@ class StatusIconSettingsDialog : public CDialogImpl<StatusIconSettingsDialog> {
   PreviewMode preview_mode_ = PreviewMode::Chinese;
   ULONG_PTR graphics_token_ = 0;
   std::array<HICON, 7> preview_icons_{};
-  CFont title_font_;
   CFont heading_font_;
 };
