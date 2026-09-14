@@ -36,11 +36,13 @@ Write-TestFile 'stdafx.h' @'
 Write-TestFile 'WeaselIPC.h' @'
 #pragma once
 namespace weasel {
+inline int maintenance_start_count = 0;
+inline int maintenance_end_count = 0;
 class Client {
  public:
-  bool Connect() { return false; }
-  void StartMaintenance() {}
-  void EndMaintenance() {}
+  bool Connect() { return true; }
+  void StartMaintenance() { ++maintenance_start_count; }
+  void EndMaintenance() { ++maintenance_end_count; }
 };
 }
 '@
@@ -54,7 +56,27 @@ inline std::wstring u8tow(const std::string& text) {
   return std::wstring(text.begin(), text.end());
 }
 '@
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'ModelTransactionTests.cpp') -Destination $build
+$modelTests = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'ModelTransactionTests.cpp'))
+$modelTests = "#include <WeaselIPC.h>`r`n" + $modelTests
+$freshInstall = 'Require(manager.CompleteAndInstall(&error), "fresh model install failed");'
+$freshInstallCheck = @'
+const int maintenance_before_fresh_install = weasel::maintenance_start_count;
+      Require(manager.CompleteAndInstall(&error), "fresh model install failed");
+      Require(weasel::maintenance_start_count == maintenance_before_fresh_install,
+              "fresh model install entered maintenance");
+'@
+if (-not $modelTests.Contains($freshInstall)) { throw 'Fresh install test insertion point was not found' }
+$modelTests = $modelTests.Replace($freshInstall, $freshInstallCheck.Trim())
+$replacement = 'Require(manager.CompleteAndInstall(&error), "replacement failed");'
+$replacementCheck = @'
+const int maintenance_before_replacement = weasel::maintenance_start_count;
+      Require(manager.CompleteAndInstall(&error), "replacement failed");
+      Require(weasel::maintenance_start_count == maintenance_before_replacement,
+              "model replacement entered maintenance before Apply");
+'@
+if (-not $modelTests.Contains($replacement)) { throw 'Replacement test insertion point was not found' }
+$modelTests = $modelTests.Replace($replacement, $replacementCheck.Trim())
+Write-TestFile 'ModelTransactionTests.cpp' $modelTests
 Push-Location $build
 try {
     & cl.exe /nologo /EHsc /std:c++17 /utf-8 /DUNICODE /D_UNICODE /I. WanxiangModelManager.cpp ModelTransactionTests.cpp /Fe:ModelTransactionTests.exe /link ole32.lib shell32.lib bcrypt.lib advapi32.lib uuid.lib

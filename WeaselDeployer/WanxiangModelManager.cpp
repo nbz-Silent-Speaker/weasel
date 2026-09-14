@@ -837,7 +837,6 @@ bool WanxiangModelManager::CompleteAndInstall(std::wstring* error) {
     return false;
   }
 
-  MaintenanceScope maintenance;
   file_error.clear();
   const bool has_model = std::filesystem::exists(ModelPath(), file_error);
   if (file_error) {

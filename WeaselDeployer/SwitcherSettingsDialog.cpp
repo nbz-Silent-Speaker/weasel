@@ -911,7 +911,16 @@ void SwitcherSettingsDialog::UpdateModelUi() {
       model_progress_.SetPos(value);
     wchar_t label[16] = {};
     swprintf_s(label, L"%d%%", value / 10);
-    set_text(IDC_MODEL_PROGRESS_TEXT, label);
+    if (model_progress_percent_ != label) {
+      model_progress_percent_ = label;
+      HWND percent = GetDlgItem(IDC_MODEL_PROGRESS_TEXT);
+      ::SendMessageW(percent, WM_SETREDRAW, FALSE, 0);
+      ::SetWindowTextW(percent, label);
+      ::SendMessageW(percent, WM_SETREDRAW, TRUE, 0);
+      ::InvalidateRect(percent, nullptr, FALSE);
+    }
+  } else {
+    model_progress_percent_.clear();
   }
   std::wstring note, download_phase, download_speed, download_amount, primary,
       secondary;
@@ -1214,8 +1223,18 @@ LRESULT SwitcherSettingsDialog::OnDrawItem(UINT,
     const int origin = old_bitmap ? 0 : draw->rcItem.left;
     const int top = old_bitmap ? 0 : draw->rcItem.top;
     const int bottom = old_bitmap ? height : draw->rcItem.bottom;
-    const int speed_left = origin + width * 34 / 100;
-    const int amount_left = origin + width * 60 / 100;
+    SIZE phase_extent = {};
+    ::GetTextExtentPoint32W(paint, model_download_phase_.c_str(),
+                            static_cast<int>(model_download_phase_.size()),
+                            &phase_extent);
+    const std::wstring speed_reserve = L"· 9999.9 MB/s";
+    SIZE speed_extent = {};
+    ::GetTextExtentPoint32W(paint, speed_reserve.c_str(),
+                            static_cast<int>(speed_reserve.size()),
+                            &speed_extent);
+    const int gap = (std::max)(4, height / 2);
+    const int speed_left = origin + phase_extent.cx + gap;
+    const int amount_left = speed_left + speed_extent.cx + gap;
     RECT phase = {origin, top, speed_left, bottom};
     RECT speed = {speed_left, top, amount_left, bottom};
     RECT amount = {amount_left, top, origin + width, bottom};
@@ -1228,6 +1247,38 @@ LRESULT SwitcherSettingsDialog::OnDrawItem(UINT,
         model_download_amount_.empty() ? L"" : L"· " + model_download_amount_;
     ::DrawTextW(paint, speed_text.c_str(), -1, &speed, format);
     ::DrawTextW(paint, amount_text.c_str(), -1, &amount, format);
+    if (old_font)
+      ::SelectObject(paint, old_font);
+    if (old_bitmap) {
+      ::BitBlt(draw->hDC, draw->rcItem.left, draw->rcItem.top, width, height,
+               buffer, 0, 0, SRCCOPY);
+      ::SelectObject(buffer, old_bitmap);
+    }
+    if (bitmap)
+      ::DeleteObject(bitmap);
+    if (buffer)
+      ::DeleteDC(buffer);
+    handled = TRUE;
+    return TRUE;
+  }
+  if (id == IDC_MODEL_PROGRESS_TEXT) {
+    const int width = draw->rcItem.right - draw->rcItem.left;
+    const int height = draw->rcItem.bottom - draw->rcItem.top;
+    HDC buffer = ::CreateCompatibleDC(draw->hDC);
+    HBITMAP bitmap =
+        buffer ? ::CreateCompatibleBitmap(draw->hDC, width, height) : nullptr;
+    HGDIOBJ old_bitmap =
+        bitmap ? ::SelectObject(buffer, bitmap) : static_cast<HGDIOBJ>(nullptr);
+    HDC paint = old_bitmap ? buffer : draw->hDC;
+    RECT area = old_bitmap ? RECT{0, 0, width, height} : draw->rcItem;
+    ::FillRect(paint, &area, ::GetSysColorBrush(COLOR_WINDOW));
+    ::SetBkMode(paint, TRANSPARENT);
+    ::SetTextColor(paint, ::GetSysColor(COLOR_WINDOWTEXT));
+    HFONT font = reinterpret_cast<HFONT>(
+        ::SendMessageW(draw->hwndItem, WM_GETFONT, 0, 0));
+    const HGDIOBJ old_font = font ? ::SelectObject(paint, font) : nullptr;
+    ::DrawTextW(paint, model_progress_percent_.c_str(), -1, &area,
+                DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
     if (old_font)
       ::SelectObject(paint, old_font);
     if (old_bitmap) {

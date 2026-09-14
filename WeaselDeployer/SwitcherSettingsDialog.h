@@ -140,6 +140,7 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
   std::wstring model_download_phase_;
   std::wstring model_download_speed_;
   std::wstring model_download_amount_;
+  std::wstring model_progress_percent_;
   bool loading_input_mode_ = false;
   bool input_mode_modified_ = false;
   std::wstring selected_input_mode_ = L"全拼";
