@@ -65,7 +65,8 @@ LRESULT UIStyleSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
                      });
   }
   HWND card = settings_navigation::Create(
-      m_hWnd, L"BUTTON", L"", BS_OWNERDRAW, IDC_APPEARANCE_CARD,
+      m_hWnd, L"STATIC", L"", SS_OWNERDRAW | WS_CLIPSIBLINGS,
+      IDC_APPEARANCE_CARD,
       settings_navigation::MapDialogUnits(
           m_hWnd, settings_navigation::kPageInsetDlu,
           settings_navigation::kFirstCardTopDlu, 0, 0)
@@ -102,7 +103,11 @@ LRESULT UIStyleSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
        IDCANCEL,
        WeaselUserDataPath().wstring(),
        {IDOK, IDC_APPEARANCE_TITLE, IDC_SETTINGS_DIVIDER}});
+  ::SetWindowPos(card, HWND_BOTTOM, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
   RefreshPreview();
+  ::RedrawWindow(m_hWnd, nullptr, nullptr,
+                 RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
   CenterWindow();
   return TRUE;
 }

@@ -120,6 +120,9 @@ std::wstring Localize(const wchar_t* simplified,
 
 void LayoutInputPage(HWND dialog) {
   using settings_navigation::MoveControl;
+  MoveControl(dialog, IDC_SCHEMA_LAST_CHECK, 280, 262, 176, 10);
+  MoveControl(dialog, IDC_CHECK_SCHEME_UPDATES, 462, 258, 64,
+              settings_navigation::kButtonHeightDlu);
   MoveControl(dialog, IDC_SCHEMA_LIST_LABEL, settings_navigation::kPageInsetDlu,
               10, 170, 10);
   MoveControl(dialog, IDC_SCHEMA_DETAIL_LABEL, 196, 10, 330, 10);
@@ -1470,6 +1473,11 @@ void SwitcherSettingsDialog::FinishModelDownload() {
 
 LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   LayoutInputPage(m_hWnd);
+  HWND last_check = GetDlgItem(IDC_SCHEMA_LAST_CHECK);
+  LONG_PTR last_check_style = ::GetWindowLongPtrW(last_check, GWL_STYLE);
+  last_check_style &= ~static_cast<LONG_PTR>(SS_TYPEMASK);
+  last_check_style |= SS_RIGHT;
+  ::SetWindowLongPtrW(last_check, GWL_STYLE, last_check_style);
   LOGFONTW base_font = {};
   ::GetObjectW(GetFont(), sizeof(base_font), &base_font);
   LOGFONTW heading = base_font;
