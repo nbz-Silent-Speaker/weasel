@@ -89,36 +89,37 @@ int DrawPreviewText(HDC dc,
 
 void LayoutFontPage(HWND dialog) {
   using settings_navigation::MoveControl;
-  MoveControl(dialog, IDC_FONT_RESTORE, settings_navigation::kTopActionLeftDlu,
-              settings_navigation::kTopActionTopDlu,
+  MoveControl(dialog, IDC_FONT_RESTORE,
+              settings_navigation::kBottomActionLeftDlu,
+              settings_navigation::kBottomActionTopDlu,
               settings_navigation::kActionButtonWidthDlu,
               settings_navigation::kButtonHeightDlu);
   MoveControl(dialog, IDC_FONT_EDITOR_CARD, settings_navigation::kPageInsetDlu,
               settings_navigation::kFirstCardTopDlu,
               settings_navigation::kPageBodyWidthDlu, 110);
-  MoveControl(dialog, IDC_FONT_ROLE_LABEL, 24, 44, 78, 11);
-  MoveControl(dialog, IDC_FONT_ROLE, 24, 57, 78, 74);
-  MoveControl(dialog, IDC_FONT_LANGUAGE_LABEL, 108, 44, 78, 11);
-  MoveControl(dialog, IDC_FONT_LANGUAGE, 108, 57, 78, 74);
-  MoveControl(dialog, IDC_FONT_FAMILY_LABEL, 192, 44, 180, 11);
-  MoveControl(dialog, IDC_FONT_SEARCH, 192, 56, 180, 15);
-  MoveControl(dialog, IDC_FONT_FAMILY, 192, 74, 180, 57);
-  MoveControl(dialog, IDC_FONT_POINT_LABEL, 378, 44, 52, 11);
-  MoveControl(dialog, IDC_FONT_POINT, 378, 57, 52, 74);
-  MoveControl(dialog, IDC_FONT_SHAPE_LABEL, 436, 44, 76, 11);
-  MoveControl(dialog, IDC_FONT_SHAPE_REGULAR, 436, 57, 76,
+  MoveControl(dialog, IDC_FONT_ROLE_LABEL, 24, 24, 78, 11);
+  MoveControl(dialog, IDC_FONT_ROLE, 24, 37, 78, 74);
+  MoveControl(dialog, IDC_FONT_LANGUAGE_LABEL, 108, 24, 78, 11);
+  MoveControl(dialog, IDC_FONT_LANGUAGE, 108, 37, 78, 74);
+  MoveControl(dialog, IDC_FONT_FAMILY_LABEL, 192, 24, 180, 11);
+  MoveControl(dialog, IDC_FONT_SEARCH, 192, 36, 180, 15);
+  MoveControl(dialog, IDC_FONT_FAMILY, 192, 54, 180, 57);
+  MoveControl(dialog, IDC_FONT_POINT_LABEL, 378, 24, 52, 11);
+  MoveControl(dialog, IDC_FONT_POINT, 378, 37, 52, 74);
+  MoveControl(dialog, IDC_FONT_SHAPE_LABEL, 436, 24, 76, 11);
+  MoveControl(dialog, IDC_FONT_SHAPE_REGULAR, 436, 37, 76,
               settings_navigation::kButtonHeightDlu);
-  MoveControl(dialog, IDC_FONT_SHAPE_BOLD, 436, 80, 76,
+  MoveControl(dialog, IDC_FONT_SHAPE_BOLD, 436, 60, 76,
               settings_navigation::kButtonHeightDlu);
-  MoveControl(dialog, IDC_FONT_SHAPE_ITALIC, 436, 103, 76,
+  MoveControl(dialog, IDC_FONT_SHAPE_ITALIC, 436, 83, 76,
               settings_navigation::kButtonHeightDlu);
   MoveControl(dialog, IDC_FONT_PREVIEW_CARD, settings_navigation::kPageInsetDlu,
-              152, settings_navigation::kPageBodyWidthDlu, 96);
-  MoveControl(dialog, IDC_FONT_PREVIEW_HORIZONTAL, 24, 163, 68,
+              132, settings_navigation::kPageBodyWidthDlu, 96);
+  MoveControl(dialog, IDC_FONT_PREVIEW_HORIZONTAL, 24, 143, 68,
               settings_navigation::kButtonHeightDlu);
-  MoveControl(dialog, IDC_FONT_PREVIEW_VERTICAL, 96, 163, 68,
+  MoveControl(dialog, IDC_FONT_PREVIEW_VERTICAL, 96, 143, 68,
               settings_navigation::kButtonHeightDlu);
-  MoveControl(dialog, IDC_FONT_PREVIEW, 24, 184, 488, 53);
+  MoveControl(dialog, IDC_FONT_PREVIEW, 24, 164, 488, 53);
 }
 }  // namespace
 

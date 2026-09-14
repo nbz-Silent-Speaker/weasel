@@ -38,6 +38,9 @@ class UIStyleSettings {
                         const char* key,
                         COLORREF fallback);
   int PreviewLayoutInt(const char* key, int fallback);
+  int PreviewStyleInt(const char* key, int fallback);
+  bool PreviewStyleBool(const char* key, bool fallback);
+  std::wstring PreviewStyleString(const char* key, const wchar_t* fallback);
 
   RimeCustomSettings* settings() { return settings_; }
 

@@ -12,9 +12,9 @@ $requiredConstants = [ordered]@{
   kSidebarWidthDlu = 116
   kPageInsetDlu = 14
   kPageBodyWidthDlu = 512
-  kTopActionLeftDlu = 446
-  kTopActionTopDlu = 8
-  kFirstCardTopDlu = 34
+  kBottomActionLeftDlu = 14
+  kBottomActionTopDlu = 258
+  kFirstCardTopDlu = 14
   kActionButtonWidthDlu = 80
   kButtonHeightDlu = 18
   kCardRadiusDlu = 8
@@ -113,6 +113,10 @@ foreach ($entry in $restoreButtons.GetEnumerator()) {
   if ($text -notmatch 'StyleActionButton\(' -or
       $text -notmatch [regex]::Escape($entry.Value)) {
     throw "$($entry.Key) does not use the shared restore-button style."
+  }
+  if ($text -notmatch 'kBottomActionLeftDlu' -or
+      $text -notmatch 'kBottomActionTopDlu') {
+    throw "$($entry.Key) does not use the shared bottom-left restore position."
   }
 }
 

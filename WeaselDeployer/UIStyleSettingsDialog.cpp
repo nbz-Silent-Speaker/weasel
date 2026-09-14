@@ -11,28 +11,25 @@ namespace {
 void LayoutAppearancePage(HWND dialog) {
   using settings_navigation::MoveControl;
   MoveControl(dialog, IDC_RESTORE_APPEARANCE,
-              settings_navigation::kTopActionLeftDlu,
-              settings_navigation::kTopActionTopDlu,
+              settings_navigation::kBottomActionLeftDlu,
+              settings_navigation::kBottomActionTopDlu,
               settings_navigation::kActionButtonWidthDlu,
               settings_navigation::kButtonHeightDlu);
-  MoveControl(dialog, IDC_ACRYLIC_ENABLED, 28, 44, 484, 12);
-  MoveControl(dialog, IDC_MATERIAL_HINT, 40, 59, 472, 11);
-  MoveControl(dialog, IDC_EDIT_GROUP, 28, 76, 84,
+  MoveControl(dialog, IDC_ACRYLIC_ENABLED, 28, 25, 132, 12);
+  MoveControl(dialog, IDC_EDIT_GROUP, 28, 47, 84,
               settings_navigation::kButtonHeightDlu);
-  MoveControl(dialog, IDC_EDIT_SINGLE, 116, 76, 84,
+  MoveControl(dialog, IDC_EDIT_SINGLE, 116, 47, 84,
               settings_navigation::kButtonHeightDlu);
-  MoveControl(dialog, IDC_COLOR_FAMILY, 28, 100, 484, 140);
-  MoveControl(dialog, IDC_LIGHT_LABEL, 28, 98, 234, 11);
-  MoveControl(dialog, IDC_DARK_LABEL, 278, 98, 234, 11);
-  MoveControl(dialog, IDC_COLOR_LIGHT, 28, 111, 234, 140);
-  MoveControl(dialog, IDC_COLOR_DARK, 278, 111, 234, 140);
-  MoveControl(dialog, IDC_EDITOR_HINT, 28, 128, 484, 11);
-  MoveControl(dialog, IDC_SELECTION_HINT, 28, 140, 484, 11);
-  MoveControl(dialog, IDC_APPEARANCE_LIGHT_PREVIEW_LABEL, 28, 151, 234, 11);
-  MoveControl(dialog, IDC_APPEARANCE_DARK_PREVIEW_LABEL, 278, 151, 234, 11);
-  MoveControl(dialog, IDC_PREVIEW_LIGHT, 28, 164, 234, 66);
-  MoveControl(dialog, IDC_PREVIEW_DARK, 278, 164, 234, 66);
-  MoveControl(dialog, IDC_PREVIEW_HINT, 28, 233, 484, 12);
+  MoveControl(dialog, IDC_COLOR_FAMILY, 28, 72, 234, 120);
+  MoveControl(dialog, IDC_LIGHT_LABEL, 28, 70, 234, 11);
+  MoveControl(dialog, IDC_DARK_LABEL, 278, 70, 234, 11);
+  MoveControl(dialog, IDC_COLOR_LIGHT, 28, 82, 234, 120);
+  MoveControl(dialog, IDC_COLOR_DARK, 278, 82, 234, 120);
+  MoveControl(dialog, IDC_SELECTION_HINT, 28, 233, 484, 11);
+  MoveControl(dialog, IDC_APPEARANCE_LIGHT_PREVIEW_LABEL, 28, 111, 234, 11);
+  MoveControl(dialog, IDC_APPEARANCE_DARK_PREVIEW_LABEL, 278, 111, 234, 11);
+  MoveControl(dialog, IDC_PREVIEW_LIGHT, 28, 124, 234, 96);
+  MoveControl(dialog, IDC_PREVIEW_DARK, 278, 124, 234, 96);
 }
 }  // namespace
 
@@ -77,7 +74,7 @@ LRESULT UIStyleSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
       settings_navigation::MapDialogUnits(
           m_hWnd, 0, 0, settings_navigation::kPageBodyWidthDlu, 0)
           .right,
-      settings_navigation::MapDialogUnits(m_hWnd, 0, 0, 0, 214).bottom);
+      settings_navigation::MapDialogUnits(m_hWnd, 0, 0, 0, 234).bottom);
   ::SetWindowPos(card, HWND_BOTTOM, 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
   ::SetDlgItemTextW(m_hWnd, IDC_RESTORE_APPEARANCE,
@@ -102,7 +99,8 @@ LRESULT UIStyleSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
       {IDC_APPLY,
        IDCANCEL,
        WeaselUserDataPath().wstring(),
-       {IDOK, IDC_APPEARANCE_TITLE, IDC_SETTINGS_DIVIDER}});
+       {IDOK, IDC_APPEARANCE_TITLE, IDC_SETTINGS_DIVIDER, IDC_MATERIAL_HINT,
+        IDC_EDITOR_HINT, IDC_PREVIEW_HINT}});
   ::SetWindowPos(card, HWND_BOTTOM, 0, 0, 0, 0,
                  SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
   RefreshPreview();
@@ -225,8 +223,6 @@ void UIStyleSettingsDialog::ShowEditor(bool single) {
   for (int id :
        {IDC_COLOR_LIGHT, IDC_COLOR_DARK, IDC_LIGHT_LABEL, IDC_DARK_LABEL})
     ::ShowWindow(GetDlgItem(id), single ? SW_SHOW : SW_HIDE);
-  SetDlgItemText(IDC_EDITOR_HINT, Text(single ? IDS_PALETTE_SINGLE_HINT
-                                              : IDS_PALETTE_GROUP_HINT));
   RefreshPreview();
 }
 void UIStyleSettingsDialog::RefreshPreview() {
@@ -243,6 +239,7 @@ void UIStyleSettingsDialog::RefreshPreview() {
   if (mismatch)
     message = Text(IDS_PALETTE_MISMATCH);
   SetDlgItemText(IDC_SELECTION_HINT, message);
+  ::ShowWindow(GetDlgItem(IDC_SELECTION_HINT), mismatch ? SW_SHOW : SW_HIDE);
   ::EnableWindow(GetDlgItem(IDC_APPLY), draft_.changed());
   settings_navigation::SetStatus(
       m_hWnd,
@@ -523,6 +520,7 @@ LRESULT UIStyleSettingsDialog::OnDrawItem(UINT,
   weasel::AppearancePreview preview{};
   preview.dark = draw->CtlID == IDC_PREVIEW_DARK;
   preview.acrylic = draft_.acrylic();
+  preview.horizontal = settings_->PreviewStyleBool("horizontal", false);
   auto scheme = draft_.current(preview.dark);
   if (scheme.empty()) {
     // "Follow configuration" still previews the effective original choice.
@@ -553,6 +551,22 @@ LRESULT UIStyleSettingsDialog::OnDrawItem(UINT,
       static_cast<float>(settings_->PreviewLayoutInt("round_corner", 8));
   preview.border_width =
       static_cast<float>(settings_->PreviewLayoutInt("border_width", 1));
+  preview.min_width = settings_->PreviewLayoutInt("min_width", 130);
+  preview.max_width = settings_->PreviewLayoutInt("max_width", 0);
+  preview.margin_x = settings_->PreviewLayoutInt("margin_x", 11);
+  preview.margin_y = settings_->PreviewLayoutInt("margin_y", 7);
+  preview.spacing = settings_->PreviewLayoutInt("spacing", 5);
+  preview.candidate_spacing =
+      settings_->PreviewLayoutInt("candidate_spacing", 6);
+  preview.hilite_spacing = settings_->PreviewLayoutInt("hilite_spacing", 5);
+  preview.hilite_padding_x = settings_->PreviewLayoutInt("hilite_padding_x", 8);
+  preview.hilite_padding_y = settings_->PreviewLayoutInt("hilite_padding_y", 4);
+  preview.font_point = settings_->PreviewStyleInt("font_point", 11);
+  preview.label_font_point = settings_->PreviewStyleInt("label_font_point", 9);
+  preview.font_face =
+      settings_->PreviewStyleString("font_face", L"Microsoft YaHei");
+  preview.label_font_face = settings_->PreviewStyleString(
+      "label_font_face", preview.font_face.c_str());
   preview.candidates = {static_cast<LPCWSTR>(Text(IDS_APPEARANCE_SAMPLE)),
                         static_cast<LPCWSTR>(Text(IDS_APPEARANCE_SAMPLE_2)),
                         static_cast<LPCWSTR>(Text(IDS_APPEARANCE_SAMPLE_3))};

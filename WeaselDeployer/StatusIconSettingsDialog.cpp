@@ -124,60 +124,60 @@ void AddRoundedRectangle(Gdiplus::GraphicsPath* path,
 void LayoutStatusIconPage(HWND dialog) {
   using settings_navigation::MoveControl;
   MoveControl(dialog, IDC_STATUS_RESTORE,
-              settings_navigation::kTopActionLeftDlu,
-              settings_navigation::kTopActionTopDlu,
+              settings_navigation::kBottomActionLeftDlu,
+              settings_navigation::kBottomActionTopDlu,
               settings_navigation::kActionButtonWidthDlu,
               settings_navigation::kButtonHeightDlu);
   MoveControl(dialog, IDC_STATUS_BASE_CARD, settings_navigation::kPageInsetDlu,
               settings_navigation::kFirstCardTopDlu,
               settings_navigation::kPageBodyWidthDlu, 62);
-  MoveControl(dialog, IDC_STATUS_BASE_TITLE, 26, 42, 210, 12);
-  MoveControl(dialog, IDC_STATUS_CHINESE_LABEL, 28, 59, 120, 12);
-  MoveControl(dialog, IDC_STATUS_CHINESE_ICON, 396, 54, 20, 20);
-  MoveControl(dialog, IDC_STATUS_CHINESE_CHANGE, 432, 55,
+  MoveControl(dialog, IDC_STATUS_BASE_TITLE, 26, 22, 210, 12);
+  MoveControl(dialog, IDC_STATUS_CHINESE_LABEL, 28, 39, 120, 12);
+  MoveControl(dialog, IDC_STATUS_CHINESE_ICON, 396, 34, 20, 20);
+  MoveControl(dialog, IDC_STATUS_CHINESE_CHANGE, 432, 35,
               settings_navigation::kActionButtonWidthDlu,
               settings_navigation::kButtonHeightDlu);
-  MoveControl(dialog, IDC_STATUS_ENGLISH_LABEL, 28, 78, 120, 12);
-  MoveControl(dialog, IDC_STATUS_ENGLISH_ICON, 396, 73, 20, 20);
-  MoveControl(dialog, IDC_STATUS_ENGLISH_CHANGE, 432, 74,
+  MoveControl(dialog, IDC_STATUS_ENGLISH_LABEL, 28, 58, 120, 12);
+  MoveControl(dialog, IDC_STATUS_ENGLISH_ICON, 396, 53, 20, 20);
+  MoveControl(dialog, IDC_STATUS_ENGLISH_CHANGE, 432, 54,
               settings_navigation::kActionButtonWidthDlu,
               settings_navigation::kButtonHeightDlu);
 
   MoveControl(dialog, IDC_STATUS_CAPS_CARD, settings_navigation::kPageInsetDlu,
-              104, settings_navigation::kPageBodyWidthDlu, 76);
-  MoveControl(dialog, IDC_STATUS_CAPS_TITLE, 26, 112, 160, 12);
-  MoveControl(dialog, IDC_STATUS_CAPS_AUTOMATIC, 286, 109, 108,
+              84, settings_navigation::kPageBodyWidthDlu, 76);
+  MoveControl(dialog, IDC_STATUS_CAPS_TITLE, 26, 92, 160, 12);
+  MoveControl(dialog, IDC_STATUS_CAPS_AUTOMATIC, 286, 89, 108,
               settings_navigation::kButtonHeightDlu);
-  MoveControl(dialog, IDC_STATUS_CAPS_CUSTOM, 398, 109, 114,
+  MoveControl(dialog, IDC_STATUS_CAPS_CUSTOM, 398, 89, 114,
               settings_navigation::kButtonHeightDlu);
-  MoveControl(dialog, IDC_STATUS_BADGE_LETTER, 28, 133, 112, 16);
-  MoveControl(dialog, IDC_STATUS_BADGE_DOT, 28, 155, 112, 16);
-  MoveControl(dialog, IDC_STATUS_AUTO_CHINESE_ICON, 396, 130, 20, 20);
-  MoveControl(dialog, IDC_STATUS_AUTO_CHINESE_LABEL, 424, 134, 88, 12);
-  MoveControl(dialog, IDC_STATUS_AUTO_ENGLISH_ICON, 396, 152, 20, 20);
-  MoveControl(dialog, IDC_STATUS_AUTO_ENGLISH_LABEL, 424, 156, 88, 12);
-  MoveControl(dialog, IDC_STATUS_CHINESE_CAPS_LABEL, 28, 134, 160, 12);
-  MoveControl(dialog, IDC_STATUS_CHINESE_CAPS_ICON, 396, 129, 20, 20);
-  MoveControl(dialog, IDC_STATUS_CHINESE_CAPS_CHANGE, 432, 130,
+  MoveControl(dialog, IDC_STATUS_BADGE_LETTER, 28, 113, 112, 16);
+  MoveControl(dialog, IDC_STATUS_BADGE_DOT, 28, 135, 112, 16);
+  MoveControl(dialog, IDC_STATUS_AUTO_CHINESE_ICON, 396, 110, 20, 20);
+  MoveControl(dialog, IDC_STATUS_AUTO_CHINESE_LABEL, 424, 114, 88, 12);
+  MoveControl(dialog, IDC_STATUS_AUTO_ENGLISH_ICON, 396, 132, 20, 20);
+  MoveControl(dialog, IDC_STATUS_AUTO_ENGLISH_LABEL, 424, 136, 88, 12);
+  MoveControl(dialog, IDC_STATUS_CHINESE_CAPS_LABEL, 28, 114, 160, 12);
+  MoveControl(dialog, IDC_STATUS_CHINESE_CAPS_ICON, 396, 109, 20, 20);
+  MoveControl(dialog, IDC_STATUS_CHINESE_CAPS_CHANGE, 432, 110,
               settings_navigation::kActionButtonWidthDlu,
               settings_navigation::kButtonHeightDlu);
-  MoveControl(dialog, IDC_STATUS_ENGLISH_CAPS_LABEL, 28, 156, 160, 12);
-  MoveControl(dialog, IDC_STATUS_ENGLISH_CAPS_ICON, 396, 151, 20, 20);
-  MoveControl(dialog, IDC_STATUS_ENGLISH_CAPS_CHANGE, 432, 152,
+  MoveControl(dialog, IDC_STATUS_ENGLISH_CAPS_LABEL, 28, 136, 160, 12);
+  MoveControl(dialog, IDC_STATUS_ENGLISH_CAPS_ICON, 396, 131, 20, 20);
+  MoveControl(dialog, IDC_STATUS_ENGLISH_CAPS_CHANGE, 432, 132,
               settings_navigation::kActionButtonWidthDlu,
               settings_navigation::kButtonHeightDlu);
 
   MoveControl(dialog, IDC_STATUS_TASKBAR_CARD,
-              settings_navigation::kPageInsetDlu, 188,
+              settings_navigation::kPageInsetDlu, 168,
               settings_navigation::kPageBodyWidthDlu, 60);
-  MoveControl(dialog, IDC_STATUS_TASKBAR_TITLE, 26, 196, 100, 12);
-  MoveControl(dialog, IDC_STATUS_PREVIEW_CHINESE, 150, 193, 56,
+  MoveControl(dialog, IDC_STATUS_TASKBAR_TITLE, 26, 176, 100, 12);
+  MoveControl(dialog, IDC_STATUS_PREVIEW_CHINESE, 150, 173, 56,
               settings_navigation::kButtonHeightDlu);
-  MoveControl(dialog, IDC_STATUS_PREVIEW_ENGLISH, 210, 193, 56,
+  MoveControl(dialog, IDC_STATUS_PREVIEW_ENGLISH, 210, 173, 56,
               settings_navigation::kButtonHeightDlu);
-  MoveControl(dialog, IDC_STATUS_PREVIEW_CHINESE_CAPS, 270, 193, 78,
+  MoveControl(dialog, IDC_STATUS_PREVIEW_CHINESE_CAPS, 270, 173, 78,
               settings_navigation::kButtonHeightDlu);
-  MoveControl(dialog, IDC_STATUS_PREVIEW_ENGLISH_CAPS, 352, 193, 78,
+  MoveControl(dialog, IDC_STATUS_PREVIEW_ENGLISH_CAPS, 352, 173, 78,
               settings_navigation::kButtonHeightDlu);
 }
 }  // namespace

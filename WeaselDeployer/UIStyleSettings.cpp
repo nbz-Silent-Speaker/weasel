@@ -200,6 +200,27 @@ int UIStyleSettings::PreviewLayoutInt(const char* key, int fallback) {
   return (std::max)(0, value);
 }
 
+int UIStyleSettings::PreviewStyleInt(const char* key, int fallback) {
+  int value = fallback;
+  const auto path = std::string("style/") + key;
+  rime_get_api()->config_get_int(&original_, path.c_str(), &value);
+  return (std::max)(0, value);
+}
+
+bool UIStyleSettings::PreviewStyleBool(const char* key, bool fallback) {
+  Bool value = fallback ? True : False;
+  const auto path = std::string("style/") + key;
+  rime_get_api()->config_get_bool(&original_, path.c_str(), &value);
+  return value != False;
+}
+
+std::wstring UIStyleSettings::PreviewStyleString(const char* key,
+                                                 const wchar_t* fallback) {
+  const auto path = std::string("style/") + key;
+  const auto value = Value(&original_, path);
+  return value.empty() ? fallback : u8tow(value);
+}
+
 COLORREF UIStyleSettings::PreviewColor(const std::string& id,
                                        const char* key,
                                        COLORREF fallback) {
