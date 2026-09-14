@@ -176,9 +176,13 @@ inline LRESULT CALLBACK NavProc(HWND window,
     ::DeleteObject(pen);
     ::DeleteObject(brush);
     if (state->active) {
-      const int inset = (std::max)(4, (bounds.bottom - bounds.top) / 4);
+      const int measured_inset =
+          static_cast<int>((bounds.bottom - bounds.top) / 4);
+      const int inset = measured_inset > 4 ? measured_inset : 4;
+      const int measured_marker_width =
+          ::MulDiv(4, ::GetDeviceCaps(dc, LOGPIXELSX), 96);
       const int marker_width =
-          (std::max)(3, ::MulDiv(4, ::GetDeviceCaps(dc, LOGPIXELSX), 96));
+          measured_marker_width > 3 ? measured_marker_width : 3;
       RECT marker{bounds.left + 2, bounds.top + inset,
                   bounds.left + 2 + marker_width, bounds.bottom - inset};
       HBRUSH marker_brush = ::CreateSolidBrush(accent);
@@ -327,7 +331,8 @@ inline void RoundDlu(HWND dialog, WORD id, int radius_dlu) {
   if (!control)
     return;
   const RECT radius = MapDialogUnits(dialog, 0, 0, radius_dlu, radius_dlu);
-  Round(control, (std::max)(4, radius.right));
+  const int measured_radius = static_cast<int>(radius.right);
+  Round(control, measured_radius > 4 ? measured_radius : 4);
 }
 
 inline void StyleActionButton(HWND dialog, WORD id) {
@@ -425,7 +430,10 @@ inline void Install(HWND dialog, Page active, const InstallOptions& options) {
   const auto vertical = [&](int dlu) -> int {
     return static_cast<int>(MapDialogUnits(dialog, 0, 0, 0, dlu).bottom);
   };
-  const int margin = (std::max)(vertical(7), sidebar_width / 16);
+  const int vertical_margin = vertical(7);
+  const int horizontal_margin = sidebar_width / 16;
+  const int margin =
+      vertical_margin > horizontal_margin ? vertical_margin : horizontal_margin;
   const int content_width = sidebar_width - margin * 2;
 
   struct Entry {
