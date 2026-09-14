@@ -54,21 +54,6 @@ void Configurator::Initialize() {
   rime_api->deployer_initialize(NULL);
 }
 
-static bool configure_switcher(RimeLeversApi* api,
-                               RimeSwitcherSettings* switchcer_settings,
-                               bool* reconfigured) {
-  RimeCustomSettings* settings = (RimeCustomSettings*)switchcer_settings;
-  if (!api->load_settings(settings))
-    return false;
-  SwitcherSettingsDialog dialog(switchcer_settings);
-  if (dialog.DoModal() == IDOK) {
-    if (api->save_settings(settings))
-      *reconfigured = true;
-    return true;
-  }
-  return false;
-}
-
 static bool configure_first_run_schema(RimeLeversApi* api,
                                        RimeSwitcherSettings* switcher_settings,
                                        bool* reconfigured) {
@@ -102,6 +87,9 @@ static bool configure_first_run_schema(RimeLeversApi* api,
 }
 
 int Configurator::Run(bool installing) {
+  if (!installing)
+    return ConfigureSettings(settings_navigation::Page::Input);
+
   RimeModule* levers = rime_get_api()->find_module("levers");
   if (!levers)
     return 1;
@@ -119,9 +107,6 @@ int Configurator::Run(bool installing) {
   if (first_run) {
     switcher_configured =
         configure_first_run_schema(api, switcher_settings, &reconfigured);
-  } else if (!installing) {
-    switcher_configured =
-        configure_switcher(api, switcher_settings, &reconfigured);
   }
   api->custom_settings_destroy((RimeCustomSettings*)switcher_settings);
 
@@ -135,6 +120,9 @@ int Configurator::Run(bool installing) {
 }
 
 int Configurator::ConfigureColorScheme(weasel::ColorSchemeTarget target) {
+  if (target == weasel::ColorSchemeTarget::Default)
+    return ConfigureSettings(settings_navigation::Page::Appearance);
+
   RimeModule* levers = rime_get_api()->find_module("levers");
   if (!levers)
     return 1;
@@ -153,15 +141,57 @@ int Configurator::ConfigureColorScheme(weasel::ColorSchemeTarget target) {
 }
 
 int Configurator::ConfigureFonts() {
-  FontSettingsDialog dialog;
-  dialog.DoModal();
-  return 0;
+  return ConfigureSettings(settings_navigation::Page::Fonts);
 }
 
 int Configurator::ConfigureStatusIcons() {
-  StatusIconSettingsDialog dialog;
-  dialog.DoModal();
-  return 0;
+  return ConfigureSettings(settings_navigation::Page::StatusIcons);
+}
+
+int Configurator::ConfigureSettings(settings_navigation::Page initial_page) {
+  auto page = initial_page;
+  for (;;) {
+    INT_PTR result = IDCANCEL;
+    if (page == settings_navigation::Page::Input) {
+      RimeModule* levers = rime_get_api()->find_module("levers");
+      if (!levers)
+        return 1;
+      auto* api = reinterpret_cast<RimeLeversApi*>(levers->get_api());
+      if (!api)
+        return 1;
+      RimeSwitcherSettings* switcher = api->switcher_settings_init();
+      auto* settings = reinterpret_cast<RimeCustomSettings*>(switcher);
+      if (!api->load_settings(settings)) {
+        api->custom_settings_destroy(settings);
+        return 1;
+      }
+      SwitcherSettingsDialog dialog(switcher);
+      result = dialog.DoModal();
+      api->custom_settings_destroy(settings);
+    } else if (page == settings_navigation::Page::Appearance) {
+      RimeModule* levers = rime_get_api()->find_module("levers");
+      if (!levers)
+        return 1;
+      auto* api = reinterpret_cast<RimeLeversApi*>(levers->get_api());
+      UIStyleSettings settings(weasel::ColorSchemeTarget::Default);
+      if (!api || !api->load_settings(settings.settings())) {
+        MSG_BY_IDS(IDS_STR_SCHEME_SAVE_FAILED, IDS_STR_WEASEL,
+                   MB_OK | MB_ICONERROR);
+        return 1;
+      }
+      UIStyleSettingsDialog dialog(&settings);
+      result = dialog.DoModal();
+    } else if (page == settings_navigation::Page::Fonts) {
+      FontSettingsDialog dialog;
+      result = dialog.DoModal();
+    } else {
+      StatusIconSettingsDialog dialog;
+      result = dialog.DoModal();
+    }
+    if (!settings_navigation::IsPageResult(result))
+      return 0;
+    page = settings_navigation::PageFromCommand(static_cast<WORD>(result));
+  }
 }
 
 int Configurator::UpdateWorkspace(bool report_errors) {

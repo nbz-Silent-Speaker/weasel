@@ -58,6 +58,7 @@ class UIStyleSettingsDialog : public CDialogImpl<UIStyleSettingsDialog> {
   void FillSingles();
   void RefreshMode();
   void RefreshPreview();
+  bool ConfirmDiscard() const;
   void ShowEditor(bool single);
   void DrawCombo(const DRAWITEMSTRUCT& draw);
   CString Text(UINT id) const;

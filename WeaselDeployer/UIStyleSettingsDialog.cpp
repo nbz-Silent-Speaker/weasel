@@ -47,7 +47,10 @@ LRESULT UIStyleSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
     CComboBox(GetDlgItem(id)).SetItemHeight(-1, item_height_);
   RefreshMode();
   ready_ = true;
-  settings_navigation::Install(m_hWnd, settings_navigation::Page::Appearance);
+  settings_navigation::Install(
+      m_hWnd, settings_navigation::Page::Appearance,
+      {IDC_APPLY, IDCANCEL, WeaselUserDataPath().wstring(), {IDOK}});
+  RefreshPreview();
   CenterWindow();
   return TRUE;
 }
@@ -184,6 +187,13 @@ void UIStyleSettingsDialog::RefreshPreview() {
     message = Text(IDS_PALETTE_MISMATCH);
   SetDlgItemText(IDC_SELECTION_HINT, message);
   ::EnableWindow(GetDlgItem(IDC_APPLY), draft_.changed());
+  settings_navigation::SetStatus(
+      m_hWnd,
+      draft_.changed()
+          ? settings_navigation::LocalText(L"有更改待应用", L"有變更待套用",
+                                           L"Changes ready to apply")
+          : settings_navigation::LocalText(L"所有设置已应用", L"所有設定已套用",
+                                           L"All settings applied"));
   ::InvalidateRect(GetDlgItem(IDC_PREVIEW_LIGHT), nullptr, FALSE);
   ::InvalidateRect(GetDlgItem(IDC_PREVIEW_DARK), nullptr, FALSE);
 }
@@ -249,46 +259,42 @@ LRESULT UIStyleSettingsDialog::OnReset(WORD, WORD, HWND, BOOL&) {
 }
 
 LRESULT UIStyleSettingsDialog::OnCancel(WORD, WORD, HWND, BOOL&) {
-  EndDialog(IDCANCEL);
+  if (ConfirmDiscard())
+    EndDialog(IDCANCEL);
   return 0;
 }
 
 LRESULT UIStyleSettingsDialog::OnClose(UINT, WPARAM, LPARAM, BOOL&) {
-  EndDialog(IDCANCEL);
+  if (ConfirmDiscard())
+    EndDialog(IDCANCEL);
   return 0;
+}
+
+bool UIStyleSettingsDialog::ConfirmDiscard() const {
+  if (!draft_.changed())
+    return true;
+  return ::MessageBoxW(
+             m_hWnd,
+             settings_navigation::LocalText(
+                 L"候选框设置尚未应用。是否放弃这些更改？",
+                 L"候選框設定尚未套用。是否放棄這些變更？",
+                 L"Candidate window changes have not been applied. Discard "
+                 L"them?")
+                 .c_str(),
+             settings_navigation::LocalText(L"未应用的设置", L"未套用的設定",
+                                            L"Unapplied settings")
+                 .c_str(),
+             MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES;
 }
 
 LRESULT UIStyleSettingsDialog::OnNavigate(WORD, WORD id, HWND, BOOL&) {
   const auto page = settings_navigation::PageFromCommand(id);
   if (page == settings_navigation::Page::Appearance)
     return 0;
-  if (draft_.changed() &&
-      ::MessageBoxW(
-          m_hWnd,
-          settings_navigation::LocalText(
-              L"外观设置尚未应用。是否放弃这些更改？",
-              L"外觀設定尚未套用。是否放棄這些變更？",
-              L"Appearance changes have not been applied. Discard them?")
-              .c_str(),
-          settings_navigation::LocalText(L"未应用的设置", L"未套用的設定",
-                                         L"Unapplied settings")
-              .c_str(),
-          MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) != IDYES) {
+  if (!ConfirmDiscard()) {
     return 0;
   }
-  if (!settings_navigation::Launch(page)) {
-    ::MessageBoxW(m_hWnd,
-                  settings_navigation::LocalText(
-                      L"无法打开设置页面。", L"無法開啟設定頁面。",
-                      L"Could not open the settings page.")
-                      .c_str(),
-                  settings_navigation::LocalText(L"小狼毫设置", L"小狼毫設定",
-                                                 L"Weasel settings")
-                      .c_str(),
-                  MB_OK | MB_ICONERROR);
-    return 0;
-  }
-  EndDialog(IDCANCEL);
+  EndDialog(id);
   return 0;
 }
 

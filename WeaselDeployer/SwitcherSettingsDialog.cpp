@@ -434,8 +434,15 @@ bool SwitcherSettingsDialog::HasPendingChanges() const {
 }
 
 void SwitcherSettingsDialog::UpdateApplyButton() {
-  if (!apply_operation_)
-    ::EnableWindow(GetDlgItem(IDOK), HasPendingChanges());
+  if (apply_operation_)
+    return;
+  const bool pending = HasPendingChanges();
+  ::EnableWindow(GetDlgItem(IDOK), pending);
+  settings_navigation::SetStatus(
+      m_hWnd, pending ? LocalText(L"有更改待应用", L"有變更待套用",
+                                  L"Changes ready to apply")
+                      : LocalText(L"所有设置已应用", L"所有設定已套用",
+                                  L"All settings applied"));
 }
 
 void SwitcherSettingsDialog::DiscardPendingModel() {
@@ -1563,7 +1570,12 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   UpdateCheckButton();
   SetTimer(kModelTimer, 500);
 
-  settings_navigation::Install(m_hWnd, settings_navigation::Page::Input);
+  settings_navigation::Install(m_hWnd, settings_navigation::Page::Input,
+                               {IDOK,
+                                IDCANCEL,
+                                WeaselUserDataPath().wstring(),
+                                {IDC_USER_DATA_LABEL, IDC_USER_DATA_FOLDER}});
+  UpdateApplyButton();
   CenterWindow();
   BringWindowToTop();
   return TRUE;
@@ -1603,19 +1615,9 @@ LRESULT SwitcherSettingsDialog::OnNavigate(WORD, WORD id, HWND, BOOL&) {
     return 0;
   if (!ConfirmDiscardChanges())
     return 0;
-  if (!settings_navigation::Launch(page)) {
-    ::MessageBoxW(
-        m_hWnd,
-        LocalText(L"无法打开设置页面。", L"無法開啟設定頁面。",
-                  L"Could not open the settings page.")
-            .c_str(),
-        LocalText(L"小狼毫设置", L"小狼毫設定", L"Weasel settings").c_str(),
-        MB_OK | MB_ICONERROR);
-    return 0;
-  }
   DiscardPendingModel();
   KillTimer(kModelTimer);
-  EndDialog(IDCANCEL);
+  EndDialog(id);
   return 0;
 }
 

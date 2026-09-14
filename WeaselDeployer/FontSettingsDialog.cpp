@@ -1,6 +1,8 @@
 #include "stdafx.h"
 #include "FontSettingsDialog.h"
 
+#include <WeaselUtility.h>
+
 #include <algorithm>
 #include <cwctype>
 #include <set>
@@ -120,7 +122,12 @@ LRESULT FontSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
                    IDC_FONT_PREVIEW_HORIZONTAL);
   LoadCurrentChoice();
   RefreshApplyState();
-  settings_navigation::Install(m_hWnd, settings_navigation::Page::Fonts);
+  settings_navigation::Install(m_hWnd, settings_navigation::Page::Fonts,
+                               {IDC_FONT_APPLY,
+                                IDCANCEL,
+                                WeaselUserDataPath().wstring(),
+                                {IDC_FONT_MESSAGE}});
+  RefreshApplyState();
   CenterWindow();
   return TRUE;
 }
@@ -262,13 +269,19 @@ void FontSettingsDialog::RefreshShapeSupport() {
 }
 
 void FontSettingsDialog::RefreshApplyState() {
-  CWindow(GetDlgItem(IDC_FONT_APPLY)).EnableWindow(draft_ != initial_);
+  const bool pending = draft_ != initial_;
+  CWindow(GetDlgItem(IDC_FONT_APPLY)).EnableWindow(pending);
   ::SetDlgItemTextW(
       m_hWnd, IDC_FONT_MESSAGE,
       (draft_ != initial_ ? LocalText(L"字体更改等待应用", L"字型變更等待套用",
                                       L"Font changes are ready to apply")
                           : L"")
           .c_str());
+  settings_navigation::SetStatus(
+      m_hWnd, pending ? LocalText(L"有更改待应用", L"有變更待套用",
+                                  L"Changes ready to apply")
+                      : LocalText(L"所有设置已应用", L"所有設定已套用",
+                                  L"All settings applied"));
 }
 
 void FontSettingsDialog::RefreshPreview() {
@@ -461,17 +474,7 @@ LRESULT FontSettingsDialog::OnNavigate(WORD, WORD id, HWND, BOOL&) {
     return 0;
   if (!ConfirmDiscard())
     return 0;
-  if (!settings_navigation::Launch(page)) {
-    ::MessageBoxW(
-        m_hWnd,
-        LocalText(L"无法打开设置页面。", L"無法開啟設定頁面。",
-                  L"Could not open the settings page.")
-            .c_str(),
-        LocalText(L"小狼毫设置", L"小狼毫設定", L"Weasel settings").c_str(),
-        MB_OK | MB_ICONERROR);
-    return 0;
-  }
-  EndDialog(IDCANCEL);
+  EndDialog(id);
   return 0;
 }
 
