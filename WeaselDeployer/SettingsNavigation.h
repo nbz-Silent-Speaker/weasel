@@ -208,8 +208,8 @@ inline void Install(HWND dialog, Page active, const InstallOptions& options) {
       window.bottom - window.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
   RECT client{};
   ::GetClientRect(dialog, &client);
-  const auto vertical = [&](int dlu) {
-    return MapDialogUnits(dialog, 0, 0, 0, dlu).bottom;
+  const auto vertical = [&](int dlu) -> int {
+    return static_cast<int>(MapDialogUnits(dialog, 0, 0, 0, dlu).bottom);
   };
   const int margin = (std::max)(vertical(7), sidebar_width / 15);
   const int content_width = sidebar_width - margin * 2;
