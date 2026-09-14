@@ -122,6 +122,8 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
   struct ApplyOperation {
     int result = 1;
     PendingModelAction model_action = PendingModelAction::None;
+    bool model_operation_failed = false;
+    std::wstring model_operation_error;
     std::atomic<bool> done{false};
   };
   std::shared_ptr<ApplyOperation> apply_operation_;
@@ -135,6 +137,9 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
   PendingModelAction pending_model_action_ = PendingModelAction::None;
   unsigned long long latest_model_size_ = 0;
   std::wstring latest_model_sha256_;
+  std::wstring model_download_phase_;
+  std::wstring model_download_speed_;
+  std::wstring model_download_amount_;
   bool loading_input_mode_ = false;
   bool input_mode_modified_ = false;
   std::wstring selected_input_mode_ = L"全拼";

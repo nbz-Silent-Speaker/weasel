@@ -467,10 +467,12 @@ void SwitcherSettingsDialog::UpdateApplyButton() {
 void SwitcherSettingsDialog::DiscardPendingModel() {
   if (pending_model_action_ == PendingModelAction::None)
     return;
-  std::wstring error;
-  if (!model_manager_.Rollback(&error)) {
-    LOG(ERROR) << "Unable to roll back an unapplied Wanxiang model change: "
-               << wtou8(error);
+  if (pending_model_action_ == PendingModelAction::Install) {
+    std::wstring error;
+    if (!model_manager_.Rollback(&error)) {
+      LOG(ERROR) << "Unable to roll back an unapplied Wanxiang model: "
+                 << wtou8(error);
+    }
   }
   pending_model_action_ = PendingModelAction::None;
   model_operation_failed_ = false;
@@ -911,7 +913,15 @@ void SwitcherSettingsDialog::UpdateModelUi() {
     swprintf_s(label, L"%d%%", value / 10);
     set_text(IDC_MODEL_PROGRESS_TEXT, label);
   }
-  std::wstring note, download_status, primary, secondary;
+  std::wstring note, download_phase, download_speed, download_amount, primary,
+      secondary;
+  const auto format_download_amount = [&]() {
+    const auto total = progress.total ? progress.total : target_size;
+    wchar_t amount[64] = {};
+    swprintf_s(amount, L"%.1f / %.1f MB", progress.transferred / 1000000.0,
+               total / 1000000.0);
+    return std::wstring(amount);
+  };
   bool enabled = true;
   model_button_accent_ = false;
   if (state != State::Downloading) {
@@ -925,55 +935,36 @@ void SwitcherSettingsDialog::UpdateModelUi() {
           L"下載完成後自動校驗並安裝；點擊「套用」完成重新部署。",
           L"The download is verified and installed automatically; select "
           L"Apply to redeploy.");
-      download_status = LocalText(L"正在下载", L"正在下載", L"Downloading");
+      download_phase = LocalText(L"正在下载", L"正在下載", L"Downloading");
       if (last_progress_tick_ && progress.transferred >= last_progress_bytes_) {
         const ULONGLONG now = ::GetTickCount64();
         const ULONGLONG elapsed = now - last_progress_tick_;
         if (elapsed) {
           wchar_t speed[48] = {};
-          swprintf_s(speed, L" · %.1f MB/s",
+          swprintf_s(speed, L"%.1f MB/s",
                      (progress.transferred - last_progress_bytes_) * 1000.0 /
                          elapsed / 1000000.0);
-          download_status += speed;
+          download_speed = speed;
         }
       }
       last_progress_tick_ = ::GetTickCount64();
       last_progress_bytes_ = progress.transferred;
-      {
-        const auto total = progress.total ? progress.total : target_size;
-        wchar_t amount[80] = {};
-        swprintf_s(amount, L" · %.1f / %.1f MB",
-                   progress.transferred / 1000000.0, total / 1000000.0);
-        download_status += amount;
-      }
+      download_amount = format_download_amount();
       primary = LocalText(L"暂停下载", L"暫停下載", L"Pause");
       break;
     case State::WaitingRetry:
       note = ModelErrorText(progress.error_code) +
              LocalText(L" 将自动重试。", L" 將自動重試。",
                        L" Retrying automatically.");
-      download_status =
-          LocalText(L"等待重试", L"等待重試", L"Waiting to retry");
-      {
-        const auto total = progress.total ? progress.total : target_size;
-        wchar_t amount[80] = {};
-        swprintf_s(amount, L" · %.1f / %.1f MB",
-                   progress.transferred / 1000000.0, total / 1000000.0);
-        download_status += amount;
-      }
+      download_phase = LocalText(L"等待重试", L"等待重試", L"Waiting to retry");
+      download_amount = format_download_amount();
       primary = LocalText(L"立即重试", L"立即重試", L"Retry now");
       break;
     case State::Paused:
       note = LocalText(L"已暂停，可继续下载。", L"已暫停，可繼續下載。",
                        L"Paused. Resume when ready.");
-      download_status = LocalText(L"已暂停", L"已暫停", L"Paused");
-      {
-        const auto total = progress.total ? progress.total : target_size;
-        wchar_t amount[80] = {};
-        swprintf_s(amount, L" · %.1f / %.1f MB",
-                   progress.transferred / 1000000.0, total / 1000000.0);
-        download_status += amount;
-      }
+      download_phase = LocalText(L"已暂停", L"已暫停", L"Paused");
+      download_amount = format_download_amount();
       primary = LocalText(L"继续下载", L"繼續下載", L"Resume");
       break;
     case State::RestartRequired:
@@ -992,15 +983,9 @@ void SwitcherSettingsDialog::UpdateModelUi() {
             L"無法存取下載快取，請檢查目錄和磁碟後重試。",
             L"Cannot access the download cache. Check the folder and disk.");
       }
-      download_status =
+      download_phase =
           LocalText(L"下载中断", L"下載中斷", L"Download interrupted");
-      {
-        const auto total = progress.total ? progress.total : target_size;
-        wchar_t amount[80] = {};
-        swprintf_s(amount, L" · %.1f / %.1f MB",
-                   progress.transferred / 1000000.0, total / 1000000.0);
-        download_status += amount;
-      }
+      download_amount = format_download_amount();
       primary = LocalText(L"重试", L"重試", L"Retry");
       break;
     case State::Transferred:
@@ -1089,6 +1074,14 @@ void SwitcherSettingsDialog::UpdateModelUi() {
     }
   }
   set_text(IDC_MODEL_NOTE, note);
+  std::wstring download_status = download_phase;
+  if (!download_speed.empty())
+    download_status += L" · " + download_speed;
+  if (!download_amount.empty())
+    download_status += L" · " + download_amount;
+  model_download_phase_ = std::move(download_phase);
+  model_download_speed_ = std::move(download_speed);
+  model_download_amount_ = std::move(download_amount);
   set_text(IDC_MODEL_DOWNLOAD_STATUS, download_status);
   set_text(IDC_MODEL_DOWNLOAD, primary);
   set_text(IDC_MODEL_SECONDARY, secondary);
@@ -1198,6 +1191,54 @@ LRESULT SwitcherSettingsDialog::OnDrawItem(UINT,
       ::SelectObject(draw->hDC, old_font);
     if ((draw->itemState & ODS_FOCUS) != 0 && !edit_portion)
       ::DrawFocusRect(draw->hDC, &draw->rcItem);
+    handled = TRUE;
+    return TRUE;
+  }
+  if (id == IDC_MODEL_DOWNLOAD_STATUS) {
+    const int width = draw->rcItem.right - draw->rcItem.left;
+    const int height = draw->rcItem.bottom - draw->rcItem.top;
+    RECT canvas = {0, 0, width, height};
+    HDC buffer = ::CreateCompatibleDC(draw->hDC);
+    HBITMAP bitmap =
+        buffer ? ::CreateCompatibleBitmap(draw->hDC, width, height) : nullptr;
+    HGDIOBJ old_bitmap =
+        bitmap ? ::SelectObject(buffer, bitmap) : static_cast<HGDIOBJ>(nullptr);
+    HDC paint = old_bitmap ? buffer : draw->hDC;
+    RECT paint_area = old_bitmap ? canvas : draw->rcItem;
+    ::FillRect(paint, &paint_area, ::GetSysColorBrush(COLOR_WINDOW));
+    ::SetBkMode(paint, TRANSPARENT);
+    ::SetTextColor(paint, ::GetSysColor(COLOR_GRAYTEXT));
+    HFONT font = reinterpret_cast<HFONT>(
+        ::SendMessageW(draw->hwndItem, WM_GETFONT, 0, 0));
+    const HGDIOBJ old_font = font ? ::SelectObject(paint, font) : nullptr;
+    const int origin = old_bitmap ? 0 : draw->rcItem.left;
+    const int top = old_bitmap ? 0 : draw->rcItem.top;
+    const int bottom = old_bitmap ? height : draw->rcItem.bottom;
+    const int speed_left = origin + width * 34 / 100;
+    const int amount_left = origin + width * 60 / 100;
+    RECT phase = {origin, top, speed_left, bottom};
+    RECT speed = {speed_left, top, amount_left, bottom};
+    RECT amount = {amount_left, top, origin + width, bottom};
+    const UINT format =
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX;
+    ::DrawTextW(paint, model_download_phase_.c_str(), -1, &phase, format);
+    const std::wstring speed_text =
+        model_download_speed_.empty() ? L"" : L"· " + model_download_speed_;
+    const std::wstring amount_text =
+        model_download_amount_.empty() ? L"" : L"· " + model_download_amount_;
+    ::DrawTextW(paint, speed_text.c_str(), -1, &speed, format);
+    ::DrawTextW(paint, amount_text.c_str(), -1, &amount, format);
+    if (old_font)
+      ::SelectObject(paint, old_font);
+    if (old_bitmap) {
+      ::BitBlt(draw->hDC, draw->rcItem.left, draw->rcItem.top, width, height,
+               buffer, 0, 0, SRCCOPY);
+      ::SelectObject(buffer, old_bitmap);
+    }
+    if (bitmap)
+      ::DeleteObject(bitmap);
+    if (buffer)
+      ::DeleteDC(buffer);
     handled = TRUE;
     return TRUE;
   }
@@ -1806,17 +1847,6 @@ LRESULT SwitcherSettingsDialog::OnModelPrimary(WORD, WORD, HWND, BOOL&) {
 
 LRESULT SwitcherSettingsDialog::OnModelSecondary(WORD, WORD, HWND, BOOL&) {
   if (pending_model_action_ == PendingModelAction::Remove) {
-    std::wstring error;
-    if (!model_manager_.Rollback(&error)) {
-      model_operation_failed_ = true;
-      ::MessageBoxW(
-          m_hWnd, error.c_str(),
-          LocalText(L"无法取消移除", L"無法取消移除", L"Unable to undo removal")
-              .c_str(),
-          MB_OK | MB_ICONERROR);
-      UpdateModelUi();
-      return 0;
-    }
     pending_model_action_ = PendingModelAction::None;
     model_operation_failed_ = false;
     UpdateApplyButton();
@@ -1848,15 +1878,6 @@ LRESULT SwitcherSettingsDialog::OnModelSecondary(WORD, WORD, HWND, BOOL&) {
   if (answer != IDYES)
     return 0;
 
-  std::wstring error;
-  if (!model_manager_.RemoveInstalled(&error)) {
-    ::MessageBoxW(m_hWnd, error.c_str(),
-                  LocalText(L"无法移除语法模型", L"無法移除語法模型",
-                            L"Unable to remove grammar model")
-                      .c_str(),
-                  MB_OK | MB_ICONERROR);
-    return 0;
-  }
   pending_model_action_ = PendingModelAction::Remove;
   model_operation_failed_ = false;
   UpdateApplyButton();
@@ -1926,7 +1947,13 @@ bool SwitcherSettingsDialog::ApplyChanges() {
   apply_operation_ = std::make_shared<ApplyOperation>();
   apply_operation_->model_action = model_action;
   try {
-    std::thread([operation = apply_operation_]() {
+    std::thread([this, operation = apply_operation_, model_action]() {
+      if (model_action == PendingModelAction::Remove &&
+          !model_manager_.RemoveInstalled(&operation->model_operation_error)) {
+        operation->model_operation_failed = true;
+        operation->done.store(true);
+        return;
+      }
       Configurator configurator;
       operation->result = configurator.UpdateWorkspace(false);
       operation->done.store(true);
@@ -1972,9 +1999,34 @@ void SwitcherSettingsDialog::FinishApply() {
     return;
   const int deployment_result = apply_operation_->result;
   const PendingModelAction model_action = apply_operation_->model_action;
+  const bool model_operation_failed = apply_operation_->model_operation_failed;
+  const std::wstring model_operation_error =
+      apply_operation_->model_operation_error;
   apply_operation_.reset();
-  bool success = deployment_result == 0;
-  if (!success) {
+  bool success = !model_operation_failed && deployment_result == 0;
+  if (model_operation_failed) {
+    const bool settings_restored = RestorePersistedSettings();
+    model_operation_failed_ = true;
+    std::wstring message = model_operation_error;
+    if (!settings_restored) {
+      message += LocalText(
+          L"\n同时无法恢复先前的设置，请保留当前文件并查看部署日志。",
+          L"\n同時無法恢復先前的設定，請保留目前檔案並查看部署記錄。",
+          L"\nThe previous settings could not be restored. Keep the current "
+          L"files and review the deployment log.");
+    }
+    if (!close_after_apply_) {
+      ::MessageBoxW(m_hWnd, message.c_str(),
+                    LocalText(L"无法移除语法模型", L"無法移除語法模型",
+                              L"Unable to remove grammar model")
+                        .c_str(),
+                    MB_OK | MB_ICONERROR);
+    } else {
+      LOG(ERROR) << "Background model removal failed after the settings "
+                    "window closed: "
+                 << wtou8(message);
+    }
+  } else if (!success) {
     const bool had_pending_model = model_action != PendingModelAction::None;
     std::wstring rollback_error;
     const bool file_restored =
