@@ -336,9 +336,10 @@ inline LRESULT CALLBACK CheckboxProc(HWND window,
 
     const int scale = ::GetDeviceCaps(dc, LOGPIXELSX);
     const int measured_size = ::MulDiv(14, scale, 96);
-    const int box_size = (std::min)(bounds.bottom - bounds.top - 2,
-                                    (std::max)(measured_size, 12));
-    const int box_top = (bounds.bottom - bounds.top - box_size) / 2;
+    const int control_height = static_cast<int>(bounds.bottom - bounds.top);
+    const int box_size =
+        (std::min)(control_height - 2, (std::max)(measured_size, 12));
+    const int box_top = (control_height - box_size) / 2;
     RECT box{bounds.left, box_top, bounds.left + box_size, box_top + box_size};
     const COLORREF fill = !enabled       ? ::GetSysColor(COLOR_BTNFACE)
                           : checked      ? accent
