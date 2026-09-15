@@ -122,6 +122,62 @@ inline COLORREF Mix(COLORREF foreground, COLORREF background, int alpha) {
              mix(GetBValue(foreground), GetBValue(background)));
 }
 
+inline COLORREF SidebarSurface() {
+  return Mix(::GetSysColor(COLOR_HIGHLIGHT), ::GetSysColor(COLOR_BTNFACE), 7);
+}
+
+struct SidebarState {
+  int width = 0;
+  HBRUSH brush = nullptr;
+};
+
+inline LRESULT CALLBACK SidebarProc(HWND window,
+                                    UINT message,
+                                    WPARAM wparam,
+                                    LPARAM lparam,
+                                    UINT_PTR,
+                                    DWORD_PTR data) {
+  auto* state = reinterpret_cast<SidebarState*>(data);
+  if (message == WM_ERASEBKGND) {
+    HDC dc = reinterpret_cast<HDC>(wparam);
+    RECT bounds{};
+    ::GetClientRect(window, &bounds);
+    RECT sidebar = bounds;
+    sidebar.right = (std::min)(sidebar.right, state->width);
+    ::FillRect(dc, &sidebar, state->brush);
+    bounds.left = sidebar.right;
+    ::FillRect(dc, &bounds, ::GetSysColorBrush(COLOR_BTNFACE));
+    return 1;
+  }
+  if (message == WM_CTLCOLORSTATIC) {
+    HWND control = reinterpret_cast<HWND>(lparam);
+    RECT bounds{};
+    ::GetWindowRect(control, &bounds);
+    ::MapWindowPoints(HWND_DESKTOP, window, reinterpret_cast<POINT*>(&bounds),
+                      2);
+    if (bounds.left < state->width) {
+      HDC dc = reinterpret_cast<HDC>(wparam);
+      ::SetBkColor(dc, SidebarSurface());
+      return reinterpret_cast<LRESULT>(state->brush);
+    }
+  }
+  if (message == WM_SYSCOLORCHANGE) {
+    HBRUSH brush = ::CreateSolidBrush(SidebarSurface());
+    if (brush) {
+      ::DeleteObject(state->brush);
+      state->brush = brush;
+    }
+    ::RedrawWindow(window, nullptr, nullptr,
+                   RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+  }
+  if (message == WM_NCDESTROY) {
+    ::RemoveWindowSubclass(window, SidebarProc, 4);
+    ::DeleteObject(state->brush);
+    delete state;
+  }
+  return ::DefSubclassProc(window, message, wparam, lparam);
+}
+
 struct NavState {
   bool active;
   bool hover;
@@ -164,7 +220,7 @@ inline LRESULT CALLBACK NavProc(HWND window,
     HDC dc = ::BeginPaint(window, &paint);
     RECT bounds{};
     ::GetClientRect(window, &bounds);
-    const COLORREF surface = ::GetSysColor(COLOR_BTNFACE);
+    const COLORREF surface = SidebarSurface();
     const COLORREF accent = ::GetSysColor(COLOR_HIGHLIGHT);
     const COLORREF fill =
         state->active ? Mix(accent, surface, 38)
@@ -514,6 +570,18 @@ inline void Install(HWND dialog, Page active, const InstallOptions& options) {
       LocalText(L"小狼毫设置", L"小狼毫設定", L"Weasel settings").c_str());
   const int sidebar_width =
       MapDialogUnits(dialog, 0, 0, kSidebarWidthDlu, 0).right;
+  DWORD_PTR sidebar_data = 0;
+  if (!::GetWindowSubclass(dialog, SidebarProc, 4, &sidebar_data)) {
+    auto* state =
+        new SidebarState{sidebar_width, ::CreateSolidBrush(SidebarSurface())};
+    if (!state->brush ||
+        !::SetWindowSubclass(dialog, SidebarProc, 4,
+                             reinterpret_cast<DWORD_PTR>(state))) {
+      if (state->brush)
+        ::DeleteObject(state->brush);
+      delete state;
+    }
+  }
   struct Shift {
     HWND parent;
     int x;
