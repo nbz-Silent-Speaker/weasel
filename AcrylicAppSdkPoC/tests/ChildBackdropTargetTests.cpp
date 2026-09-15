@@ -281,8 +281,7 @@ int main() {
       weasel::AppearanceDraft draft;
       const weasel::AppearanceDraft::Colors original{
           "glass_day", "glass_night", "plain_day", "plain_night"};
-      draft.Load(original, true,
-                 weasel::AppearanceThemeMode::FollowSystem);
+      draft.Load(original, true, weasel::AppearanceThemeMode::FollowSystem);
       Check(!draft.changed());
       draft.SelectPair("glass_new_day", "glass_new_night");
       draft.SetAcrylic(false);
@@ -298,8 +297,7 @@ int main() {
       draft.SetThemeMode(weasel::AppearanceThemeMode::Dark);
       Check(draft.changed());
       // Reopening after Cancel loads the unchanged persisted choices.
-      draft.Load(original, true,
-                 weasel::AppearanceThemeMode::FollowSystem);
+      draft.Load(original, true, weasel::AppearanceThemeMode::FollowSystem);
       Check(!draft.changed() && draft.colors() == original);
     });
     Run("appearance reset restores the complete page defaults", [] {
@@ -308,21 +306,18 @@ int main() {
                  false, weasel::AppearanceThemeMode::Dark);
       draft.Reset();
       Check(draft.acrylic());
-      Check(draft.theme_mode() ==
-            weasel::AppearanceThemeMode::FollowSystem);
+      Check(draft.theme_mode() == weasel::AppearanceThemeMode::FollowSystem);
       Check(draft.colors() == weasel::AppearanceDraft::Colors{
                                   "base:Fluent_light", "base:Fluent_dark",
                                   "base:Fluent_light", "base:Fluent_dark"});
       Check(draft.changed());
       const auto applied = draft.colors();
-      draft.Load(applied, true,
-                 weasel::AppearanceThemeMode::FollowSystem);
+      draft.Load(applied, true, weasel::AppearanceThemeMode::FollowSystem);
       Check(!draft.changed());
       draft.SetThemeMode(weasel::AppearanceThemeMode::Light);
       Check(draft.changed());
       draft.Load(applied, true, weasel::AppearanceThemeMode::Light);
-      Check(!draft.changed() &&
-            draft.current(false) == "base:Fluent_light");
+      Check(!draft.changed() && draft.current(false) == "base:Fluent_light");
     });
     Run("source palettes keep duplicate IDs and raw custom path patches "
         "separate",

@@ -9,9 +9,8 @@
 namespace {
 constexpr int kSettingsColumnWidthDlu = 198;
 constexpr int kColumnGapDlu = 12;
-constexpr int kPreviewColumnLeftDlu =
-    settings_navigation::kPageInsetDlu + kSettingsColumnWidthDlu +
-    kColumnGapDlu;
+constexpr int kPreviewColumnLeftDlu = settings_navigation::kPageInsetDlu +
+                                      kSettingsColumnWidthDlu + kColumnGapDlu;
 constexpr int kPreviewColumnWidthDlu = 302;
 constexpr int kPaletteCardTopDlu = 90;
 constexpr int kPaletteCardHeightDlu = 158;
@@ -65,9 +64,9 @@ void LayoutAppearancePage(HWND dialog) {
   MoveControl(dialog, IDC_APPEARANCE_THEME_CARD,
               settings_navigation::kPageInsetDlu, 52, kSettingsColumnWidthDlu,
               settings_navigation::kSingleRowCardHeightDlu);
-  MoveControl(dialog, IDC_APPEARANCE_CARD,
-              settings_navigation::kPageInsetDlu, kPaletteCardTopDlu,
-              kSettingsColumnWidthDlu, kPaletteCardHeightDlu);
+  MoveControl(dialog, IDC_APPEARANCE_CARD, settings_navigation::kPageInsetDlu,
+              kPaletteCardTopDlu, kSettingsColumnWidthDlu,
+              kPaletteCardHeightDlu);
   MoveControl(dialog, IDC_APPEARANCE_ACRYLIC_LABEL, 26, 24, 116, 12);
   MoveControl(dialog, IDC_APPEARANCE_ACRYLIC_STATE, 164, 24, 20, 12);
   MoveControl(dialog, IDC_ACRYLIC_ENABLED, 188, 22, 14, 16);
@@ -147,8 +146,8 @@ LRESULT UIStyleSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   settings_navigation::StyleSwitch(m_hWnd, IDC_ACRYLIC_ENABLED);
   settings_navigation::StyleSegmentedToggle(m_hWnd, IDC_EDIT_GROUP);
   settings_navigation::StyleSegmentedToggle(m_hWnd, IDC_EDIT_SINGLE);
-  for (UINT id : {IDC_APPEARANCE_THEME_MODE, IDC_COLOR_FAMILY,
-                  IDC_COLOR_LIGHT, IDC_COLOR_DARK})
+  for (UINT id : {IDC_APPEARANCE_THEME_MODE, IDC_COLOR_FAMILY, IDC_COLOR_LIGHT,
+                  IDC_COLOR_DARK})
     settings_navigation::StyleCombo(m_hWnd, id);
   for (WORD id : {IDC_PREVIEW_LIGHT, IDC_PREVIEW_DARK}) {
     LONG_PTR style = ::GetWindowLongPtrW(::GetDlgItem(m_hWnd, id), GWL_STYLE);
@@ -159,8 +158,8 @@ LRESULT UIStyleSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   RECT unit{0, 0, 0, 14};
   MapDialogRect(&unit);
   item_height_ = unit.bottom;
-  for (UINT id : {IDC_APPEARANCE_THEME_MODE, IDC_COLOR_FAMILY,
-                  IDC_COLOR_LIGHT, IDC_COLOR_DARK})
+  for (UINT id : {IDC_APPEARANCE_THEME_MODE, IDC_COLOR_FAMILY, IDC_COLOR_LIGHT,
+                  IDC_COLOR_DARK})
     CComboBox(GetDlgItem(id)).SetItemHeight(-1, item_height_);
   RefreshMode();
   ready_ = true;
@@ -170,8 +169,7 @@ LRESULT UIStyleSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
        IDCANCEL,
        WeaselUserDataPath().wstring(),
        {IDOK, IDC_APPEARANCE_TITLE, IDC_SETTINGS_DIVIDER, IDC_MATERIAL_HINT,
-        IDC_EDITOR_HINT, IDC_PREVIEW_HINT,
-        IDC_APPEARANCE_LIGHT_PREVIEW_LABEL,
+        IDC_EDITOR_HINT, IDC_PREVIEW_HINT, IDC_APPEARANCE_LIGHT_PREVIEW_LABEL,
         IDC_APPEARANCE_DARK_PREVIEW_LABEL}});
   RefreshPreview();
   ::RedrawWindow(m_hWnd, nullptr, nullptr,
@@ -284,8 +282,8 @@ void UIStyleSettingsDialog::FillThemeMode() {
   for (int index = 0; index < 3; ++index) {
     AddEntry(combo,
              {CString(settings_navigation::LocalText(
-                           labels[index][0], labels[index][1], labels[index][2])
-                           .c_str()),
+                          labels[index][0], labels[index][1], labels[index][2])
+                          .c_str()),
               index});
   }
   combo.SetCurSel(static_cast<int>(draft_.theme_mode()));
@@ -325,8 +323,7 @@ void UIStyleSettingsDialog::ShowEditor(bool single) {
           .c_str());
   ::SetDlgItemTextW(
       m_hWnd, IDC_DARK_LABEL,
-      settings_navigation::LocalText(L"深色", L"深色", L"Dark")
-          .c_str());
+      settings_navigation::LocalText(L"深色", L"深色", L"Dark").c_str());
   HWND family = GetDlgItem(IDC_COLOR_FAMILY);
   HWND light = GetDlgItem(IDC_COLOR_LIGHT);
   HWND dark = GetDlgItem(IDC_COLOR_DARK);
@@ -357,8 +354,7 @@ void UIStyleSettingsDialog::ShowEditor(bool single) {
 }
 
 void UIStyleSettingsDialog::RefreshThemeAvailability() {
-  const bool single =
-      IsDlgButtonChecked(IDC_EDIT_SINGLE) == BST_CHECKED;
+  const bool single = IsDlgButtonChecked(IDC_EDIT_SINGLE) == BST_CHECKED;
   const auto mode = draft_.theme_mode();
   const bool light_enabled =
       !single || mode != weasel::AppearanceThemeMode::Dark;
@@ -406,9 +402,9 @@ LRESULT UIStyleSettingsDialog::OnMaterial(WORD, WORD, HWND, BOOL&) {
 }
 
 LRESULT UIStyleSettingsDialog::OnThemeMode(WORD notification,
-                                            WORD,
-                                            HWND,
-                                            BOOL&) {
+                                           WORD,
+                                           HWND,
+                                           BOOL&) {
   if (!ready_ || notification != CBN_SELCHANGE)
     return 0;
   const int selected =
@@ -542,9 +538,8 @@ LRESULT UIStyleSettingsDialog::OnSave(WORD, WORD id, HWND, BOOL&) {
   const bool change_theme = desired_theme != draft_.saved_theme_mode();
   weasel::UserSettingsStore store;
   const bool settings_saved =
-      (!change_material ||
-       store.WriteBool(weasel::kAcrylicEnabledSetting, desired) ==
-           ERROR_SUCCESS) &&
+      (!change_material || store.WriteBool(weasel::kAcrylicEnabledSetting,
+                                           desired) == ERROR_SUCCESS) &&
       (!change_theme ||
        store.WriteDword(weasel::kAppearanceThemeModeSetting,
                         static_cast<DWORD>(desired_theme)) == ERROR_SUCCESS);
@@ -634,8 +629,7 @@ LRESULT UIStyleSettingsDialog::OnStaticColor(UINT,
     ::SetTextColor(context, ::GetSysColor(COLOR_GRAYTEXT));
   if ((id == IDC_LIGHT_LABEL &&
        !::IsWindowEnabled(GetDlgItem(IDC_COLOR_LIGHT))) ||
-      (id == IDC_DARK_LABEL &&
-       !::IsWindowEnabled(GetDlgItem(IDC_COLOR_DARK))))
+      (id == IDC_DARK_LABEL && !::IsWindowEnabled(GetDlgItem(IDC_COLOR_DARK))))
     ::SetTextColor(context, ::GetSysColor(COLOR_GRAYTEXT));
   ::SetBkMode(context, TRANSPARENT);
   return reinterpret_cast<LRESULT>(::GetSysColorBrush(COLOR_WINDOW));
@@ -680,8 +674,8 @@ void UIStyleSettingsDialog::DrawCombo(const DRAWITEMSTRUCT& draw) {
     const bool selected = (draw.itemState & ODS_SELECTED) != 0 && !field;
     const bool disabled = (draw.itemState & ODS_DISABLED) != 0;
     const COLORREF surface = ::GetSysColor(COLOR_WINDOW);
-    const COLORREF selected_fill = settings_navigation::Mix(
-        ::GetSysColor(COLOR_3DSHADOW), surface, 25);
+    const COLORREF selected_fill =
+        settings_navigation::Mix(::GetSysColor(COLOR_3DSHADOW), surface, 25);
     ::FillRect(draw.hDC, &row, ::GetSysColorBrush(COLOR_WINDOW));
     RECT selection = row;
     if (selected) {
@@ -693,8 +687,8 @@ void UIStyleSettingsDialog::DrawCombo(const DRAWITEMSTRUCT& draw) {
       HPEN selection_pen = ::CreatePen(PS_NULL, 0, selected_fill);
       const HGDIOBJ old_brush = ::SelectObject(draw.hDC, selection_brush);
       const HGDIOBJ old_pen = ::SelectObject(draw.hDC, selection_pen);
-      const int radius = (std::max)(
-          6, ::MulDiv(8, ::GetDeviceCaps(draw.hDC, LOGPIXELSX), 96));
+      const int radius =
+          (std::max)(6, ::MulDiv(8, ::GetDeviceCaps(draw.hDC, LOGPIXELSX), 96));
       ::RoundRect(draw.hDC, selection.left, selection.top, selection.right,
                   selection.bottom, radius, radius);
       ::SelectObject(draw.hDC, old_pen);
@@ -702,8 +696,8 @@ void UIStyleSettingsDialog::DrawCombo(const DRAWITEMSTRUCT& draw) {
       ::DeleteObject(selection_pen);
       ::DeleteObject(selection_brush);
     }
-    ::SetTextColor(draw.hDC, ::GetSysColor(disabled ? COLOR_GRAYTEXT
-                                                    : COLOR_WINDOWTEXT));
+    ::SetTextColor(draw.hDC,
+                   ::GetSysColor(disabled ? COLOR_GRAYTEXT : COLOR_WINDOWTEXT));
     if (selected) {
       const int marker_width =
           (std::max)(2, ::MulDiv(3, ::GetDeviceCaps(draw.hDC, LOGPIXELSX), 96));
@@ -711,11 +705,10 @@ void UIStyleSettingsDialog::DrawCombo(const DRAWITEMSTRUCT& draw) {
                   selection.top + (selection.bottom - selection.top) / 4,
                   selection.left + 3 + marker_width,
                   row.bottom - (row.bottom - row.top) / 4};
-      HBRUSH marker_brush =
-          ::CreateSolidBrush(::GetSysColor(COLOR_HIGHLIGHT));
-      HRGN marker_region = ::CreateRoundRectRgn(
-          marker.left, marker.top, marker.right, marker.bottom, marker_width,
-          marker_width);
+      HBRUSH marker_brush = ::CreateSolidBrush(::GetSysColor(COLOR_HIGHLIGHT));
+      HRGN marker_region =
+          ::CreateRoundRectRgn(marker.left, marker.top, marker.right,
+                               marker.bottom, marker_width, marker_width);
       if (marker_region) {
         ::FillRgn(draw.hDC, marker_region, marker_brush);
         ::DeleteObject(marker_region);
@@ -790,11 +783,11 @@ weasel::AppearancePreview UIStyleSettingsDialog::PreviewStyle(bool dark) {
   preview.title = settings_navigation::LocalText(
       dark ? L"深色预览" : L"浅色预览", dark ? L"深色預覽" : L"淺色預覽",
       dark ? L"Dark preview" : L"Light preview");
-  preview.candidates = {static_cast<LPCWSTR>(Text(IDS_APPEARANCE_SAMPLE)),
-                        static_cast<LPCWSTR>(Text(IDS_APPEARANCE_SAMPLE_2)),
-                        static_cast<LPCWSTR>(Text(IDS_APPEARANCE_SAMPLE_3)),
-                        settings_navigation::LocalText(L"泥好", L"泥好",
-                                                       L"Hello")};
+  preview.candidates = {
+      static_cast<LPCWSTR>(Text(IDS_APPEARANCE_SAMPLE)),
+      static_cast<LPCWSTR>(Text(IDS_APPEARANCE_SAMPLE_2)),
+      static_cast<LPCWSTR>(Text(IDS_APPEARANCE_SAMPLE_3)),
+      settings_navigation::LocalText(L"泥好", L"泥好", L"Hello")};
   return preview;
 }
 

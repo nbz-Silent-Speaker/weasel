@@ -17,8 +17,7 @@ namespace weasel {
 inline constexpr wchar_t kUserSettingsKey[] =
     L"Software\\Rime\\Weasel\\UserSettings";
 inline constexpr wchar_t kAcrylicEnabledSetting[] = L"AcrylicEnabled";
-inline constexpr wchar_t kAppearanceThemeModeSetting[] =
-    L"AppearanceThemeMode";
+inline constexpr wchar_t kAppearanceThemeModeSetting[] = L"AppearanceThemeMode";
 inline constexpr wchar_t kStatusIconChineseSetting[] = L"StatusIconChinese";
 inline constexpr wchar_t kStatusIconEnglishSetting[] = L"StatusIconEnglish";
 inline constexpr wchar_t kStatusIconChineseCapsSetting[] =
@@ -361,8 +360,7 @@ inline bool ResolveAppearanceDarkMode(AppearanceThemeMode mode,
 struct UserSettings {
   // Preserve this Acrylic branch's existing appearance when no choice is saved.
   bool acrylic = true;
-  AppearanceThemeMode appearance_theme_mode =
-      AppearanceThemeMode::FollowSystem;
+  AppearanceThemeMode appearance_theme_mode = AppearanceThemeMode::FollowSystem;
 
   static UserSettings Load() {
     UserSettings settings;

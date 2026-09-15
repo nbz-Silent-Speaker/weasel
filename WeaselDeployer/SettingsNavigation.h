@@ -362,9 +362,9 @@ inline LRESULT CALLBACK ToggleProc(HWND window,
     const COLORREF surface = ::GetSysColor(COLOR_WINDOW);
     const COLORREF accent = ::GetSysColor(COLOR_HIGHLIGHT);
     const COLORREF neutral = Mix(::GetSysColor(COLOR_3DSHADOW), surface, 34);
-    const COLORREF fill = !enabled       ? ::GetSysColor(COLOR_BTNFACE)
-                          : checked      ? accent
-                          : state->hover ? Mix(accent, surface, 20)
+    const COLORREF fill = !enabled         ? ::GetSysColor(COLOR_BTNFACE)
+                          : checked        ? accent
+                          : state->hover   ? Mix(accent, surface, 20)
                           : state->neutral ? neutral
                                            : surface;
     const COLORREF border =
@@ -544,9 +544,9 @@ inline LRESULT CALLBACK SwitchProc(HWND window,
     RECT track{left, top, left + track_width, top + track_height};
     const COLORREF surface = ::GetSysColor(COLOR_WINDOW);
     const COLORREF accent = ::GetSysColor(COLOR_HIGHLIGHT);
-    const COLORREF off = Mix(::GetSysColor(COLOR_3DSHADOW), surface,
-                             state->hover ? 104 : 86);
-    const COLORREF fill = !enabled ? ::GetSysColor(COLOR_BTNFACE)
+    const COLORREF off =
+        Mix(::GetSysColor(COLOR_3DSHADOW), surface, state->hover ? 104 : 86);
+    const COLORREF fill = !enabled  ? ::GetSysColor(COLOR_BTNFACE)
                           : checked ? accent
                                     : off;
     HBRUSH track_brush = ::CreateSolidBrush(fill);
@@ -562,8 +562,8 @@ inline LRESULT CALLBACK SwitchProc(HWND window,
 
     const int inset = (std::max)(2, ::MulDiv(2, scale, 96));
     const int knob_size = track_height - inset * 2;
-    const int knob_left = checked ? track.right - inset - knob_size
-                                  : track.left + inset;
+    const int knob_left =
+        checked ? track.right - inset - knob_size : track.left + inset;
     HBRUSH knob = ::CreateSolidBrush(RGB(255, 255, 255));
     HPEN knob_pen = ::CreatePen(PS_NULL, 0, RGB(255, 255, 255));
     const HGDIOBJ previous_brush = ::SelectObject(dc, knob);
@@ -596,8 +596,8 @@ inline LRESULT CALLBACK ComboListProc(HWND window,
                                       DWORD_PTR data) {
   HWND dialog = reinterpret_cast<HWND>(data);
   if (message == WM_WINDOWPOSCHANGED || message == WM_SHOWWINDOW) {
-    const RECT radius = MapDialogUnits(dialog, 0, 0, kControlRadiusDlu,
-                                       kControlRadiusDlu);
+    const RECT radius =
+        MapDialogUnits(dialog, 0, 0, kControlRadiusDlu, kControlRadiusDlu);
     Round(window, (std::max)(4, static_cast<int>(radius.right)));
   } else if (message == WM_NCDESTROY) {
     ::RemoveWindowSubclass(window, ComboListProc, 6);

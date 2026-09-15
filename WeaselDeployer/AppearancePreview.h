@@ -158,8 +158,8 @@ inline void DrawAppearancePreview(HDC dc,
   ::GetObjectW(font, sizeof(title_logical), &title_logical);
   title_logical.lfWeight = FW_SEMIBOLD;
   Font title_font(dc, &title_logical);
-  SolidBrush title_brush(PreviewColor(style.dark ? RGB(245, 245, 245)
-                                                 : RGB(24, 24, 24)));
+  SolidBrush title_brush(
+      PreviewColor(style.dark ? RGB(245, 245, 245) : RGB(24, 24, 24)));
   StringFormat title_format;
   title_format.SetFormatFlags(StringFormatFlagsNoWrap);
   title_format.SetTrimming(StringTrimmingEllipsisCharacter);
