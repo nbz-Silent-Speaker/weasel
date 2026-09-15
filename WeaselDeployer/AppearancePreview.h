@@ -75,16 +75,26 @@ inline void DrawAppearancePreview(HDC dc,
   Bitmap buffer(width, height, PixelFormat32bppPARGB);
   Graphics canvas(&buffer);
   canvas.SetSmoothingMode(SmoothingModeAntiAlias);
+  canvas.SetPixelOffsetMode(PixelOffsetModeHalf);
   canvas.SetTextRenderingHint(TextRenderingHintAntiAliasGridFit);
+  const RectF bitmap_bounds(0, 0, static_cast<REAL>(width),
+                            static_cast<REAL>(height));
+  SolidBrush page_background(PreviewColor(::GetSysColor(COLOR_BTNFACE)));
+  canvas.FillRectangle(&page_background, bitmap_bounds);
+  const float dpi_scale =
+      static_cast<float>(::GetDeviceCaps(dc, LOGPIXELSX)) / 96.0f;
+  const RectF scene(0.5f, 0.5f, static_cast<REAL>(width) - 1.0f,
+                    static_cast<REAL>(height) - 1.0f);
+  GraphicsPath scene_path;
+  PreviewRoundRect(scene_path, scene, 10.0f * dpi_scale);
+  const auto scene_state = canvas.Save();
+  canvas.SetClip(&scene_path);
   // A fixed smooth scene illustrates the backdrop without capturing desktop
   // contents. Normal mode covers it with a fully opaque background.
-  const RectF scene(0, 0, static_cast<REAL>(width), static_cast<REAL>(height));
   LinearGradientBrush scenery(
       scene, style.dark ? Color(255, 40, 79, 99) : Color(255, 190, 220, 229),
       style.dark ? Color(255, 87, 59, 83) : Color(255, 232, 207, 220), 35.0f);
-  canvas.FillRectangle(&scenery, scene);
-  const float dpi_scale =
-      static_cast<float>(::GetDeviceCaps(dc, LOGPIXELSX)) / 96.0f;
+  canvas.FillPath(&scenery, &scene_path);
   const auto pixels = [dpi_scale](int value) {
     return static_cast<float>(value) * dpi_scale;
   };
@@ -172,7 +182,7 @@ inline void DrawAppearancePreview(HDC dc,
   GraphicsPath outline;
   PreviewRoundRect(outline, panel, pixels(static_cast<int>(style.radius)));
   SolidBrush background(
-      PreviewColor(style.background, style.acrylic ? 190 : 255));
+      PreviewColor(style.background, style.acrylic ? 176 : 255));
   canvas.FillPath(&background, &outline);
   const auto contentState = canvas.Save();
   canvas.SetClip(&outline);
@@ -231,12 +241,22 @@ inline void DrawAppearancePreview(HDC dc,
       candidate_left += item_width + candidate_gap;
   }
   canvas.Restore(contentState);
+  if (style.acrylic) {
+    Pen acrylic_edge(
+        style.dark ? Color(42, 255, 255, 255) : Color(96, 255, 255, 255),
+        pixels(1));
+    canvas.DrawPath(&acrylic_edge, &outline);
+  }
   if (style.border_width > 0) {
     Pen border(PreviewColor(style.border),
                pixels(static_cast<int>((std::min)(style.border_width, 4.0f))));
     canvas.DrawPath(&border, &outline);
   }
   canvas.Restore(preview_state);
+  canvas.Restore(scene_state);
+  Pen scene_border(
+      style.dark ? Color(74, 255, 255, 255) : Color(54, 54, 54, 54), 1.0f);
+  canvas.DrawPath(&scene_border, &scene_path);
   canvas.Flush(FlushIntentionSync);
   Graphics output(dc);
   // The buffer already matches the control's physical pixels. Specifying its

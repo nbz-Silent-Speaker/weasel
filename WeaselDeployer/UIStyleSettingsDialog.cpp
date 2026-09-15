@@ -7,11 +7,11 @@
 #include <WeaselUserSettings.h>
 
 namespace {
-constexpr int kSettingsColumnWidthDlu = 198;
+constexpr int kSettingsColumnWidthDlu = 302;
 constexpr int kColumnGapDlu = 12;
 constexpr int kPreviewColumnLeftDlu = settings_navigation::kPageInsetDlu +
                                       kSettingsColumnWidthDlu + kColumnGapDlu;
-constexpr int kPreviewColumnWidthDlu = 302;
+constexpr int kPreviewColumnWidthDlu = 198;
 constexpr int kPaletteCardTopDlu = 90;
 constexpr int kPaletteCardHeightDlu = 158;
 
@@ -68,21 +68,21 @@ void LayoutAppearancePage(HWND dialog) {
               kPaletteCardTopDlu, kSettingsColumnWidthDlu,
               kPaletteCardHeightDlu);
   MoveControl(dialog, IDC_APPEARANCE_ACRYLIC_LABEL, 26, 24, 116, 12);
-  MoveControl(dialog, IDC_APPEARANCE_ACRYLIC_STATE, 164, 24, 20, 12);
-  MoveControl(dialog, IDC_ACRYLIC_ENABLED, 188, 22, 14, 16);
+  MoveControl(dialog, IDC_APPEARANCE_ACRYLIC_STATE, 268, 24, 20, 12);
+  MoveControl(dialog, IDC_ACRYLIC_ENABLED, 292, 22, 14, 16);
   MoveControl(dialog, IDC_APPEARANCE_THEME_LABEL, 26, 62, 70, 12);
-  MoveControl(dialog, IDC_APPEARANCE_THEME_MODE, 114, 59, 88, 80);
-  MoveControl(dialog, IDC_EDIT_GROUP, 26, 103, 54,
+  MoveControl(dialog, IDC_APPEARANCE_THEME_MODE, 218, 59, 88, 80);
+  MoveControl(dialog, IDC_EDIT_GROUP, 26, 103, 46,
               settings_navigation::kCompactToggleHeightDlu);
   MoveControl(dialog, IDC_EDIT_SINGLE,
-              26 + 54 + settings_navigation::kToggleGapDlu, 103, 54,
+              26 + 46 + settings_navigation::kToggleGapDlu, 103, 46,
               settings_navigation::kCompactToggleHeightDlu);
-  MoveControl(dialog, IDC_LIGHT_LABEL, 26, 157, 46, 12);
-  MoveControl(dialog, IDC_DARK_LABEL, 26, 188, 46, 12);
-  MoveControl(dialog, IDC_COLOR_FAMILY, 78, 154, 124, 100);
-  MoveControl(dialog, IDC_COLOR_LIGHT, 78, 154, 124, 100);
-  MoveControl(dialog, IDC_COLOR_DARK, 78, 185, 124, 100);
-  MoveControl(dialog, IDC_SELECTION_HINT, 26, 222, 176, 18);
+  MoveControl(dialog, IDC_LIGHT_LABEL, 26, 177, 46, 12);
+  MoveControl(dialog, IDC_DARK_LABEL, 26, 208, 46, 12);
+  MoveControl(dialog, IDC_COLOR_FAMILY, 182, 174, 124, 100);
+  MoveControl(dialog, IDC_COLOR_LIGHT, 182, 174, 124, 100);
+  MoveControl(dialog, IDC_COLOR_DARK, 182, 205, 124, 100);
+  MoveControl(dialog, IDC_SELECTION_HINT, 26, 228, 280, 18);
   MoveControl(dialog, IDC_PREVIEW_LIGHT, kPreviewColumnLeftDlu,
               settings_navigation::kFirstCardTopDlu, kPreviewColumnWidthDlu,
               113);
@@ -144,8 +144,11 @@ LRESULT UIStyleSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   }
   settings_navigation::StyleActionButton(m_hWnd, IDC_RESTORE_APPEARANCE);
   settings_navigation::StyleSwitch(m_hWnd, IDC_ACRYLIC_ENABLED);
-  settings_navigation::StyleSegmentedToggle(m_hWnd, IDC_EDIT_GROUP);
-  settings_navigation::StyleSegmentedToggle(m_hWnd, IDC_EDIT_SINGLE);
+  settings_navigation::StyleSegmentedToggle(
+      m_hWnd, IDC_EDIT_GROUP, settings_navigation::ToggleState::Segment::Left);
+  settings_navigation::StyleSegmentedToggle(
+      m_hWnd, IDC_EDIT_SINGLE,
+      settings_navigation::ToggleState::Segment::Right);
   for (UINT id : {IDC_APPEARANCE_THEME_MODE, IDC_COLOR_FAMILY, IDC_COLOR_LIGHT,
                   IDC_COLOR_DARK})
     settings_navigation::StyleCombo(m_hWnd, id);
@@ -153,7 +156,6 @@ LRESULT UIStyleSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
     LONG_PTR style = ::GetWindowLongPtrW(::GetDlgItem(m_hWnd, id), GWL_STYLE);
     ::SetWindowLongPtrW(::GetDlgItem(m_hWnd, id), GWL_STYLE,
                         style & ~static_cast<LONG_PTR>(WS_BORDER));
-    settings_navigation::StyleCard(m_hWnd, id);
   }
   RECT unit{0, 0, 0, 14};
   MapDialogRect(&unit);

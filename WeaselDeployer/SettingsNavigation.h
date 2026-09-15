@@ -1,6 +1,8 @@
 #pragma once
 
 #include <commctrl.h>
+#include <objidl.h>
+#include <gdiplus.h>
 #include <shellapi.h>
 #include <windows.h>
 
@@ -35,13 +37,13 @@ inline constexpr int kFirstCardTopDlu = 14;
 inline constexpr int kActionButtonWidthDlu = 80;
 inline constexpr int kSecondaryButtonWidthDlu = 68;
 inline constexpr int kTransientButtonWidthDlu = 60;
-inline constexpr int kToggleGapDlu = 2;
+inline constexpr int kToggleGapDlu = 0;
 inline constexpr int kButtonHeightDlu = 18;
 inline constexpr int kComboWidthDlu = 80;
 inline constexpr int kCardRadiusDlu = 8;
 inline constexpr int kControlRadiusDlu = 5;
 inline constexpr int kSingleRowCardHeightDlu = 32;
-inline constexpr int kCompactToggleHeightDlu = 16;
+inline constexpr int kCompactToggleHeightDlu = 14;
 
 struct InstallOptions {
   WORD apply = 0;
@@ -230,8 +232,11 @@ struct NavState {
 };
 
 struct ToggleState {
+  enum class Segment { None, Left, Right };
+
   bool hover = false;
   bool neutral = false;
+  Segment segment = Segment::None;
 };
 
 struct CheckboxState {
@@ -241,6 +246,56 @@ struct CheckboxState {
 struct SwitchState {
   bool hover = false;
 };
+
+inline Gdiplus::Color GdiPlusColor(COLORREF color, BYTE alpha = 255) {
+  return Gdiplus::Color(alpha, GetRValue(color), GetGValue(color),
+                        GetBValue(color));
+}
+
+inline void AddControlPath(Gdiplus::GraphicsPath& path,
+                           const Gdiplus::RectF& bounds,
+                           Gdiplus::REAL radius,
+                           bool round_left = true,
+                           bool round_right = true) {
+  const Gdiplus::REAL diameter =
+      (std::min)(radius * 2.0f, (std::min)(bounds.Width, bounds.Height));
+  if (diameter <= 0.0f) {
+    path.AddRectangle(bounds);
+    return;
+  }
+  const Gdiplus::REAL right = bounds.GetRight();
+  const Gdiplus::REAL bottom = bounds.GetBottom();
+  path.StartFigure();
+  if (round_left && round_right) {
+    path.AddArc(bounds.X, bounds.Y, diameter, diameter, 180.0f, 90.0f);
+    path.AddLine(bounds.X + radius, bounds.Y, right - radius, bounds.Y);
+    path.AddArc(right - diameter, bounds.Y, diameter, diameter, 270.0f, 90.0f);
+    path.AddLine(right, bounds.Y + radius, right, bottom - radius);
+    path.AddArc(right - diameter, bottom - diameter, diameter, diameter, 0.0f,
+                90.0f);
+    path.AddLine(right - radius, bottom, bounds.X + radius, bottom);
+    path.AddArc(bounds.X, bottom - diameter, diameter, diameter, 90.0f, 90.0f);
+    path.AddLine(bounds.X, bottom - radius, bounds.X, bounds.Y + radius);
+  } else if (round_left) {
+    path.AddArc(bounds.X, bounds.Y, diameter, diameter, 180.0f, 90.0f);
+    path.AddLine(bounds.X + radius, bounds.Y, right, bounds.Y);
+    path.AddLine(right, bounds.Y, right, bottom);
+    path.AddLine(right, bottom, bounds.X + radius, bottom);
+    path.AddArc(bounds.X, bottom - diameter, diameter, diameter, 90.0f, 90.0f);
+    path.AddLine(bounds.X, bottom - radius, bounds.X, bounds.Y + radius);
+  } else if (round_right) {
+    path.AddLine(bounds.X, bounds.Y, right - radius, bounds.Y);
+    path.AddArc(right - diameter, bounds.Y, diameter, diameter, 270.0f, 90.0f);
+    path.AddLine(right, bounds.Y + radius, right, bottom - radius);
+    path.AddArc(right - diameter, bottom - diameter, diameter, diameter, 0.0f,
+                90.0f);
+    path.AddLine(right - radius, bottom, bounds.X, bottom);
+    path.AddLine(bounds.X, bottom, bounds.X, bounds.Y);
+  } else {
+    path.AddRectangle(bounds);
+  }
+  path.CloseFigure();
+}
 
 inline void Round(HWND control, int radius = 12);
 
@@ -356,6 +411,7 @@ inline LRESULT CALLBACK ToggleProc(HWND window,
     HDC dc = ::BeginPaint(window, &paint);
     RECT bounds{};
     ::GetClientRect(window, &bounds);
+    ::FillRect(dc, &bounds, ::GetSysColorBrush(COLOR_WINDOW));
     const bool enabled = ::IsWindowEnabled(window) != FALSE;
     const bool checked =
         ::SendMessageW(window, BM_GETCHECK, 0, 0) == BST_CHECKED;
@@ -369,17 +425,23 @@ inline LRESULT CALLBACK ToggleProc(HWND window,
                                            : surface;
     const COLORREF border =
         checked ? accent : Mix(::GetSysColor(COLOR_3DSHADOW), surface, 76);
-    HBRUSH brush = ::CreateSolidBrush(fill);
-    HPEN pen = ::CreatePen(PS_SOLID, 1, border);
-    const HGDIOBJ previous_brush = ::SelectObject(dc, brush);
-    const HGDIOBJ previous_pen = ::SelectObject(dc, pen);
-    const int diameter = ::MulDiv(10, ::GetDeviceCaps(dc, LOGPIXELSX), 96);
-    ::RoundRect(dc, bounds.left, bounds.top, bounds.right - 1,
-                bounds.bottom - 1, diameter, diameter);
-    ::SelectObject(dc, previous_pen);
-    ::SelectObject(dc, previous_brush);
-    ::DeleteObject(pen);
-    ::DeleteObject(brush);
+    Gdiplus::Graphics canvas(dc);
+    canvas.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    canvas.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+    const Gdiplus::RectF shape(0.5f, 0.5f,
+                               static_cast<Gdiplus::REAL>(bounds.right - 1),
+                               static_cast<Gdiplus::REAL>(bounds.bottom - 1));
+    const Gdiplus::REAL radius = (std::min)(
+        shape.Height / 2.0f, static_cast<Gdiplus::REAL>(::MulDiv(
+                                 5, ::GetDeviceCaps(dc, LOGPIXELSX), 96)));
+    Gdiplus::GraphicsPath path;
+    AddControlPath(path, shape, radius,
+                   state->segment != ToggleState::Segment::Right,
+                   state->segment != ToggleState::Segment::Left);
+    Gdiplus::SolidBrush brush(GdiPlusColor(fill));
+    Gdiplus::Pen pen(GdiPlusColor(border), 1.0f);
+    canvas.FillPath(&brush, &path);
+    canvas.DrawPath(&pen, &path);
 
     wchar_t label[128]{};
     ::GetWindowTextW(window, label, static_cast<int>(_countof(label)));
@@ -394,10 +456,11 @@ inline LRESULT CALLBACK ToggleProc(HWND window,
     ::DrawTextW(
         dc, label, -1, &text_bounds,
         DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
-    if (::GetFocus() == window) {
-      RECT focus = bounds;
-      ::InflateRect(&focus, -3, -3);
-      ::DrawFocusRect(dc, &focus);
+    const LRESULT ui_state = ::SendMessageW(window, WM_QUERYUISTATE, 0, 0);
+    if (::GetFocus() == window && !(ui_state & UISF_HIDEFOCUS)) {
+      Gdiplus::Pen focus(GdiPlusColor(accent, 180), 1.0f);
+      focus.SetDashStyle(Gdiplus::DashStyleDot);
+      canvas.DrawPath(&focus, &path);
     }
     if (previous_font)
       ::SelectObject(dc, previous_font);
@@ -549,35 +612,37 @@ inline LRESULT CALLBACK SwitchProc(HWND window,
     const COLORREF fill = !enabled  ? ::GetSysColor(COLOR_BTNFACE)
                           : checked ? accent
                                     : off;
-    HBRUSH track_brush = ::CreateSolidBrush(fill);
-    HPEN track_pen = ::CreatePen(PS_NULL, 0, fill);
-    const HGDIOBJ old_brush = ::SelectObject(dc, track_brush);
-    const HGDIOBJ old_pen = ::SelectObject(dc, track_pen);
-    ::RoundRect(dc, track.left, track.top, track.right, track.bottom,
-                track_height, track_height);
-    ::SelectObject(dc, old_pen);
-    ::SelectObject(dc, old_brush);
-    ::DeleteObject(track_pen);
-    ::DeleteObject(track_brush);
+    Gdiplus::Graphics canvas(dc);
+    canvas.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+    canvas.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+    const Gdiplus::RectF track_shape(
+        static_cast<Gdiplus::REAL>(track.left) + 0.5f,
+        static_cast<Gdiplus::REAL>(track.top) + 0.5f,
+        static_cast<Gdiplus::REAL>(track_width) - 1.0f,
+        static_cast<Gdiplus::REAL>(track_height) - 1.0f);
+    Gdiplus::GraphicsPath track_path;
+    AddControlPath(track_path, track_shape, track_shape.Height / 2.0f);
+    Gdiplus::SolidBrush track_brush(GdiPlusColor(fill));
+    canvas.FillPath(&track_brush, &track_path);
 
     const int inset = (std::max)(2, ::MulDiv(2, scale, 96));
     const int knob_size = track_height - inset * 2;
     const int knob_left =
         checked ? track.right - inset - knob_size : track.left + inset;
-    HBRUSH knob = ::CreateSolidBrush(RGB(255, 255, 255));
-    HPEN knob_pen = ::CreatePen(PS_NULL, 0, RGB(255, 255, 255));
-    const HGDIOBJ previous_brush = ::SelectObject(dc, knob);
-    const HGDIOBJ previous_pen = ::SelectObject(dc, knob_pen);
-    ::Ellipse(dc, knob_left, track.top + inset, knob_left + knob_size,
-              track.top + inset + knob_size);
-    ::SelectObject(dc, previous_pen);
-    ::SelectObject(dc, previous_brush);
-    ::DeleteObject(knob_pen);
-    ::DeleteObject(knob);
-    if (::GetFocus() == window) {
-      RECT focus = track;
-      ::InflateRect(&focus, 2, 2);
-      ::DrawFocusRect(dc, &focus);
+    Gdiplus::SolidBrush knob(Gdiplus::Color(255, 255, 255, 255));
+    Gdiplus::Pen knob_border(Gdiplus::Color(42, 0, 0, 0), 1.0f);
+    const Gdiplus::RectF knob_shape(
+        static_cast<Gdiplus::REAL>(knob_left) + 0.5f,
+        static_cast<Gdiplus::REAL>(track.top + inset) + 0.5f,
+        static_cast<Gdiplus::REAL>(knob_size) - 1.0f,
+        static_cast<Gdiplus::REAL>(knob_size) - 1.0f);
+    canvas.FillEllipse(&knob, knob_shape);
+    canvas.DrawEllipse(&knob_border, knob_shape);
+    const LRESULT ui_state = ::SendMessageW(window, WM_QUERYUISTATE, 0, 0);
+    if (::GetFocus() == window && !(ui_state & UISF_HIDEFOCUS)) {
+      Gdiplus::Pen focus(GdiPlusColor(accent, 180), 1.0f);
+      focus.SetDashStyle(Gdiplus::DashStyleDot);
+      canvas.DrawPath(&focus, &track_path);
     }
     ::EndPaint(window, &paint);
     return 0;
@@ -588,17 +653,88 @@ inline LRESULT CALLBACK SwitchProc(HWND window,
   return ::DefSubclassProc(window, message, wparam, lparam);
 }
 
+inline void DrawComboFrame(HWND window) {
+  HDC dc = ::GetDC(window);
+  if (!dc)
+    return;
+  RECT bounds{};
+  ::GetClientRect(window, &bounds);
+  const COLORREF surface = ::GetSysColor(COLOR_WINDOW);
+  const COLORREF border = ::GetFocus() == window
+                              ? ::GetSysColor(COLOR_HIGHLIGHT)
+                              : Mix(::GetSysColor(COLOR_3DSHADOW), surface, 76);
+  const int edge =
+      (std::max)(1, ::MulDiv(1, ::GetDeviceCaps(dc, LOGPIXELSX), 96));
+  RECT strip = bounds;
+  strip.bottom = strip.top + edge;
+  ::FillRect(dc, &strip, ::GetSysColorBrush(COLOR_WINDOW));
+  strip = bounds;
+  strip.top = strip.bottom - edge;
+  ::FillRect(dc, &strip, ::GetSysColorBrush(COLOR_WINDOW));
+  strip = bounds;
+  strip.right = strip.left + edge;
+  ::FillRect(dc, &strip, ::GetSysColorBrush(COLOR_WINDOW));
+  strip = bounds;
+  strip.left = strip.right - edge;
+  ::FillRect(dc, &strip, ::GetSysColorBrush(COLOR_WINDOW));
+
+  Gdiplus::Graphics canvas(dc);
+  canvas.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
+  canvas.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
+  const Gdiplus::RectF frame(0.5f, 0.5f,
+                             static_cast<Gdiplus::REAL>(bounds.right - 1),
+                             static_cast<Gdiplus::REAL>(bounds.bottom - 1));
+  const Gdiplus::REAL radius = static_cast<Gdiplus::REAL>(
+      ::MulDiv(5, ::GetDeviceCaps(dc, LOGPIXELSX), 96));
+  Gdiplus::GraphicsPath path;
+  AddControlPath(path, frame, (std::min)(radius, frame.Height / 2.0f));
+  Gdiplus::Pen pen(GdiPlusColor(border), 1.0f);
+  canvas.DrawPath(&pen, &path);
+  ::ReleaseDC(window, dc);
+}
+
+inline LRESULT CALLBACK ComboProc(HWND window,
+                                  UINT message,
+                                  WPARAM wparam,
+                                  LPARAM lparam,
+                                  UINT_PTR,
+                                  DWORD_PTR) {
+  if (message == WM_PAINT) {
+    const LRESULT result = ::DefSubclassProc(window, message, wparam, lparam);
+    DrawComboFrame(window);
+    return result;
+  }
+  if (message == WM_SETFOCUS || message == WM_KILLFOCUS ||
+      message == WM_ENABLE || message == WM_SIZE) {
+    const LRESULT result = ::DefSubclassProc(window, message, wparam, lparam);
+    ::InvalidateRect(window, nullptr, FALSE);
+    return result;
+  }
+  if (message == WM_NCDESTROY)
+    ::RemoveWindowSubclass(window, ComboProc, 7);
+  return ::DefSubclassProc(window, message, wparam, lparam);
+}
+
 inline LRESULT CALLBACK ComboListProc(HWND window,
                                       UINT message,
                                       WPARAM wparam,
                                       LPARAM lparam,
                                       UINT_PTR,
                                       DWORD_PTR data) {
-  HWND dialog = reinterpret_cast<HWND>(data);
-  if (message == WM_WINDOWPOSCHANGED || message == WM_SHOWWINDOW) {
-    const RECT radius =
-        MapDialogUnits(dialog, 0, 0, kControlRadiusDlu, kControlRadiusDlu);
-    Round(window, (std::max)(4, static_cast<int>(radius.right)));
+  if (message == WM_WINDOWPOSCHANGING || message == WM_SHOWWINDOW) {
+    using DwmSetWindowAttributeFn =
+        HRESULT(WINAPI*)(HWND, DWORD, LPCVOID, DWORD);
+    static HMODULE dwm = ::LoadLibraryW(L"dwmapi.dll");
+    const auto set_attribute =
+        dwm ? reinterpret_cast<DwmSetWindowAttributeFn>(
+                  ::GetProcAddress(dwm, "DwmSetWindowAttribute"))
+            : nullptr;
+    if (set_attribute) {
+      constexpr DWORD kWindowCornerPreference = 33;
+      constexpr int kRoundCorners = 2;
+      set_attribute(window, kWindowCornerPreference, &kRoundCorners,
+                    sizeof(kRoundCorners));
+    }
   } else if (message == WM_NCDESTROY) {
     ::RemoveWindowSubclass(window, ComboListProc, 6);
   }
@@ -666,17 +802,21 @@ inline void StyleToggle(HWND dialog, WORD id) {
                              reinterpret_cast<DWORD_PTR>(state)))
       delete state;
   }
-  RoundDlu(dialog, id, kControlRadiusDlu);
 }
 
-inline void StyleSegmentedToggle(HWND dialog, WORD id) {
+inline void StyleSegmentedToggle(HWND dialog,
+                                 WORD id,
+                                 ToggleState::Segment segment) {
   StyleToggle(dialog, id);
   HWND control = ::GetDlgItem(dialog, id);
   if (!control)
     return;
   DWORD_PTR data = 0;
-  if (::GetWindowSubclass(control, ToggleProc, 2, &data) && data)
-    reinterpret_cast<ToggleState*>(data)->neutral = true;
+  if (::GetWindowSubclass(control, ToggleProc, 2, &data) && data) {
+    auto* state = reinterpret_cast<ToggleState*>(data);
+    state->neutral = true;
+    state->segment = segment;
+  }
 }
 
 inline void StyleCheckbox(HWND dialog, WORD id) {
@@ -703,12 +843,13 @@ inline void StyleSwitch(HWND dialog, WORD id) {
                              reinterpret_cast<DWORD_PTR>(state)))
       delete state;
   }
-  RoundDlu(dialog, id, kControlRadiusDlu);
 }
 
 inline void StyleCombo(HWND dialog, WORD id) {
   HWND control = ::GetDlgItem(dialog, id);
-  RoundDlu(dialog, id, kControlRadiusDlu);
+  DWORD_PTR frame = 0;
+  if (control && !::GetWindowSubclass(control, ComboProc, 7, &frame))
+    ::SetWindowSubclass(control, ComboProc, 7, 0);
   COMBOBOXINFO info{sizeof(info)};
   if (control && ::GetComboBoxInfo(control, &info) && info.hwndList) {
     DWORD_PTR existing = 0;

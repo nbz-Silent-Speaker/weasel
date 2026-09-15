@@ -18,12 +18,12 @@ $requiredConstants = [ordered]@{
   kActionButtonWidthDlu = 80
   kSecondaryButtonWidthDlu = 68
   kTransientButtonWidthDlu = 60
-  kToggleGapDlu = 2
+  kToggleGapDlu = 0
   kButtonHeightDlu = 18
   kCardRadiusDlu = 8
   kControlRadiusDlu = 5
   kSingleRowCardHeightDlu = 32
-  kCompactToggleHeightDlu = 16
+  kCompactToggleHeightDlu = 14
 }
 foreach ($entry in $requiredConstants.GetEnumerator()) {
   $pattern = 'inline constexpr int ' + [regex]::Escape($entry.Key) +
@@ -162,9 +162,11 @@ $appearanceContracts = @(
     'kSingleRowCardHeightDlu\);'
   'MoveControl\(dialog, IDC_APPEARANCE_THEME_CARD,[\s\S]{0,160}?' +
     'kSingleRowCardHeightDlu\);'
-  'MoveControl\(dialog, IDC_COLOR_FAMILY, 78, 154, 124,'
-  'MoveControl\(dialog, IDC_COLOR_LIGHT, 78, 154, 124,'
-  'MoveControl\(dialog, IDC_COLOR_DARK, 78, 185, 124,'
+  'constexpr int kSettingsColumnWidthDlu = 302;'
+  'constexpr int kPreviewColumnWidthDlu = 198;'
+  'MoveControl\(dialog, IDC_COLOR_FAMILY, 182, 174, 124,'
+  'MoveControl\(dialog, IDC_COLOR_LIGHT, 182, 174, 124,'
+  'MoveControl\(dialog, IDC_COLOR_DARK, 182, 205, 124,'
   'MoveControl\(dialog, IDC_PREVIEW_LIGHT, kPreviewColumnLeftDlu,'
   'MoveControl\(dialog, IDC_PREVIEW_DARK, kPreviewColumnLeftDlu,'
   'L"恢复本页默认"'
@@ -173,6 +175,21 @@ foreach ($pattern in $appearanceContracts) {
   if ($appearance -notmatch $pattern) {
     throw "Candidate-window layout contract changed or missing: $pattern"
   }
+}
+
+if ($navigation -notmatch
+    'SwitchProc[\s\S]{0,3200}?SmoothingModeAntiAlias' -or
+    $navigation -notmatch
+    'AddControlPath\(track_path, track_shape, track_shape\.Height / 2\.0f\)' -or
+    $navigation -notmatch
+    'StyleSegmentedToggle\([\s\S]{0,180}?ToggleState::Segment') {
+  throw 'Candidate-window switches no longer use the shared anti-aliased ' +
+    'capsule and integrated segmented-control rules.'
+}
+
+if ($navigation -match
+    'ComboListProc[\s\S]{0,500}?WM_WINDOWPOSCHANGED[\s\S]{0,220}?Round\(') {
+  throw 'Combo popup rounding is applied after display and can visibly jump.'
 }
 
 if ($appearance -notmatch 'single_\.fill\(single\)' -or
@@ -192,7 +209,8 @@ if ($userSettings -notmatch 'enum class AppearanceThemeMode' -or
 $previewPath = Join-Path $root 'WeaselDeployer/AppearancePreview.h'
 $preview = Get-Content -LiteralPath $previewPath -Raw
 if ($preview -notmatch 'std::array<std::wstring, 4> candidates' -or
-    $preview -notmatch 'L"1\.", L"2\.", L"3\.", L"4\."') {
+    $preview -notmatch 'L"1\.", L"2\.", L"3\.", L"4\."' -or
+    $preview -notmatch 'canvas\.SetClip\(&scene_path\)') {
   throw 'Candidate-window previews must render four candidates.'
 }
 
