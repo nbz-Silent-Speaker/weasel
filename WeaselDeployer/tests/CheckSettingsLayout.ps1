@@ -104,6 +104,36 @@ if ($navigation -notmatch 'SetWindowTextW\([\s\S]{0,80}?LocalText\(L"小狼毫�
 if ($navigation -notmatch 'LocalText\(L"小狼毫设置"') {
   throw 'Shared settings window title is not centralized.'
 }
+if ($navigation -notmatch 'DisableWindowTransitions\(dialog\);') {
+  throw 'Shared settings frame allows top-level transition flashes.'
+}
+
+$configuratorPath = Join-Path $root 'WeaselDeployer/Configurator.cpp'
+$configurator = Get-Content -LiteralPath $configuratorPath -Raw
+if ($configurator -notmatch 'class\s+SettingsPageInstance' -or
+    $configurator -notmatch 'kHostNavigateMessage') {
+  throw 'Settings pages no longer use the shared navigation host.'
+}
+$showReplacement = $configurator.IndexOf('SWP_NOACTIVATE | SWP_SHOWWINDOW')
+$hideCurrent = $configurator.IndexOf('ShowWindow(active->window(), SW_HIDE)')
+if ($showReplacement -lt 0 -or $hideCurrent -lt 0 -or
+    $showReplacement -gt $hideCurrent) {
+  throw 'A replacement settings page must be painted before the current page is hidden.'
+}
+
+$hostedSources = @(
+  'SwitcherSettingsDialog.cpp'
+  'UIStyleSettingsDialog.cpp'
+  'FontSettingsDialog.cpp'
+  'StatusIconSettingsDialog.cpp'
+)
+foreach ($source in $hostedSources) {
+  $path = Join-Path $root ('WeaselDeployer/' + $source)
+  $text = Get-Content -LiteralPath $path -Raw
+  if ($text -notmatch 'settings_navigation::RequestNavigate\(m_hWnd, id\)') {
+    throw "$source bypasses the shared navigation host."
+  }
+}
 
 $restoreButtons = [ordered]@{
   'UIStyleSettingsDialog.cpp' = 'IDC_RESTORE_APPEARANCE'

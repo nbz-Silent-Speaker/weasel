@@ -17,6 +17,9 @@ inline constexpr WORD kFonts = 30003;
 inline constexpr WORD kStatusIcons = 30004;
 inline constexpr WORD kUserFolder = 30005;
 inline constexpr WORD kStatus = 30006;
+inline constexpr UINT kHostNavigateMessage = WM_APP + 0x531;
+inline constexpr UINT kHostCloseMessage = WM_APP + 0x532;
+inline constexpr wchar_t kHostProperty[] = L"Weasel.SettingsHost";
 
 // Every settings page is hosted in the same logical content frame.  Keep
 // these values as the single source of truth so page changes cannot resize the
@@ -70,6 +73,46 @@ inline Page PageFromCommand(WORD command) {
 
 inline bool IsPageResult(INT_PTR result) {
   return result >= kInput && result <= kStatusIcons;
+}
+
+inline void AttachHost(HWND dialog) {
+  ::SetPropW(dialog, kHostProperty, reinterpret_cast<HANDLE>(1));
+}
+
+inline void DetachHost(HWND dialog) {
+  ::RemovePropW(dialog, kHostProperty);
+}
+
+inline bool RequestNavigate(HWND dialog, WORD command) {
+  if (!::GetPropW(dialog, kHostProperty))
+    return false;
+  return ::PostThreadMessageW(::GetCurrentThreadId(), kHostNavigateMessage,
+                              command,
+                              reinterpret_cast<LPARAM>(dialog)) != FALSE;
+}
+
+inline bool RequestClose(HWND dialog, INT_PTR result) {
+  if (!::GetPropW(dialog, kHostProperty))
+    return false;
+  return ::PostThreadMessageW(::GetCurrentThreadId(), kHostCloseMessage,
+                              static_cast<WPARAM>(result),
+                              reinterpret_cast<LPARAM>(dialog)) != FALSE;
+}
+
+inline void DisableWindowTransitions(HWND dialog) {
+  using SetWindowAttribute = HRESULT(WINAPI*)(HWND, DWORD, LPCVOID, DWORD);
+  static const SetWindowAttribute set_window_attribute = [] {
+    HMODULE module = ::LoadLibraryW(L"dwmapi.dll");
+    return module ? reinterpret_cast<SetWindowAttribute>(
+                        ::GetProcAddress(module, "DwmSetWindowAttribute"))
+                  : nullptr;
+  }();
+  if (!set_window_attribute)
+    return;
+  constexpr DWORD kTransitionsForcedDisabled = 3;
+  const BOOL disabled = TRUE;
+  set_window_attribute(dialog, kTransitionsForcedDisabled, &disabled,
+                       sizeof(disabled));
 }
 
 inline RECT MapDialogUnits(HWND dialog,
@@ -564,6 +607,7 @@ inline void DrawCard(const DRAWITEMSTRUCT& draw) {
 }
 
 inline void Install(HWND dialog, Page active, const InstallOptions& options) {
+  DisableWindowTransitions(dialog);
   ResizeContentFrame(dialog);
   ::SetWindowTextW(
       dialog,

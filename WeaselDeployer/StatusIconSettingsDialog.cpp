@@ -731,13 +731,13 @@ bool StatusIconSettingsDialog::ConfirmDiscard() {
 }
 
 LRESULT StatusIconSettingsDialog::OnClose(UINT, WPARAM, LPARAM, BOOL&) {
-  if (ConfirmDiscard())
+  if (ConfirmDiscard() && !settings_navigation::RequestClose(m_hWnd, IDCANCEL))
     EndDialog(IDCANCEL);
   return 0;
 }
 
 LRESULT StatusIconSettingsDialog::OnCloseCommand(WORD, WORD, HWND, BOOL&) {
-  if (ConfirmDiscard())
+  if (ConfirmDiscard() && !settings_navigation::RequestClose(m_hWnd, IDCANCEL))
     EndDialog(IDCANCEL);
   return 0;
 }
@@ -747,6 +747,8 @@ LRESULT StatusIconSettingsDialog::OnNavigate(WORD, WORD id, HWND, BOOL&) {
   if (page == settings_navigation::Page::StatusIcons)
     return 0;
   if (!ConfirmDiscard())
+    return 0;
+  if (settings_navigation::RequestNavigate(m_hWnd, id))
     return 0;
   EndDialog(id);
   return 0;

@@ -609,13 +609,13 @@ bool FontSettingsDialog::ConfirmDiscard() {
 }
 
 LRESULT FontSettingsDialog::OnClose(UINT, WPARAM, LPARAM, BOOL&) {
-  if (ConfirmDiscard())
+  if (ConfirmDiscard() && !settings_navigation::RequestClose(m_hWnd, IDCANCEL))
     EndDialog(IDCANCEL);
   return 0;
 }
 
 LRESULT FontSettingsDialog::OnCloseCommand(WORD, WORD, HWND, BOOL&) {
-  if (ConfirmDiscard())
+  if (ConfirmDiscard() && !settings_navigation::RequestClose(m_hWnd, IDCANCEL))
     EndDialog(IDCANCEL);
   return 0;
 }
@@ -625,6 +625,8 @@ LRESULT FontSettingsDialog::OnNavigate(WORD, WORD id, HWND, BOOL&) {
   if (page == settings_navigation::Page::Fonts)
     return 0;
   if (!ConfirmDiscard())
+    return 0;
+  if (settings_navigation::RequestNavigate(m_hWnd, id))
     return 0;
   EndDialog(id);
   return 0;

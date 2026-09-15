@@ -17,6 +17,7 @@
 #pragma warning(default : 4005)
 #include <filesystem>
 #include <fstream>
+#include <memory>
 #include "WeaselDeployer.h"
 
 static void CreateFileIfNotExist(std::string filename) {
@@ -148,50 +149,149 @@ int Configurator::ConfigureStatusIcons() {
   return ConfigureSettings(settings_navigation::Page::StatusIcons);
 }
 
-int Configurator::ConfigureSettings(settings_navigation::Page initial_page) {
-  auto page = initial_page;
-  for (;;) {
-    INT_PTR result = IDCANCEL;
+namespace {
+class SettingsPageInstance {
+ public:
+  SettingsPageInstance() = default;
+  SettingsPageInstance(const SettingsPageInstance&) = delete;
+  SettingsPageInstance& operator=(const SettingsPageInstance&) = delete;
+  ~SettingsPageInstance() { Reset(); }
+
+  bool Create(settings_navigation::Page page, HWND owner) {
+    Reset();
     if (page == settings_navigation::Page::Input) {
       RimeModule* levers = rime_get_api()->find_module("levers");
       if (!levers)
-        return 1;
-      auto* api = reinterpret_cast<RimeLeversApi*>(levers->get_api());
-      if (!api)
-        return 1;
-      RimeSwitcherSettings* switcher = api->switcher_settings_init();
-      auto* settings = reinterpret_cast<RimeCustomSettings*>(switcher);
-      if (!api->load_settings(settings)) {
-        api->custom_settings_destroy(settings);
-        return 1;
+        return false;
+      input_api_ = reinterpret_cast<RimeLeversApi*>(levers->get_api());
+      if (!input_api_)
+        return false;
+      switcher_ = input_api_->switcher_settings_init();
+      auto* settings = reinterpret_cast<RimeCustomSettings*>(switcher_);
+      if (!switcher_ || !input_api_->load_settings(settings)) {
+        Reset();
+        return false;
       }
-      SwitcherSettingsDialog dialog(switcher);
-      result = dialog.DoModal();
-      api->custom_settings_destroy(settings);
+      input_dialog_ = std::make_unique<SwitcherSettingsDialog>(switcher_);
+      window_ = input_dialog_->Create(owner);
     } else if (page == settings_navigation::Page::Appearance) {
       RimeModule* levers = rime_get_api()->find_module("levers");
       if (!levers)
-        return 1;
+        return false;
       auto* api = reinterpret_cast<RimeLeversApi*>(levers->get_api());
-      UIStyleSettings settings(weasel::ColorSchemeTarget::Default);
-      if (!api || !api->load_settings(settings.settings())) {
+      appearance_settings_ =
+          std::make_unique<UIStyleSettings>(weasel::ColorSchemeTarget::Default);
+      if (!api || !api->load_settings(appearance_settings_->settings())) {
         MSG_BY_IDS(IDS_STR_SCHEME_SAVE_FAILED, IDS_STR_WEASEL,
                    MB_OK | MB_ICONERROR);
-        return 1;
+        Reset();
+        return false;
       }
-      UIStyleSettingsDialog dialog(&settings);
-      result = dialog.DoModal();
+      appearance_dialog_ =
+          std::make_unique<UIStyleSettingsDialog>(appearance_settings_.get());
+      window_ = appearance_dialog_->Create(owner);
     } else if (page == settings_navigation::Page::Fonts) {
-      FontSettingsDialog dialog;
-      result = dialog.DoModal();
+      font_dialog_ = std::make_unique<FontSettingsDialog>();
+      window_ = font_dialog_->Create(owner);
     } else {
-      StatusIconSettingsDialog dialog;
-      result = dialog.DoModal();
+      status_dialog_ = std::make_unique<StatusIconSettingsDialog>();
+      window_ = status_dialog_->Create(owner);
     }
-    if (!settings_navigation::IsPageResult(result))
-      return 0;
-    page = settings_navigation::PageFromCommand(static_cast<WORD>(result));
+
+    if (!window_) {
+      Reset();
+      return false;
+    }
+    settings_navigation::AttachHost(window_);
+    return true;
   }
+
+  HWND window() const { return window_; }
+
+ private:
+  void Reset() {
+    if (window_ && ::IsWindow(window_)) {
+      settings_navigation::DetachHost(window_);
+      ::DestroyWindow(window_);
+    }
+    window_ = nullptr;
+    status_dialog_.reset();
+    font_dialog_.reset();
+    appearance_dialog_.reset();
+    appearance_settings_.reset();
+    input_dialog_.reset();
+    if (switcher_ && input_api_) {
+      input_api_->custom_settings_destroy(
+          reinterpret_cast<RimeCustomSettings*>(switcher_));
+    }
+    switcher_ = nullptr;
+    input_api_ = nullptr;
+  }
+
+  HWND window_ = nullptr;
+  RimeLeversApi* input_api_ = nullptr;
+  RimeSwitcherSettings* switcher_ = nullptr;
+  std::unique_ptr<SwitcherSettingsDialog> input_dialog_;
+  std::unique_ptr<UIStyleSettings> appearance_settings_;
+  std::unique_ptr<UIStyleSettingsDialog> appearance_dialog_;
+  std::unique_ptr<FontSettingsDialog> font_dialog_;
+  std::unique_ptr<StatusIconSettingsDialog> status_dialog_;
+};
+}  // namespace
+
+int Configurator::ConfigureSettings(settings_navigation::Page initial_page) {
+  HWND owner = ::GetActiveWindow();
+  auto active = std::make_unique<SettingsPageInstance>();
+  if (!active->Create(initial_page, owner))
+    return 1;
+
+  ::ShowWindow(active->window(), SW_SHOW);
+  ::UpdateWindow(active->window());
+  ::SetForegroundWindow(active->window());
+
+  MSG message{};
+  bool running = true;
+  while (running) {
+    const BOOL result = ::GetMessageW(&message, nullptr, 0, 0);
+    if (result <= 0) {
+      if (result == 0)
+        ::PostQuitMessage(static_cast<int>(message.wParam));
+      return result < 0 ? 1 : 0;
+    }
+
+    if (!message.hwnd &&
+        message.lParam == reinterpret_cast<LPARAM>(active->window())) {
+      if (message.message == settings_navigation::kHostCloseMessage) {
+        running = false;
+        continue;
+      }
+      if (message.message == settings_navigation::kHostNavigateMessage) {
+        auto replacement = std::make_unique<SettingsPageInstance>();
+        const auto page = settings_navigation::PageFromCommand(
+            static_cast<WORD>(message.wParam));
+        if (!replacement->Create(page, owner))
+          continue;
+
+        RECT bounds{};
+        ::GetWindowRect(active->window(), &bounds);
+        ::SetWindowPos(replacement->window(), HWND_TOP, bounds.left, bounds.top,
+                       0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        ::RedrawWindow(
+            replacement->window(), nullptr, nullptr,
+            RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+        ::ShowWindow(active->window(), SW_HIDE);
+        ::SetForegroundWindow(replacement->window());
+        active = std::move(replacement);
+        continue;
+      }
+    }
+
+    if (::IsDialogMessageW(active->window(), &message))
+      continue;
+    ::TranslateMessage(&message);
+    ::DispatchMessageW(&message);
+  }
+  return 0;
 }
 
 int Configurator::UpdateWorkspace(bool report_errors) {

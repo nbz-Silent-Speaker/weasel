@@ -355,13 +355,13 @@ LRESULT UIStyleSettingsDialog::OnReset(WORD, WORD, HWND, BOOL&) {
 }
 
 LRESULT UIStyleSettingsDialog::OnCancel(WORD, WORD, HWND, BOOL&) {
-  if (ConfirmDiscard())
+  if (ConfirmDiscard() && !settings_navigation::RequestClose(m_hWnd, IDCANCEL))
     EndDialog(IDCANCEL);
   return 0;
 }
 
 LRESULT UIStyleSettingsDialog::OnClose(UINT, WPARAM, LPARAM, BOOL&) {
-  if (ConfirmDiscard())
+  if (ConfirmDiscard() && !settings_navigation::RequestClose(m_hWnd, IDCANCEL))
     EndDialog(IDCANCEL);
   return 0;
 }
@@ -390,6 +390,8 @@ LRESULT UIStyleSettingsDialog::OnNavigate(WORD, WORD id, HWND, BOOL&) {
   if (!ConfirmDiscard()) {
     return 0;
   }
+  if (settings_navigation::RequestNavigate(m_hWnd, id))
+    return 0;
   EndDialog(id);
   return 0;
 }
@@ -435,7 +437,8 @@ LRESULT UIStyleSettingsDialog::OnSave(WORD, WORD id, HWND, BOOL&) {
       !settings_->LoadAppearance()) {
     MSG_BY_IDS(IDS_STR_SCHEME_SAVE_FAILED, IDS_STR_WEASEL,
                MB_OK | MB_ICONERROR);
-    EndDialog(IDOK);
+    if (!settings_navigation::RequestClose(m_hWnd, IDOK))
+      EndDialog(IDOK);
     return 0;
   }
   const auto applied = settings_->ActiveAppearance();
@@ -449,7 +452,7 @@ LRESULT UIStyleSettingsDialog::OnSave(WORD, WORD id, HWND, BOOL&) {
   draft_.Load(applied, weasel::UserSettings::Load().acrylic);
   InvalidatePreviewCache();
   RefreshMode();
-  if (id == IDOK)
+  if (id == IDOK && !settings_navigation::RequestClose(m_hWnd, IDOK))
     EndDialog(IDOK);
   return 0;
 }

@@ -1644,6 +1644,8 @@ LRESULT SwitcherSettingsDialog::OnClose(UINT, WPARAM, LPARAM, BOOL&) {
     return 0;
   DiscardPendingModel();
   KillTimer(kModelTimer);
+  if (settings_navigation::RequestClose(m_hWnd, IDCANCEL))
+    return 0;
   EndDialog(IDCANCEL);
   return 0;
 }
@@ -1658,6 +1660,8 @@ LRESULT SwitcherSettingsDialog::OnCloseCommand(WORD, WORD, HWND, BOOL&) {
     return 0;
   DiscardPendingModel();
   KillTimer(kModelTimer);
+  if (settings_navigation::RequestClose(m_hWnd, IDCANCEL))
+    return 0;
   EndDialog(IDCANCEL);
   return 0;
 }
@@ -1670,6 +1674,8 @@ LRESULT SwitcherSettingsDialog::OnNavigate(WORD, WORD id, HWND, BOOL&) {
     return 0;
   DiscardPendingModel();
   KillTimer(kModelTimer);
+  if (settings_navigation::RequestNavigate(m_hWnd, id))
+    return 0;
   EndDialog(id);
   return 0;
 }
@@ -2248,6 +2254,8 @@ void SwitcherSettingsDialog::FinishApply() {
   UpdateApplyButton();
   if (close_after_apply_) {
     KillTimer(kModelTimer);
+    if (settings_navigation::RequestClose(m_hWnd, IDCANCEL))
+      return;
     EndDialog(IDCANCEL);
   }
 }
