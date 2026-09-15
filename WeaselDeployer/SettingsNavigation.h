@@ -143,7 +143,7 @@ inline LRESULT CALLBACK SidebarProc(HWND window,
     RECT bounds{};
     ::GetClientRect(window, &bounds);
     RECT sidebar = bounds;
-    sidebar.right = (std::min)(sidebar.right, state->width);
+    sidebar.right = (std::min)(sidebar.right, static_cast<LONG>(state->width));
     ::FillRect(dc, &sidebar, state->brush);
     bounds.left = sidebar.right;
     ::FillRect(dc, &bounds, ::GetSysColorBrush(COLOR_BTNFACE));
