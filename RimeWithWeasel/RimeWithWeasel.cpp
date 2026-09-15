@@ -124,7 +124,9 @@ void RimeWithWeaselHandler::Initialize() {
     if (m_ui) {
       _UpdateUIStyle(&config, m_ui, true);
       _UpdateShowNotifications(&config, true);
-      m_current_dark_mode = IsUserDarkMode();
+      const auto user_settings = UserSettings::Load();
+      m_current_dark_mode = ResolveAppearanceDarkMode(
+          user_settings.appearance_theme_mode, IsUserDarkMode() != FALSE);
       if (m_current_dark_mode) {
         const int BUF_SIZE = 255;
         char buffer[BUF_SIZE + 1] = {0};
@@ -134,7 +136,7 @@ void RimeWithWeaselHandler::Initialize() {
           _UpdateUIStyleColor(&config, m_ui->style(), color_name);
         }
       }
-      m_current_acrylic = UserSettings::Load().acrylic;
+      m_current_acrylic = user_settings.acrylic;
       _LoadPaletteSources(&config);
       m_base_style = m_ui->style();
       _ApplyModeColorScheme(m_ui->style());
@@ -280,8 +282,14 @@ void RimeWithWeaselHandler::UpdateColorTheme(BOOL darkMode) {
 }
 
 void RimeWithWeaselHandler::RefreshUserSettings() {
-  if (!m_disabled && UserSettings::Load().acrylic != m_current_acrylic)
-    UpdateColorTheme(m_current_dark_mode);
+  if (m_disabled)
+    return;
+  const auto settings = UserSettings::Load();
+  const bool dark_mode = ResolveAppearanceDarkMode(
+      settings.appearance_theme_mode, IsUserDarkMode() != FALSE);
+  if (settings.acrylic != m_current_acrylic ||
+      dark_mode != (m_current_dark_mode != FALSE))
+    UpdateColorTheme(dark_mode);
 }
 
 void RimeWithWeaselHandler::_LoadPaletteSources(RimeConfig* config) {

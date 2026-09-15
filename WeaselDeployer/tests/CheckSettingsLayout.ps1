@@ -22,6 +22,8 @@ $requiredConstants = [ordered]@{
   kButtonHeightDlu = 18
   kCardRadiusDlu = 8
   kControlRadiusDlu = 5
+  kSingleRowCardHeightDlu = 32
+  kCompactToggleHeightDlu = 16
 }
 foreach ($entry in $requiredConstants.GetEnumerator()) {
   $pattern = 'inline constexpr int ' + [regex]::Escape($entry.Key) +
@@ -151,6 +153,47 @@ foreach ($entry in $restoreButtons.GetEnumerator()) {
       $text -notmatch 'kBottomActionTopDlu') {
     throw "$($entry.Key) does not use the shared bottom-left restore position."
   }
+}
+
+$appearancePath = Join-Path $root 'WeaselDeployer/UIStyleSettingsDialog.cpp'
+$appearance = Get-Content -LiteralPath $appearancePath -Raw
+$appearanceContracts = @(
+  'MoveControl\(dialog, IDC_APPEARANCE_ACRYLIC_CARD,[\s\S]{0,180}?' +
+    'kSingleRowCardHeightDlu\);'
+  'MoveControl\(dialog, IDC_APPEARANCE_THEME_CARD,[\s\S]{0,160}?' +
+    'kSingleRowCardHeightDlu\);'
+  'MoveControl\(dialog, IDC_COLOR_FAMILY, 78, 154, 124,'
+  'MoveControl\(dialog, IDC_COLOR_LIGHT, 78, 154, 124,'
+  'MoveControl\(dialog, IDC_COLOR_DARK, 78, 185, 124,'
+  'MoveControl\(dialog, IDC_PREVIEW_LIGHT, kPreviewColumnLeftDlu,'
+  'MoveControl\(dialog, IDC_PREVIEW_DARK, kPreviewColumnLeftDlu,'
+  'L"恢复本页默认"'
+)
+foreach ($pattern in $appearanceContracts) {
+  if ($appearance -notmatch $pattern) {
+    throw "Candidate-window layout contract changed or missing: $pattern"
+  }
+}
+
+if ($appearance -notmatch 'single_\.fill\(single\)' -or
+    $appearance -notmatch 'single_\.fill\(false\)' -or
+    $appearance -notmatch 'AppearanceThemeMode::FollowSystem' -or
+    $appearance -notmatch 'RefreshThemeAvailability\(\)') {
+  throw 'Candidate-window theme mode no longer drives the paired/single editor.'
+}
+
+$userSettingsPath = Join-Path $root 'include/WeaselUserSettings.h'
+$userSettings = Get-Content -LiteralPath $userSettingsPath -Raw
+if ($userSettings -notmatch 'enum class AppearanceThemeMode' -or
+    $userSettings -notmatch 'ResolveAppearanceDarkMode') {
+  throw 'Candidate-window theme mode is not persisted and resolved centrally.'
+}
+
+$previewPath = Join-Path $root 'WeaselDeployer/AppearancePreview.h'
+$preview = Get-Content -LiteralPath $previewPath -Raw
+if ($preview -notmatch 'std::array<std::wstring, 4> candidates' -or
+    $preview -notmatch 'L"1\.", L"2\.", L"3\.", L"4\."') {
+  throw 'Candidate-window previews must render four candidates.'
 }
 
 $hiddenPageTitles = [ordered]@{

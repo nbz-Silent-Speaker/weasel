@@ -30,6 +30,7 @@ class UIStyleSettingsDialog : public CDialogImpl<UIStyleSettingsDialog> {
   COMMAND_ID_HANDLER(IDCANCEL, OnCancel)
   COMMAND_ID_HANDLER(IDC_RESTORE_APPEARANCE, OnReset)
   COMMAND_ID_HANDLER(IDC_ACRYLIC_ENABLED, OnMaterial)
+  COMMAND_HANDLER(IDC_APPEARANCE_THEME_MODE, CBN_SELCHANGE, OnThemeMode)
   COMMAND_ID_HANDLER(IDC_EDIT_GROUP, OnEditor)
   COMMAND_ID_HANDLER(IDC_EDIT_SINGLE, OnEditor)
   COMMAND_HANDLER(IDC_COLOR_FAMILY, CBN_SELCHANGE, OnGroup)
@@ -49,6 +50,7 @@ class UIStyleSettingsDialog : public CDialogImpl<UIStyleSettingsDialog> {
   LRESULT OnCancel(WORD, WORD, HWND, BOOL&);
   LRESULT OnReset(WORD, WORD, HWND, BOOL&);
   LRESULT OnMaterial(WORD, WORD, HWND, BOOL&);
+  LRESULT OnThemeMode(WORD, WORD, HWND, BOOL&);
   LRESULT OnEditor(WORD, WORD, HWND, BOOL&);
   LRESULT OnGroup(WORD, WORD, HWND, BOOL&);
   LRESULT OnSingle(WORD, WORD, HWND, BOOL&);
@@ -62,7 +64,9 @@ class UIStyleSettingsDialog : public CDialogImpl<UIStyleSettingsDialog> {
   void AddEntry(CComboBox& combo, PaletteEntry entry);
   void FillGroups();
   void FillSingles();
+  void FillThemeMode();
   void RefreshMode();
+  void RefreshThemeAvailability();
   void RefreshPreview();
   void InvalidatePreviewCache();
   void PreparePreviews();
@@ -75,6 +79,7 @@ class UIStyleSettingsDialog : public CDialogImpl<UIStyleSettingsDialog> {
   UIStyleSettings* settings_;
   weasel::AppearanceDraft draft_;
   std::vector<PaletteEntry> groups_;
+  std::vector<PaletteEntry> theme_modes_;
   std::array<std::vector<PaletteEntry>, 2> singles_;
   std::array<bool, 2> single_{};
   ULONG_PTR graphics_token_ = 0;

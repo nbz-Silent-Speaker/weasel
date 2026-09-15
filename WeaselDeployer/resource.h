@@ -162,6 +162,12 @@
 #define IDC_APPEARANCE_CARD             1248
 #define IDC_APPEARANCE_LIGHT_PREVIEW_LABEL 1249
 #define IDC_APPEARANCE_DARK_PREVIEW_LABEL 1250
+#define IDC_APPEARANCE_ACRYLIC_CARD      1251
+#define IDC_APPEARANCE_THEME_CARD        1252
+#define IDC_APPEARANCE_ACRYLIC_LABEL     1253
+#define IDC_APPEARANCE_ACRYLIC_STATE     1254
+#define IDC_APPEARANCE_THEME_LABEL       1255
+#define IDC_APPEARANCE_THEME_MODE        1256
 #define IDC_COLOR_SCHEME                1004
 #define IDC_SELECT_FONT                 1005
 #define IDC_PREVIEW                     1006
@@ -179,7 +185,7 @@
 #define _APS_NO_MFC                     1
 #define _APS_NEXT_RESOURCE_VALUE        209
 #define _APS_NEXT_COMMAND_VALUE         32771
-#define _APS_NEXT_CONTROL_VALUE         1251
+#define _APS_NEXT_CONTROL_VALUE         1257
 #define _APS_NEXT_SYMED_VALUE           110
 #endif
 #endif

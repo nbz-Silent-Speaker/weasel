@@ -35,9 +35,10 @@ struct AppearancePreview {
   int label_font_point = 9;
   std::wstring font_face = L"Microsoft YaHei";
   std::wstring label_font_face = L"Microsoft YaHei";
+  std::wstring title;
   COLORREF background, border, text, label, highlight, highlighted_text,
       highlighted_label, mark;
-  std::array<std::wstring, 3> candidates;
+  std::array<std::wstring, 4> candidates;
 };
 
 inline Gdiplus::Color PreviewColor(COLORREF rgb, BYTE alpha = 255) {
@@ -116,8 +117,8 @@ inline void DrawAppearancePreview(HDC dc,
                         style.hilite_padding_y));
   const float label_gap = pixels(style.hilite_spacing);
   const float candidate_gap = pixels(style.candidate_spacing);
-  const std::array<std::wstring, 3> labels{L"1.", L"2.", L"3."};
-  std::array<float, 3> entry_widths{};
+  const std::array<std::wstring, 4> labels{L"1.", L"2.", L"3.", L"4."};
+  std::array<float, 4> entry_widths{};
   float widest_entry = 0;
   for (size_t i = 0; i < style.candidates.size(); ++i) {
     entry_widths[i] = measure(labels[i], label_font) + label_gap +
@@ -153,6 +154,17 @@ inline void DrawAppearancePreview(HDC dc,
                                   available_height / panel_height));
   const float origin_x = (width - panel_width * zoom) / 2.0f;
   const float origin_y = (height - panel_height * zoom) / 2.0f;
+  LOGFONTW title_logical{};
+  ::GetObjectW(font, sizeof(title_logical), &title_logical);
+  title_logical.lfWeight = FW_SEMIBOLD;
+  Font title_font(dc, &title_logical);
+  SolidBrush title_brush(PreviewColor(style.dark ? RGB(245, 245, 245)
+                                                 : RGB(24, 24, 24)));
+  StringFormat title_format;
+  title_format.SetFormatFlags(StringFormatFlagsNoWrap);
+  title_format.SetTrimming(StringTrimmingEllipsisCharacter);
+  canvas.DrawString(style.title.c_str(), -1, &title_font,
+                    PointF(pixels(12), origin_y), &title_format, &title_brush);
   const auto preview_state = canvas.Save();
   canvas.TranslateTransform(origin_x, origin_y);
   canvas.ScaleTransform(zoom, zoom);
@@ -160,7 +172,7 @@ inline void DrawAppearancePreview(HDC dc,
   GraphicsPath outline;
   PreviewRoundRect(outline, panel, pixels(static_cast<int>(style.radius)));
   SolidBrush background(
-      PreviewColor(style.background, style.acrylic ? 208 : 255));
+      PreviewColor(style.background, style.acrylic ? 190 : 255));
   canvas.FillPath(&background, &outline);
   const auto contentState = canvas.Save();
   canvas.SetClip(&outline);

@@ -31,11 +31,17 @@ extern CAppModule _Module;
 
 namespace {
 constexpr UINT_PTR kSystemStateTimer = 0x5749;
+
+BOOL EffectiveDarkMode() {
+  const auto settings = UserSettings::Load();
+  return ResolveAppearanceDarkMode(settings.appearance_theme_mode,
+                                   IsUserDarkMode() != FALSE);
 }
+}  // namespace
 
 ServerImpl::ServerImpl()
     : m_pRequestHandler(NULL),
-      m_darkMode(IsUserDarkMode()),
+      m_darkMode(EffectiveDarkMode()),
       channel(std::make_unique<PipeServer>(GetPipeName(), sa.get_attr())) {
   m_hUser32Module = GetModuleHandle(_T("user32.dll"));
 }
@@ -63,8 +69,9 @@ LRESULT ServerImpl::OnColorChange(UINT uMsg,
                                   WPARAM wParam,
                                   LPARAM lParam,
                                   BOOL& bHandled) {
-  if (IsUserDarkMode() != m_darkMode) {
-    m_darkMode = IsUserDarkMode();
+  const BOOL dark_mode = EffectiveDarkMode();
+  if (dark_mode != m_darkMode) {
+    m_darkMode = dark_mode;
     // Palette/session updates are serialized with input on the pipe worker.
     m_colorThemeChanged.store(true);
   }
@@ -76,6 +83,11 @@ LRESULT ServerImpl::OnRegisteredMessage(UINT uMsg,
                                         LPARAM lParam,
                                         BOOL& bHandled) {
   if (uMsg == UserSettingsChangedMessage()) {
+    const BOOL dark_mode = EffectiveDarkMode();
+    if (dark_mode != m_darkMode) {
+      m_darkMode = dark_mode;
+      m_colorThemeChanged.store(true);
+    }
     if (m_settingsChangedCallback)
       m_settingsChangedCallback();
     return 0;
@@ -425,7 +437,7 @@ void ServerImpl::HandlePipeMessage(PipeMessage pipe_msg, _Resp resp) {
   // same response can carry the new palette to an existing frontend session.
   if (m_pRequestHandler) {
     if (m_colorThemeChanged.exchange(false))
-      m_pRequestHandler->UpdateColorTheme(IsUserDarkMode());
+      m_pRequestHandler->UpdateColorTheme(m_darkMode);
     m_pRequestHandler->RefreshUserSettings();
   }
   DWORD result;

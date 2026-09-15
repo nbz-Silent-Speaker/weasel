@@ -5,9 +5,52 @@
 #include "AppearancePreview.h"
 #include <WeaselUtility.h>
 #include <WeaselUserSettings.h>
-#include <algorithm>
 
 namespace {
+constexpr int kSettingsColumnWidthDlu = 198;
+constexpr int kColumnGapDlu = 12;
+constexpr int kPreviewColumnLeftDlu =
+    settings_navigation::kPageInsetDlu + kSettingsColumnWidthDlu +
+    kColumnGapDlu;
+constexpr int kPreviewColumnWidthDlu = 302;
+constexpr int kPaletteCardTopDlu = 90;
+constexpr int kPaletteCardHeightDlu = 158;
+
+HWND CreateControl(HWND dialog,
+                   const wchar_t* class_name,
+                   const std::wstring& text,
+                   DWORD style,
+                   WORD id) {
+  return settings_navigation::Create(dialog, class_name, text, style, id, 0, 0,
+                                     1, 1);
+}
+
+void EnsureAppearanceControls(HWND dialog) {
+  if (!::GetDlgItem(dialog, IDC_APPEARANCE_ACRYLIC_CARD))
+    CreateControl(dialog, L"STATIC", L"", SS_OWNERDRAW | WS_CLIPSIBLINGS,
+                  IDC_APPEARANCE_ACRYLIC_CARD);
+  if (!::GetDlgItem(dialog, IDC_APPEARANCE_THEME_CARD))
+    CreateControl(dialog, L"STATIC", L"", SS_OWNERDRAW | WS_CLIPSIBLINGS,
+                  IDC_APPEARANCE_THEME_CARD);
+  if (!::GetDlgItem(dialog, IDC_APPEARANCE_CARD))
+    CreateControl(dialog, L"STATIC", L"", SS_OWNERDRAW | WS_CLIPSIBLINGS,
+                  IDC_APPEARANCE_CARD);
+  if (!::GetDlgItem(dialog, IDC_APPEARANCE_ACRYLIC_LABEL))
+    CreateControl(dialog, L"STATIC", L"", SS_LEFT | SS_CENTERIMAGE,
+                  IDC_APPEARANCE_ACRYLIC_LABEL);
+  if (!::GetDlgItem(dialog, IDC_APPEARANCE_ACRYLIC_STATE))
+    CreateControl(dialog, L"STATIC", L"", SS_RIGHT | SS_CENTERIMAGE,
+                  IDC_APPEARANCE_ACRYLIC_STATE);
+  if (!::GetDlgItem(dialog, IDC_APPEARANCE_THEME_LABEL))
+    CreateControl(dialog, L"STATIC", L"", SS_LEFT | SS_CENTERIMAGE,
+                  IDC_APPEARANCE_THEME_LABEL);
+  if (!::GetDlgItem(dialog, IDC_APPEARANCE_THEME_MODE))
+    CreateControl(dialog, L"COMBOBOX", L"",
+                  CBS_DROPDOWNLIST | CBS_OWNERDRAWVARIABLE | CBS_HASSTRINGS |
+                      WS_VSCROLL | WS_TABSTOP,
+                  IDC_APPEARANCE_THEME_MODE);
+}
+
 void LayoutAppearancePage(HWND dialog) {
   using settings_navigation::MoveControl;
   MoveControl(dialog, IDC_RESTORE_APPEARANCE,
@@ -15,25 +58,37 @@ void LayoutAppearancePage(HWND dialog) {
               settings_navigation::kBottomActionTopDlu,
               settings_navigation::kActionButtonWidthDlu,
               settings_navigation::kButtonHeightDlu);
-  MoveControl(dialog, IDC_ACRYLIC_ENABLED, 28, 25, 108, 12);
-  MoveControl(dialog, IDC_EDIT_GROUP, 28, 47,
-              settings_navigation::kSecondaryButtonWidthDlu,
-              settings_navigation::kButtonHeightDlu);
+  MoveControl(dialog, IDC_APPEARANCE_ACRYLIC_CARD,
+              settings_navigation::kPageInsetDlu,
+              settings_navigation::kFirstCardTopDlu, kSettingsColumnWidthDlu,
+              settings_navigation::kSingleRowCardHeightDlu);
+  MoveControl(dialog, IDC_APPEARANCE_THEME_CARD,
+              settings_navigation::kPageInsetDlu, 52, kSettingsColumnWidthDlu,
+              settings_navigation::kSingleRowCardHeightDlu);
+  MoveControl(dialog, IDC_APPEARANCE_CARD,
+              settings_navigation::kPageInsetDlu, kPaletteCardTopDlu,
+              kSettingsColumnWidthDlu, kPaletteCardHeightDlu);
+  MoveControl(dialog, IDC_APPEARANCE_ACRYLIC_LABEL, 26, 24, 116, 12);
+  MoveControl(dialog, IDC_APPEARANCE_ACRYLIC_STATE, 164, 24, 20, 12);
+  MoveControl(dialog, IDC_ACRYLIC_ENABLED, 188, 22, 14, 16);
+  MoveControl(dialog, IDC_APPEARANCE_THEME_LABEL, 26, 62, 70, 12);
+  MoveControl(dialog, IDC_APPEARANCE_THEME_MODE, 114, 59, 88, 80);
+  MoveControl(dialog, IDC_EDIT_GROUP, 26, 103, 54,
+              settings_navigation::kCompactToggleHeightDlu);
   MoveControl(dialog, IDC_EDIT_SINGLE,
-              28 + settings_navigation::kSecondaryButtonWidthDlu +
-                  settings_navigation::kToggleGapDlu,
-              47, settings_navigation::kSecondaryButtonWidthDlu,
-              settings_navigation::kButtonHeightDlu);
-  MoveControl(dialog, IDC_COLOR_FAMILY, 28, 82, 234, 120);
-  MoveControl(dialog, IDC_LIGHT_LABEL, 28, 70, 234, 11);
-  MoveControl(dialog, IDC_DARK_LABEL, 278, 70, 234, 11);
-  MoveControl(dialog, IDC_COLOR_LIGHT, 28, 82, 234, 120);
-  MoveControl(dialog, IDC_COLOR_DARK, 278, 82, 234, 120);
-  MoveControl(dialog, IDC_SELECTION_HINT, 28, 233, 484, 11);
-  MoveControl(dialog, IDC_APPEARANCE_LIGHT_PREVIEW_LABEL, 28, 111, 234, 11);
-  MoveControl(dialog, IDC_APPEARANCE_DARK_PREVIEW_LABEL, 278, 111, 234, 11);
-  MoveControl(dialog, IDC_PREVIEW_LIGHT, 28, 124, 234, 106);
-  MoveControl(dialog, IDC_PREVIEW_DARK, 278, 124, 234, 106);
+              26 + 54 + settings_navigation::kToggleGapDlu, 103, 54,
+              settings_navigation::kCompactToggleHeightDlu);
+  MoveControl(dialog, IDC_LIGHT_LABEL, 26, 157, 46, 12);
+  MoveControl(dialog, IDC_DARK_LABEL, 26, 188, 46, 12);
+  MoveControl(dialog, IDC_COLOR_FAMILY, 78, 154, 124, 100);
+  MoveControl(dialog, IDC_COLOR_LIGHT, 78, 154, 124, 100);
+  MoveControl(dialog, IDC_COLOR_DARK, 78, 185, 124, 100);
+  MoveControl(dialog, IDC_SELECTION_HINT, 26, 222, 176, 18);
+  MoveControl(dialog, IDC_PREVIEW_LIGHT, kPreviewColumnLeftDlu,
+              settings_navigation::kFirstCardTopDlu, kPreviewColumnWidthDlu,
+              113);
+  MoveControl(dialog, IDC_PREVIEW_DARK, kPreviewColumnLeftDlu, 135,
+              kPreviewColumnWidthDlu, 113);
 }
 }  // namespace
 
@@ -44,6 +99,7 @@ CString UIStyleSettingsDialog::Text(UINT id) const {
 }
 
 LRESULT UIStyleSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
+  EnsureAppearanceControls(m_hWnd);
   LayoutAppearancePage(m_hWnd);
   Gdiplus::GdiplusStartupInput startup;
   if (Gdiplus::GdiplusStartup(&graphics_token_, &startup, nullptr) !=
@@ -54,48 +110,57 @@ LRESULT UIStyleSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
     EndDialog(IDCANCEL);
     return TRUE;
   }
-  draft_.Load(settings_->ActiveAppearance(),
-              weasel::UserSettings::Load().acrylic);
-  for (size_t mode = 0; mode < single_.size(); ++mode) {
-    const auto& colors = draft_.colors();
-    single_[mode] =
-        !std::any_of(settings_->groups().begin(), settings_->groups().end(),
-                     [&](const auto& group) {
-                       return group.light == colors[mode * 2] &&
-                              group.dark == colors[mode * 2 + 1];
-                     });
-  }
-  HWND card = settings_navigation::Create(
-      m_hWnd, L"STATIC", L"", SS_OWNERDRAW | WS_CLIPSIBLINGS,
-      IDC_APPEARANCE_CARD,
-      settings_navigation::MapDialogUnits(
-          m_hWnd, settings_navigation::kPageInsetDlu,
-          settings_navigation::kFirstCardTopDlu, 0, 0)
-          .left,
-      settings_navigation::MapDialogUnits(
-          m_hWnd, 0, settings_navigation::kFirstCardTopDlu, 0, 0)
-          .top,
-      settings_navigation::MapDialogUnits(
-          m_hWnd, 0, 0, settings_navigation::kPageBodyWidthDlu, 0)
-          .right,
-      settings_navigation::MapDialogUnits(m_hWnd, 0, 0, 0, 234).bottom);
-  ::SetWindowPos(card, HWND_BOTTOM, 0, 0, 0, 0,
-                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  const auto user_settings = weasel::UserSettings::Load();
+  draft_.Load(settings_->ActiveAppearance(), user_settings.acrylic,
+              user_settings.appearance_theme_mode);
+  single_.fill(user_settings.appearance_theme_mode !=
+               weasel::AppearanceThemeMode::FollowSystem);
   ::SetDlgItemTextW(m_hWnd, IDC_RESTORE_APPEARANCE,
-                    settings_navigation::LocalText(L"恢复默认", L"還原預設",
-                                                   L"Restore defaults")
+                    settings_navigation::LocalText(
+                        L"恢复本页默认", L"還原本頁預設", L"Restore this page")
                         .c_str());
-  settings_navigation::StyleCard(m_hWnd, IDC_APPEARANCE_CARD);
+  ::SetDlgItemTextW(
+      m_hWnd, IDC_APPEARANCE_ACRYLIC_LABEL,
+      settings_navigation::LocalText(L"亚克力磨砂效果", L"壓克力毛玻璃效果",
+                                     L"Acrylic effect")
+          .c_str());
+  ::SetDlgItemTextW(m_hWnd, IDC_APPEARANCE_THEME_LABEL,
+                    settings_navigation::LocalText(L"界面模式", L"介面模式",
+                                                   L"Interface mode")
+                        .c_str());
+  ::SetDlgItemTextW(m_hWnd, IDC_ACRYLIC_ENABLED, L"");
+  ::SetDlgItemTextW(
+      m_hWnd, IDC_EDIT_GROUP,
+      settings_navigation::LocalText(L"成组设置", L"成組設定", L"Paired")
+          .c_str());
+  ::SetDlgItemTextW(
+      m_hWnd, IDC_EDIT_SINGLE,
+      settings_navigation::LocalText(L"单独设置", L"個別設定", L"Separate")
+          .c_str());
+  for (WORD id : {IDC_APPEARANCE_ACRYLIC_CARD, IDC_APPEARANCE_THEME_CARD,
+                  IDC_APPEARANCE_CARD}) {
+    settings_navigation::StyleCard(m_hWnd, id);
+    ::SetWindowPos(::GetDlgItem(m_hWnd, id), HWND_BOTTOM, 0, 0, 0, 0,
+                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  }
   settings_navigation::StyleActionButton(m_hWnd, IDC_RESTORE_APPEARANCE);
-  settings_navigation::StyleCheckbox(m_hWnd, IDC_ACRYLIC_ENABLED);
-  settings_navigation::StyleToggle(m_hWnd, IDC_EDIT_GROUP);
-  settings_navigation::StyleToggle(m_hWnd, IDC_EDIT_SINGLE);
-  for (UINT id : {IDC_COLOR_FAMILY, IDC_COLOR_LIGHT, IDC_COLOR_DARK})
+  settings_navigation::StyleSwitch(m_hWnd, IDC_ACRYLIC_ENABLED);
+  settings_navigation::StyleSegmentedToggle(m_hWnd, IDC_EDIT_GROUP);
+  settings_navigation::StyleSegmentedToggle(m_hWnd, IDC_EDIT_SINGLE);
+  for (UINT id : {IDC_APPEARANCE_THEME_MODE, IDC_COLOR_FAMILY,
+                  IDC_COLOR_LIGHT, IDC_COLOR_DARK})
     settings_navigation::StyleCombo(m_hWnd, id);
+  for (WORD id : {IDC_PREVIEW_LIGHT, IDC_PREVIEW_DARK}) {
+    LONG_PTR style = ::GetWindowLongPtrW(::GetDlgItem(m_hWnd, id), GWL_STYLE);
+    ::SetWindowLongPtrW(::GetDlgItem(m_hWnd, id), GWL_STYLE,
+                        style & ~static_cast<LONG_PTR>(WS_BORDER));
+    settings_navigation::StyleCard(m_hWnd, id);
+  }
   RECT unit{0, 0, 0, 14};
   MapDialogRect(&unit);
   item_height_ = unit.bottom;
-  for (UINT id : {IDC_COLOR_FAMILY, IDC_COLOR_LIGHT, IDC_COLOR_DARK})
+  for (UINT id : {IDC_APPEARANCE_THEME_MODE, IDC_COLOR_FAMILY,
+                  IDC_COLOR_LIGHT, IDC_COLOR_DARK})
     CComboBox(GetDlgItem(id)).SetItemHeight(-1, item_height_);
   RefreshMode();
   ready_ = true;
@@ -105,9 +170,9 @@ LRESULT UIStyleSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
        IDCANCEL,
        WeaselUserDataPath().wstring(),
        {IDOK, IDC_APPEARANCE_TITLE, IDC_SETTINGS_DIVIDER, IDC_MATERIAL_HINT,
-        IDC_EDITOR_HINT, IDC_PREVIEW_HINT}});
-  ::SetWindowPos(card, HWND_BOTTOM, 0, 0, 0, 0,
-                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        IDC_EDITOR_HINT, IDC_PREVIEW_HINT,
+        IDC_APPEARANCE_LIGHT_PREVIEW_LABEL,
+        IDC_APPEARANCE_DARK_PREVIEW_LABEL}});
   RefreshPreview();
   ::RedrawWindow(m_hWnd, nullptr, nullptr,
                  RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
@@ -117,6 +182,8 @@ LRESULT UIStyleSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
 
 std::vector<UIStyleSettingsDialog::PaletteEntry>&
 UIStyleSettingsDialog::Entries(UINT id) {
+  if (id == IDC_APPEARANCE_THEME_MODE)
+    return theme_modes_;
   return id == IDC_COLOR_FAMILY ? groups_ : singles_[id - IDC_COLOR_LIGHT];
 }
 
@@ -205,9 +272,34 @@ void UIStyleSettingsDialog::FillSingles() {
   }
 }
 
+void UIStyleSettingsDialog::FillThemeMode() {
+  CComboBox combo(GetDlgItem(IDC_APPEARANCE_THEME_MODE));
+  combo.ResetContent();
+  theme_modes_.clear();
+  const wchar_t* labels[][3] = {
+      {L"跟随系统", L"跟隨系統", L"Follow system"},
+      {L"始终浅色", L"始終淺色", L"Always light"},
+      {L"始终深色", L"始終深色", L"Always dark"},
+  };
+  for (int index = 0; index < 3; ++index) {
+    AddEntry(combo,
+             {CString(settings_navigation::LocalText(
+                           labels[index][0], labels[index][1], labels[index][2])
+                           .c_str()),
+              index});
+  }
+  combo.SetCurSel(static_cast<int>(draft_.theme_mode()));
+}
+
 void UIStyleSettingsDialog::RefreshMode() {
   CheckDlgButton(IDC_ACRYLIC_ENABLED,
                  draft_.acrylic() ? BST_CHECKED : BST_UNCHECKED);
+  ::SetDlgItemTextW(
+      m_hWnd, IDC_APPEARANCE_ACRYLIC_STATE,
+      settings_navigation::LocalText(draft_.acrylic() ? L"开" : L"关",
+                                     draft_.acrylic() ? L"開" : L"關",
+                                     draft_.acrylic() ? L"On" : L"Off")
+          .c_str());
   SetDlgItemText(IDC_MATERIAL_HINT,
                  Text(draft_.acrylic() ? IDS_APPEARANCE_ACRYLIC_HINT
                                        : IDS_APPEARANCE_NORMAL_HINT));
@@ -216,6 +308,7 @@ void UIStyleSettingsDialog::RefreshMode() {
                                        : IDS_APPEARANCE_NORMAL_PREVIEW));
   FillGroups();
   FillSingles();
+  FillThemeMode();
   ShowEditor(single_[draft_.acrylic() ? 0 : 1]);
   RefreshPreview();
 }
@@ -226,13 +319,13 @@ void UIStyleSettingsDialog::ShowEditor(bool single) {
   CheckDlgButton(IDC_EDIT_SINGLE, single ? BST_CHECKED : BST_UNCHECKED);
   ::SetDlgItemTextW(
       m_hWnd, IDC_LIGHT_LABEL,
-      settings_navigation::LocalText(single ? L"浅色方案" : L"配色方案",
-                                     single ? L"淺色方案" : L"配色方案",
-                                     single ? L"Light scheme" : L"Scheme")
+      settings_navigation::LocalText(single ? L"浅色" : L"浅色/深色",
+                                     single ? L"淺色" : L"淺色/深色",
+                                     single ? L"Light" : L"Light / dark")
           .c_str());
   ::SetDlgItemTextW(
       m_hWnd, IDC_DARK_LABEL,
-      settings_navigation::LocalText(L"深色方案", L"深色方案", L"Dark scheme")
+      settings_navigation::LocalText(L"深色", L"深色", L"Dark")
           .c_str());
   HWND family = GetDlgItem(IDC_COLOR_FAMILY);
   HWND light = GetDlgItem(IDC_COLOR_LIGHT);
@@ -246,6 +339,7 @@ void UIStyleSettingsDialog::ShowEditor(bool single) {
     ::ShowWindow(dark, SW_SHOW);
   ::ShowWindow(light_label, SW_SHOW);
   ::ShowWindow(dark_label, single ? SW_SHOW : SW_HIDE);
+  RefreshThemeAvailability();
   RefreshPreview();
   HWND card = GetDlgItem(IDC_APPEARANCE_CARD);
   if (card) {
@@ -260,6 +354,18 @@ void UIStyleSettingsDialog::ShowEditor(bool single) {
       ::RedrawWindow(control, nullptr, nullptr,
                      RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
   }
+}
+
+void UIStyleSettingsDialog::RefreshThemeAvailability() {
+  const bool single =
+      IsDlgButtonChecked(IDC_EDIT_SINGLE) == BST_CHECKED;
+  const auto mode = draft_.theme_mode();
+  const bool light_enabled =
+      !single || mode != weasel::AppearanceThemeMode::Dark;
+  const bool dark_enabled =
+      !single || mode != weasel::AppearanceThemeMode::Light;
+  ::EnableWindow(GetDlgItem(IDC_COLOR_LIGHT), light_enabled);
+  ::EnableWindow(GetDlgItem(IDC_COLOR_DARK), dark_enabled);
 }
 void UIStyleSettingsDialog::RefreshPreview() {
   bool mismatch = false;
@@ -296,6 +402,24 @@ LRESULT UIStyleSettingsDialog::OnMaterial(WORD, WORD, HWND, BOOL&) {
     InvalidatePreviewCache();
     RefreshMode();
   }
+  return 0;
+}
+
+LRESULT UIStyleSettingsDialog::OnThemeMode(WORD notification,
+                                            WORD,
+                                            HWND,
+                                            BOOL&) {
+  if (!ready_ || notification != CBN_SELCHANGE)
+    return 0;
+  const int selected =
+      CComboBox(GetDlgItem(IDC_APPEARANCE_THEME_MODE)).GetCurSel();
+  if (selected < 0 || selected > 2)
+    return 0;
+  draft_.SetThemeMode(static_cast<weasel::AppearanceThemeMode>(selected));
+  const bool single =
+      selected != static_cast<int>(weasel::AppearanceThemeMode::FollowSystem);
+  single_.fill(single);
+  ShowEditor(single);
   return 0;
 }
 
@@ -348,7 +472,8 @@ LRESULT UIStyleSettingsDialog::OnEditor(WORD, WORD id, HWND, BOOL&) {
 }
 
 LRESULT UIStyleSettingsDialog::OnReset(WORD, WORD, HWND, BOOL&) {
-  draft_.ResetCurrent();
+  draft_.Reset();
+  single_.fill(false);
   InvalidatePreviewCache();
   RefreshMode();
   return 0;
@@ -411,15 +536,24 @@ LRESULT UIStyleSettingsDialog::OnDestroy(UINT, WPARAM, LPARAM, BOOL& handled) {
 
 LRESULT UIStyleSettingsDialog::OnSave(WORD, WORD id, HWND, BOOL&) {
   const bool desired = draft_.acrylic();
-  const bool before = weasel::UserSettings::Load().acrylic;
-  const bool changeMaterial = desired != draft_.saved_acrylic();
-  if ((changeMaterial &&
-       weasel::UserSettingsStore().WriteBool(weasel::kAcrylicEnabledSetting,
-                                             desired) != ERROR_SUCCESS) ||
-      !settings_->SaveAppearance(draft_.colors())) {
-    if (changeMaterial)
-      weasel::UserSettingsStore().WriteBool(weasel::kAcrylicEnabledSetting,
-                                            before);
+  const auto desired_theme = draft_.theme_mode();
+  const auto before = weasel::UserSettings::Load();
+  const bool change_material = desired != draft_.saved_acrylic();
+  const bool change_theme = desired_theme != draft_.saved_theme_mode();
+  weasel::UserSettingsStore store;
+  const bool settings_saved =
+      (!change_material ||
+       store.WriteBool(weasel::kAcrylicEnabledSetting, desired) ==
+           ERROR_SUCCESS) &&
+      (!change_theme ||
+       store.WriteDword(weasel::kAppearanceThemeModeSetting,
+                        static_cast<DWORD>(desired_theme)) == ERROR_SUCCESS);
+  if (!settings_saved || !settings_->SaveAppearance(draft_.colors())) {
+    if (change_material)
+      store.WriteBool(weasel::kAcrylicEnabledSetting, before.acrylic);
+    if (change_theme)
+      store.WriteDword(weasel::kAppearanceThemeModeSetting,
+                       static_cast<DWORD>(before.appearance_theme_mode));
     MSG_BY_IDS(IDS_STR_SCHEME_SAVE_FAILED, IDS_STR_WEASEL,
                MB_OK | MB_ICONERROR);
     return 0;
@@ -449,7 +583,9 @@ LRESULT UIStyleSettingsDialog::OnSave(WORD, WORD id, HWND, BOOL&) {
       return 0;
     }
   }
-  draft_.Load(applied, weasel::UserSettings::Load().acrylic);
+  const auto saved_settings = weasel::UserSettings::Load();
+  draft_.Load(applied, saved_settings.acrylic,
+              saved_settings.appearance_theme_mode);
   InvalidatePreviewCache();
   RefreshMode();
   if (id == IDOK && !settings_navigation::RequestClose(m_hWnd, IDOK))
@@ -462,7 +598,8 @@ LRESULT UIStyleSettingsDialog::OnMeasureItem(UINT,
                                              LPARAM param,
                                              BOOL& handled) {
   const auto measure = reinterpret_cast<MEASUREITEMSTRUCT*>(param);
-  if (measure->CtlID != IDC_COLOR_FAMILY && measure->CtlID != IDC_COLOR_LIGHT &&
+  if (measure->CtlID != IDC_APPEARANCE_THEME_MODE &&
+      measure->CtlID != IDC_COLOR_FAMILY && measure->CtlID != IDC_COLOR_LIGHT &&
       measure->CtlID != IDC_COLOR_DARK) {
     handled = FALSE;
     return 0;
@@ -482,6 +619,9 @@ LRESULT UIStyleSettingsDialog::OnStaticColor(UINT,
   const bool content = id == IDC_MATERIAL_HINT || id == IDC_EDITOR_HINT ||
                        id == IDC_PREVIEW_HINT || id == IDC_SELECTION_HINT ||
                        id == IDC_LIGHT_LABEL || id == IDC_DARK_LABEL ||
+                       id == IDC_APPEARANCE_ACRYLIC_LABEL ||
+                       id == IDC_APPEARANCE_ACRYLIC_STATE ||
+                       id == IDC_APPEARANCE_THEME_LABEL ||
                        id == IDC_APPEARANCE_LIGHT_PREVIEW_LABEL ||
                        id == IDC_APPEARANCE_DARK_PREVIEW_LABEL;
   if (!content) {
@@ -491,6 +631,11 @@ LRESULT UIStyleSettingsDialog::OnStaticColor(UINT,
   const auto context = reinterpret_cast<HDC>(dc);
   if (id == IDC_MATERIAL_HINT || id == IDC_EDITOR_HINT ||
       id == IDC_PREVIEW_HINT || id == IDC_SELECTION_HINT)
+    ::SetTextColor(context, ::GetSysColor(COLOR_GRAYTEXT));
+  if ((id == IDC_LIGHT_LABEL &&
+       !::IsWindowEnabled(GetDlgItem(IDC_COLOR_LIGHT))) ||
+      (id == IDC_DARK_LABEL &&
+       !::IsWindowEnabled(GetDlgItem(IDC_COLOR_DARK))))
     ::SetTextColor(context, ::GetSysColor(COLOR_GRAYTEXT));
   ::SetBkMode(context, TRANSPARENT);
   return reinterpret_cast<LRESULT>(::GetSysColorBrush(COLOR_WINDOW));
@@ -532,18 +677,56 @@ void UIStyleSettingsDialog::DrawCombo(const DRAWITEMSTRUCT& draw) {
                   DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
       row.top += item_height_;
     }
-    const bool selected = (draw.itemState & ODS_SELECTED) != 0;
-    ::FillRect(draw.hDC, &row,
-               ::GetSysColorBrush(selected ? COLOR_HIGHLIGHT : COLOR_WINDOW));
-    ::SetTextColor(draw.hDC, ::GetSysColor(selected ? COLOR_HIGHLIGHTTEXT
+    const bool selected = (draw.itemState & ODS_SELECTED) != 0 && !field;
+    const bool disabled = (draw.itemState & ODS_DISABLED) != 0;
+    const COLORREF surface = ::GetSysColor(COLOR_WINDOW);
+    const COLORREF selected_fill = settings_navigation::Mix(
+        ::GetSysColor(COLOR_3DSHADOW), surface, 25);
+    ::FillRect(draw.hDC, &row, ::GetSysColorBrush(COLOR_WINDOW));
+    RECT selection = row;
+    if (selected) {
+      selection.left += 3;
+      selection.top += 1;
+      selection.right -= 3;
+      selection.bottom -= 1;
+      HBRUSH selection_brush = ::CreateSolidBrush(selected_fill);
+      HPEN selection_pen = ::CreatePen(PS_NULL, 0, selected_fill);
+      const HGDIOBJ old_brush = ::SelectObject(draw.hDC, selection_brush);
+      const HGDIOBJ old_pen = ::SelectObject(draw.hDC, selection_pen);
+      const int radius = (std::max)(
+          6, ::MulDiv(8, ::GetDeviceCaps(draw.hDC, LOGPIXELSX), 96));
+      ::RoundRect(draw.hDC, selection.left, selection.top, selection.right,
+                  selection.bottom, radius, radius);
+      ::SelectObject(draw.hDC, old_pen);
+      ::SelectObject(draw.hDC, old_brush);
+      ::DeleteObject(selection_pen);
+      ::DeleteObject(selection_brush);
+    }
+    ::SetTextColor(draw.hDC, ::GetSysColor(disabled ? COLOR_GRAYTEXT
                                                     : COLOR_WINDOWTEXT));
+    if (selected) {
+      const int marker_width =
+          (std::max)(2, ::MulDiv(3, ::GetDeviceCaps(draw.hDC, LOGPIXELSX), 96));
+      RECT marker{selection.left + 3,
+                  selection.top + (selection.bottom - selection.top) / 4,
+                  selection.left + 3 + marker_width,
+                  row.bottom - (row.bottom - row.top) / 4};
+      HBRUSH marker_brush =
+          ::CreateSolidBrush(::GetSysColor(COLOR_HIGHLIGHT));
+      HRGN marker_region = ::CreateRoundRectRgn(
+          marker.left, marker.top, marker.right, marker.bottom, marker_width,
+          marker_width);
+      if (marker_region) {
+        ::FillRgn(draw.hDC, marker_region, marker_brush);
+        ::DeleteObject(marker_region);
+      }
+      ::DeleteObject(marker_brush);
+    }
     RECT label = row;
     label.left += field ? 5 : 13;
     label.right -= 5;
     ::DrawTextW(draw.hDC, entry.label, -1, &label,
                 DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
-    if ((draw.itemState & ODS_FOCUS) && !(draw.itemState & ODS_NOFOCUSRECT))
-      ::DrawFocusRect(draw.hDC, &row);
   }
   ::RestoreDC(draw.hDC, saved);
 }
@@ -604,9 +787,14 @@ weasel::AppearancePreview UIStyleSettingsDialog::PreviewStyle(bool dark) {
       settings_->PreviewStyleString("font_face", L"Microsoft YaHei");
   preview.label_font_face = settings_->PreviewStyleString(
       "label_font_face", preview.font_face.c_str());
+  preview.title = settings_navigation::LocalText(
+      dark ? L"深色预览" : L"浅色预览", dark ? L"深色預覽" : L"淺色預覽",
+      dark ? L"Dark preview" : L"Light preview");
   preview.candidates = {static_cast<LPCWSTR>(Text(IDS_APPEARANCE_SAMPLE)),
                         static_cast<LPCWSTR>(Text(IDS_APPEARANCE_SAMPLE_2)),
-                        static_cast<LPCWSTR>(Text(IDS_APPEARANCE_SAMPLE_3))};
+                        static_cast<LPCWSTR>(Text(IDS_APPEARANCE_SAMPLE_3)),
+                        settings_navigation::LocalText(L"泥好", L"泥好",
+                                                       L"Hello")};
   return preview;
 }
 
@@ -660,11 +848,14 @@ LRESULT UIStyleSettingsDialog::OnDrawItem(UINT,
                                           LPARAM param,
                                           BOOL& handled) {
   const auto draw = reinterpret_cast<DRAWITEMSTRUCT*>(param);
-  if (draw->CtlID == IDC_APPEARANCE_CARD) {
+  if (draw->CtlID == IDC_APPEARANCE_CARD ||
+      draw->CtlID == IDC_APPEARANCE_ACRYLIC_CARD ||
+      draw->CtlID == IDC_APPEARANCE_THEME_CARD) {
     settings_navigation::DrawCard(*draw);
     return TRUE;
   }
-  if (draw->CtlID == IDC_COLOR_FAMILY || draw->CtlID == IDC_COLOR_LIGHT ||
+  if (draw->CtlID == IDC_APPEARANCE_THEME_MODE ||
+      draw->CtlID == IDC_COLOR_FAMILY || draw->CtlID == IDC_COLOR_LIGHT ||
       draw->CtlID == IDC_COLOR_DARK) {
     DrawCombo(*draw);
     return TRUE;

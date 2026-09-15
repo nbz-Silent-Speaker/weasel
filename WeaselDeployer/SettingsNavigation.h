@@ -40,6 +40,8 @@ inline constexpr int kButtonHeightDlu = 18;
 inline constexpr int kComboWidthDlu = 80;
 inline constexpr int kCardRadiusDlu = 8;
 inline constexpr int kControlRadiusDlu = 5;
+inline constexpr int kSingleRowCardHeightDlu = 32;
+inline constexpr int kCompactToggleHeightDlu = 16;
 
 struct InstallOptions {
   WORD apply = 0;
@@ -229,11 +231,18 @@ struct NavState {
 
 struct ToggleState {
   bool hover = false;
+  bool neutral = false;
 };
 
 struct CheckboxState {
   bool hover = false;
 };
+
+struct SwitchState {
+  bool hover = false;
+};
+
+inline void Round(HWND control, int radius = 12);
 
 inline LRESULT CALLBACK NavProc(HWND window,
                                 UINT message,
@@ -352,10 +361,12 @@ inline LRESULT CALLBACK ToggleProc(HWND window,
         ::SendMessageW(window, BM_GETCHECK, 0, 0) == BST_CHECKED;
     const COLORREF surface = ::GetSysColor(COLOR_WINDOW);
     const COLORREF accent = ::GetSysColor(COLOR_HIGHLIGHT);
+    const COLORREF neutral = Mix(::GetSysColor(COLOR_3DSHADOW), surface, 34);
     const COLORREF fill = !enabled       ? ::GetSysColor(COLOR_BTNFACE)
                           : checked      ? accent
                           : state->hover ? Mix(accent, surface, 20)
-                                         : surface;
+                          : state->neutral ? neutral
+                                           : surface;
     const COLORREF border =
         checked ? accent : Mix(::GetSysColor(COLOR_3DSHADOW), surface, 76);
     HBRUSH brush = ::CreateSolidBrush(fill);
@@ -494,6 +505,106 @@ inline LRESULT CALLBACK CheckboxProc(HWND window,
   return ::DefSubclassProc(window, message, wparam, lparam);
 }
 
+inline LRESULT CALLBACK SwitchProc(HWND window,
+                                   UINT message,
+                                   WPARAM wparam,
+                                   LPARAM lparam,
+                                   UINT_PTR,
+                                   DWORD_PTR data) {
+  auto* state = reinterpret_cast<SwitchState*>(data);
+  if (message == WM_MOUSEMOVE && !state->hover) {
+    state->hover = true;
+    TRACKMOUSEEVENT tracking{sizeof(tracking), TME_LEAVE, window, 0};
+    ::TrackMouseEvent(&tracking);
+    ::InvalidateRect(window, nullptr, FALSE);
+  } else if (message == WM_MOUSELEAVE) {
+    state->hover = false;
+    ::InvalidateRect(window, nullptr, FALSE);
+  } else if (message == WM_ERASEBKGND) {
+    return 1;
+  } else if (message == BM_SETCHECK || message == WM_ENABLE ||
+             message == WM_SETFOCUS || message == WM_KILLFOCUS) {
+    const LRESULT result = ::DefSubclassProc(window, message, wparam, lparam);
+    ::InvalidateRect(window, nullptr, FALSE);
+    return result;
+  } else if (message == WM_PAINT) {
+    PAINTSTRUCT paint{};
+    HDC dc = ::BeginPaint(window, &paint);
+    RECT bounds{};
+    ::GetClientRect(window, &bounds);
+    ::FillRect(dc, &bounds, ::GetSysColorBrush(COLOR_WINDOW));
+    const bool enabled = ::IsWindowEnabled(window) != FALSE;
+    const bool checked =
+        ::SendMessageW(window, BM_GETCHECK, 0, 0) == BST_CHECKED;
+    const int scale = ::GetDeviceCaps(dc, LOGPIXELSX);
+    const int track_height = (std::max)(10, ::MulDiv(12, scale, 96));
+    const int track_width = (std::max)(20, ::MulDiv(24, scale, 96));
+    const int left = bounds.right - track_width;
+    const int top = (bounds.bottom - bounds.top - track_height) / 2;
+    RECT track{left, top, left + track_width, top + track_height};
+    const COLORREF surface = ::GetSysColor(COLOR_WINDOW);
+    const COLORREF accent = ::GetSysColor(COLOR_HIGHLIGHT);
+    const COLORREF off = Mix(::GetSysColor(COLOR_3DSHADOW), surface,
+                             state->hover ? 104 : 86);
+    const COLORREF fill = !enabled ? ::GetSysColor(COLOR_BTNFACE)
+                          : checked ? accent
+                                    : off;
+    HBRUSH track_brush = ::CreateSolidBrush(fill);
+    HPEN track_pen = ::CreatePen(PS_NULL, 0, fill);
+    const HGDIOBJ old_brush = ::SelectObject(dc, track_brush);
+    const HGDIOBJ old_pen = ::SelectObject(dc, track_pen);
+    ::RoundRect(dc, track.left, track.top, track.right, track.bottom,
+                track_height, track_height);
+    ::SelectObject(dc, old_pen);
+    ::SelectObject(dc, old_brush);
+    ::DeleteObject(track_pen);
+    ::DeleteObject(track_brush);
+
+    const int inset = (std::max)(2, ::MulDiv(2, scale, 96));
+    const int knob_size = track_height - inset * 2;
+    const int knob_left = checked ? track.right - inset - knob_size
+                                  : track.left + inset;
+    HBRUSH knob = ::CreateSolidBrush(RGB(255, 255, 255));
+    HPEN knob_pen = ::CreatePen(PS_NULL, 0, RGB(255, 255, 255));
+    const HGDIOBJ previous_brush = ::SelectObject(dc, knob);
+    const HGDIOBJ previous_pen = ::SelectObject(dc, knob_pen);
+    ::Ellipse(dc, knob_left, track.top + inset, knob_left + knob_size,
+              track.top + inset + knob_size);
+    ::SelectObject(dc, previous_pen);
+    ::SelectObject(dc, previous_brush);
+    ::DeleteObject(knob_pen);
+    ::DeleteObject(knob);
+    if (::GetFocus() == window) {
+      RECT focus = track;
+      ::InflateRect(&focus, 2, 2);
+      ::DrawFocusRect(dc, &focus);
+    }
+    ::EndPaint(window, &paint);
+    return 0;
+  } else if (message == WM_NCDESTROY) {
+    ::RemoveWindowSubclass(window, SwitchProc, 5);
+    delete state;
+  }
+  return ::DefSubclassProc(window, message, wparam, lparam);
+}
+
+inline LRESULT CALLBACK ComboListProc(HWND window,
+                                      UINT message,
+                                      WPARAM wparam,
+                                      LPARAM lparam,
+                                      UINT_PTR,
+                                      DWORD_PTR data) {
+  HWND dialog = reinterpret_cast<HWND>(data);
+  if (message == WM_WINDOWPOSCHANGED || message == WM_SHOWWINDOW) {
+    const RECT radius = MapDialogUnits(dialog, 0, 0, kControlRadiusDlu,
+                                       kControlRadiusDlu);
+    Round(window, (std::max)(4, static_cast<int>(radius.right)));
+  } else if (message == WM_NCDESTROY) {
+    ::RemoveWindowSubclass(window, ComboListProc, 6);
+  }
+  return ::DefSubclassProc(window, message, wparam, lparam);
+}
+
 inline HWND Create(HWND dialog,
                    const wchar_t* class_name,
                    const std::wstring& text,
@@ -514,7 +625,7 @@ inline HWND Create(HWND dialog,
   return control;
 }
 
-inline void Round(HWND control, int radius = 12) {
+inline void Round(HWND control, int radius) {
   if (!control)
     return;
   RECT bounds{};
@@ -558,6 +669,16 @@ inline void StyleToggle(HWND dialog, WORD id) {
   RoundDlu(dialog, id, kControlRadiusDlu);
 }
 
+inline void StyleSegmentedToggle(HWND dialog, WORD id) {
+  StyleToggle(dialog, id);
+  HWND control = ::GetDlgItem(dialog, id);
+  if (!control)
+    return;
+  DWORD_PTR data = 0;
+  if (::GetWindowSubclass(control, ToggleProc, 2, &data) && data)
+    reinterpret_cast<ToggleState*>(data)->neutral = true;
+}
+
 inline void StyleCheckbox(HWND dialog, WORD id) {
   HWND control = ::GetDlgItem(dialog, id);
   if (!control)
@@ -571,8 +692,30 @@ inline void StyleCheckbox(HWND dialog, WORD id) {
   }
 }
 
-inline void StyleCombo(HWND dialog, WORD id) {
+inline void StyleSwitch(HWND dialog, WORD id) {
+  HWND control = ::GetDlgItem(dialog, id);
+  if (!control)
+    return;
+  DWORD_PTR existing = 0;
+  if (!::GetWindowSubclass(control, SwitchProc, 5, &existing)) {
+    auto* state = new SwitchState;
+    if (!::SetWindowSubclass(control, SwitchProc, 5,
+                             reinterpret_cast<DWORD_PTR>(state)))
+      delete state;
+  }
   RoundDlu(dialog, id, kControlRadiusDlu);
+}
+
+inline void StyleCombo(HWND dialog, WORD id) {
+  HWND control = ::GetDlgItem(dialog, id);
+  RoundDlu(dialog, id, kControlRadiusDlu);
+  COMBOBOXINFO info{sizeof(info)};
+  if (control && ::GetComboBoxInfo(control, &info) && info.hwndList) {
+    DWORD_PTR existing = 0;
+    if (!::GetWindowSubclass(info.hwndList, ComboListProc, 6, &existing))
+      ::SetWindowSubclass(info.hwndList, ComboListProc, 6,
+                          reinterpret_cast<DWORD_PTR>(dialog));
+  }
 }
 
 inline void PrepareCard(HWND dialog, WORD id) {

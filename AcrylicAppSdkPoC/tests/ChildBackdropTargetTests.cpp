@@ -281,7 +281,8 @@ int main() {
       weasel::AppearanceDraft draft;
       const weasel::AppearanceDraft::Colors original{
           "glass_day", "glass_night", "plain_day", "plain_night"};
-      draft.Load(original, true);
+      draft.Load(original, true,
+                 weasel::AppearanceThemeMode::FollowSystem);
       Check(!draft.changed());
       draft.SelectPair("glass_new_day", "glass_new_night");
       draft.SetAcrylic(false);
@@ -294,32 +295,34 @@ int main() {
       Check(draft.colors()[2] == "plain_day" &&
             draft.colors()[3] == "plain_new_night");
       Check(draft.changed() && draft.saved_acrylic());
+      draft.SetThemeMode(weasel::AppearanceThemeMode::Dark);
+      Check(draft.changed());
       // Reopening after Cancel loads the unchanged persisted choices.
-      draft.Load(original, true);
+      draft.Load(original, true,
+                 weasel::AppearanceThemeMode::FollowSystem);
       Check(!draft.changed() && draft.colors() == original);
     });
-    Run("appearance reset and applied snapshot respect the current mode", [] {
+    Run("appearance reset restores the complete page defaults", [] {
       weasel::AppearanceDraft draft;
       draft.Load({"glass_day", "glass_night", "plain_day", "plain_night"},
-                 false);
-      draft.ResetCurrent();
-      Check(!draft.acrylic());
+                 false, weasel::AppearanceThemeMode::Dark);
+      draft.Reset();
+      Check(draft.acrylic());
+      Check(draft.theme_mode() ==
+            weasel::AppearanceThemeMode::FollowSystem);
       Check(draft.colors() == weasel::AppearanceDraft::Colors{
-                                  "glass_day", "glass_night",
+                                  "base:Fluent_light", "base:Fluent_dark",
                                   "base:Fluent_light", "base:Fluent_dark"});
       Check(draft.changed());
       const auto applied = draft.colors();
-      draft.Load(applied, false);
+      draft.Load(applied, true,
+                 weasel::AppearanceThemeMode::FollowSystem);
       Check(!draft.changed());
-      draft.SetAcrylic(true);
-      draft.ResetCurrent();
-      Check(draft.colors()[2] == "base:Fluent_light" &&
-            draft.colors()[3] == "base:Fluent_dark");
+      draft.SetThemeMode(weasel::AppearanceThemeMode::Light);
       Check(draft.changed());
-      draft.Load(applied, false);
-      Check(!draft.changed() && draft.current(false) == "base:Fluent_light");
-      draft.SetAcrylic(true);
-      Check(draft.current(false) == "glass_day");
+      draft.Load(applied, true, weasel::AppearanceThemeMode::Light);
+      Check(!draft.changed() &&
+            draft.current(false) == "base:Fluent_light");
     });
     Run("source palettes keep duplicate IDs and raw custom path patches "
         "separate",
@@ -498,7 +501,7 @@ int main() {
           style.highlight = RGB(225, 225, 225);
           style.highlighted_text = RGB(10, 10, 10);
           style.highlighted_label = style.mark = RGB(0, 103, 192);
-          style.candidates = {L"Hello", L"Hi", L"You"};
+          style.candidates = {L"Hello", L"Hi", L"You", L"More"};
           const auto countPixels = [&](COLORREF color) {
             size_t count = 0;
             for (int y = area.top; y < area.bottom; ++y) {

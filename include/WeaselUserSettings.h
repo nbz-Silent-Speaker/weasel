@@ -17,6 +17,8 @@ namespace weasel {
 inline constexpr wchar_t kUserSettingsKey[] =
     L"Software\\Rime\\Weasel\\UserSettings";
 inline constexpr wchar_t kAcrylicEnabledSetting[] = L"AcrylicEnabled";
+inline constexpr wchar_t kAppearanceThemeModeSetting[] =
+    L"AppearanceThemeMode";
 inline constexpr wchar_t kStatusIconChineseSetting[] = L"StatusIconChinese";
 inline constexpr wchar_t kStatusIconEnglishSetting[] = L"StatusIconEnglish";
 inline constexpr wchar_t kStatusIconChineseCapsSetting[] =
@@ -341,14 +343,37 @@ struct FontSettings {
   bool operator!=(const FontSettings& other) const { return !(*this == other); }
 };
 
+enum class AppearanceThemeMode : DWORD {
+  FollowSystem = 0,
+  Light = 1,
+  Dark = 2,
+};
+
+inline bool ResolveAppearanceDarkMode(AppearanceThemeMode mode,
+                                      bool system_dark) {
+  if (mode == AppearanceThemeMode::Light)
+    return false;
+  if (mode == AppearanceThemeMode::Dark)
+    return true;
+  return system_dark;
+}
+
 struct UserSettings {
   // Preserve this Acrylic branch's existing appearance when no choice is saved.
   bool acrylic = true;
+  AppearanceThemeMode appearance_theme_mode =
+      AppearanceThemeMode::FollowSystem;
 
   static UserSettings Load() {
     UserSettings settings;
     settings.acrylic =
         UserSettingsStore().ReadBool(kAcrylicEnabledSetting, settings.acrylic);
+    const DWORD theme_mode = UserSettingsStore().ReadDword(
+        kAppearanceThemeModeSetting,
+        static_cast<DWORD>(settings.appearance_theme_mode));
+    if (theme_mode <= static_cast<DWORD>(AppearanceThemeMode::Dark))
+      settings.appearance_theme_mode =
+          static_cast<AppearanceThemeMode>(theme_mode);
     return settings;
   }
 };
