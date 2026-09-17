@@ -210,6 +210,7 @@ class WeaselTSF : public ITfTextInputProcessorEx,
   BOOL _InitLanguageBar();
   void _UninitLanguageBar();
   void _UpdateLanguageBar(weasel::Status stat);
+  void _UpdateCapsLockState(bool enabled);
   void _ShowLanguageBar(BOOL show);
   void _EnableLanguageBar(BOOL enable);
 

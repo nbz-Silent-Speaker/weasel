@@ -57,7 +57,6 @@ class StatusIconSettingsDialog : public CDialogImpl<StatusIconSettingsDialog> {
     std::wstring name;
     weasel::SchemaStatusIconSettings initial;
     weasel::SchemaStatusIconSettings draft;
-    std::array<std::wstring, 3> native;
   };
 
   LRESULT OnInitDialog(UINT, WPARAM, LPARAM, BOOL&);

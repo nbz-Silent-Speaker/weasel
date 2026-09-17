@@ -24,6 +24,10 @@ class weasel::UIImpl {
   void Hide();
   void ShowWithTimeout(size_t millisec);
   bool IsShown() const { return shown; }
+  void ReloadUserSettings() {
+    if (panel.IsWindow())
+      panel.ReloadUserSettings();
+  }
 
   static VOID CALLBACK OnTimer(_In_ HWND hwnd,
                                _In_ UINT uMsg,
@@ -91,6 +95,11 @@ bool UI::Create(HWND parent) {
         parent, 0, 0, WS_POPUP,
         WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
         0U, 0);
+    // The TSF candidate window is destroyed between UI lifecycles while its
+    // DirectWrite resources remain alive.  It can therefore miss the settings
+    // broadcast sent while no window exists.  Reload whenever the window is
+    // recreated so the next composition uses the persisted font choices.
+    pimpl_->panel.ReloadUserSettings();
     return true;
   }
 
@@ -102,6 +111,7 @@ bool UI::Create(HWND parent) {
       parent, 0, 0, WS_POPUP,
       WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
       0U, 0);
+  pimpl_->panel.ReloadUserSettings();
   return true;
 }
 
@@ -156,6 +166,11 @@ void UI::Refresh() {
   if (pimpl_) {
     pimpl_->Refresh();
   }
+}
+
+void UI::ReloadUserSettings() {
+  if (pimpl_)
+    pimpl_->ReloadUserSettings();
 }
 
 void UI::UpdateInputPosition(RECT const& rc) {

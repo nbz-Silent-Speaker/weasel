@@ -1,3 +1,5 @@
+param([switch]$NetworkProbe)
+
 $ErrorActionPreference = 'Stop'
 $source = Split-Path $PSScriptRoot -Parent
 $build = Join-Path $env:TEMP ('weasel-model-tests-' + [guid]::NewGuid())
@@ -31,10 +33,18 @@ Write-TestFile 'WanxiangUpdateManager.h' ($updateHeader.Replace(' private:', ' p
 $updateCpp = [IO.File]::ReadAllText((Join-Path $source 'WanxiangUpdateManager.cpp'))
 $updateCpp = $updateCpp.Replace('Software\\Rime\\Weasel\\PackageUpdates', $registryLiteral)
 Write-TestFile 'WanxiangUpdateManager.cpp' $updateCpp
+$schemeHeader = [IO.File]::ReadAllText((Join-Path $source 'WanxiangSchemeManager.h'))
+Write-TestFile 'WanxiangSchemeManager.h' ($schemeHeader.Replace(' private:', ' public:'))
+$schemeCpp = [IO.File]::ReadAllText((Join-Path $source 'WanxiangSchemeManager.cpp'))
+$schemeCpp = $schemeCpp.Replace('Software\\Rime\\Weasel\\PackageUpdates', $registryLiteral)
+Write-TestFile 'WanxiangSchemeManager.cpp' $schemeCpp
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'UpdateManagerTests.cpp') -Destination $build
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'SchemeTransactionTests.cpp') -Destination $build
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'SchemeDownloadProbe.cpp') -Destination $build
 Write-TestFile 'stdafx.h' @'
 #pragma once
 #include <windows.h>
+#include <atlbase.h>
 #include <iostream>
 #define LOG(level) std::cerr
 '@
@@ -59,6 +69,9 @@ extern std::filesystem::path test_user_directory;
 inline std::filesystem::path WeaselUserDataPath() { return test_user_directory; }
 inline std::wstring u8tow(const std::string& text) {
   return std::wstring(text.begin(), text.end());
+}
+inline std::string wtou8(const std::wstring& text) {
+  return std::string(text.begin(), text.end());
 }
 '@
 $modelTests = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'ModelTransactionTests.cpp'))
@@ -91,12 +104,33 @@ try {
     $fixtureRoot = if ($env:GITHUB_WORKSPACE) {
         Join-Path $env:GITHUB_WORKSPACE ('model-test-fixtures-' + [guid]::NewGuid())
     } else { Join-Path $build 'fixtures' }
-    $cacheRoot = Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) ('weasel-model-test-cache-' + [guid]::NewGuid())
+    $cacheRoot = if ($env:GITHUB_WORKSPACE) {
+        Join-Path ([Environment]::GetFolderPath('LocalApplicationData')) ('weasel-model-test-cache-' + [guid]::NewGuid())
+    } else { Join-Path $build 'cache' }
     & .\ModelTransactionTests.exe $fixtureRoot $cacheRoot
     if ($LASTEXITCODE -ne 0) { throw "Model transaction tests failed (exit $LASTEXITCODE)" }
+    & cl.exe /nologo /EHsc /std:c++17 /utf-8 /DUNICODE /D_UNICODE /I. WanxiangSchemeManager.cpp SchemeTransactionTests.cpp /Fe:SchemeTransactionTests.exe /link advapi32.lib bcrypt.lib ole32.lib shell32.lib uuid.lib winhttp.lib
+    if ($LASTEXITCODE -ne 0) { throw 'Scheme transaction test build failed' }
+    & .\SchemeTransactionTests.exe (Join-Path $fixtureRoot 'scheme')
+    if ($LASTEXITCODE -ne 0) { throw "Scheme transaction tests failed (exit $LASTEXITCODE)" }
+    if ($NetworkProbe) {
+        & cl.exe /nologo /EHsc /std:c++17 /utf-8 /DUNICODE /D_UNICODE /I. WanxiangSchemeManager.cpp SchemeDownloadProbe.cpp /Fe:SchemeDownloadProbe.exe /link advapi32.lib bcrypt.lib ole32.lib shell32.lib uuid.lib winhttp.lib
+        if ($LASTEXITCODE -ne 0) { throw 'Scheme download probe build failed' }
+        $releases = Invoke-RestMethod -Uri 'https://cnb.cool/amzxyz/rime-wanxiang/-/releases' -Headers @{ Accept = 'application/json' }
+        $formal = $releases | Where-Object { -not $_.draft -and -not $_.prerelease -and $_.tag_name -match '^v?\d+\.\d+\.\d+$' } | Sort-Object { [version]($_.tag_name.TrimStart('v', 'V')) } -Descending | Select-Object -First 1
+        $asset = $formal.assets | Where-Object name -eq 'rime-wanxiang-lite.zip' | Select-Object -First 1
+        if (-not $formal -or -not $asset -or $asset.hash_algo -ne 'sha256') { throw 'CNB scheme metadata was incomplete' }
+        $downloadUrl = 'https://cnb.cool/amzxyz/rime-wanxiang/-/releases/download/' + $formal.tag_name + '/rime-wanxiang-lite.zip'
+        & .\SchemeDownloadProbe.exe (Join-Path $fixtureRoot 'scheme-download') $formal.tag_name $downloadUrl $asset.hash_value ([string]$asset.size)
+        if ($LASTEXITCODE -ne 0) { throw "Scheme download probe failed (exit $LASTEXITCODE)" }
+    }
     & cl.exe /nologo /EHsc /std:c++17 /utf-8 /DUNICODE /D_UNICODE /I. WanxiangUpdateManager.cpp UpdateManagerTests.cpp /Fe:UpdateManagerTests.exe /link advapi32.lib winhttp.lib
     if ($LASTEXITCODE -ne 0) { throw 'Update manager test build failed' }
-    & .\UpdateManagerTests.exe
+    if ($NetworkProbe) {
+        & .\UpdateManagerTests.exe --network
+    } else {
+        & .\UpdateManagerTests.exe
+    }
     if ($LASTEXITCODE -ne 0) { throw "Update manager tests failed (exit $LASTEXITCODE)" }
 } finally {
     Pop-Location

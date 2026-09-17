@@ -9,6 +9,15 @@ static BOOL prevfEaten = FALSE;
 static int keyCountToSimulate = 0;
 
 void WeaselTSF::_ProcessKeyEvent(WPARAM wParam, LPARAM lParam, BOOL* pfEaten) {
+  GetKeyboardState(_lpbKeyState);
+  const bool caps_lock = (_lpbKeyState[VK_CAPITAL] & 0x01) != 0;
+  // The language-bar button is hosted by the TSF process itself.  Keep its
+  // Caps state current even when the Rime server is disconnected or this
+  // input context is temporarily disabled; neither condition should leave the
+  // system taskbar showing the stale ASCII icon.
+  if (wParam == VK_CAPITAL)
+    _UpdateCapsLockState(caps_lock);
+
   // when _IsKeyboardDisabled don't eat the key,
   // when keyboard closable and keyboard closed, don't eat the key
   if ((_isToOpenClose && !_IsKeyboardOpen()) || _IsKeyboardDisabled()) {
@@ -21,8 +30,9 @@ void WeaselTSF::_ProcessKeyEvent(WPARAM wParam, LPARAM lParam, BOOL* pfEaten) {
     *pfEaten = FALSE;
     return;
   }
+  if (wParam == VK_CAPITAL)
+    m_client.UpdateCapsLockState(caps_lock);
   weasel::KeyEvent ke;
-  GetKeyboardState(_lpbKeyState);
   if (!ConvertKeyEvent(static_cast<UINT>(wParam), lParam, _lpbKeyState, ke)) {
     /* Unknown key event */
     *pfEaten = FALSE;
@@ -63,9 +73,12 @@ void WeaselTSF::_ProcessKeyEvent(WPARAM wParam, LPARAM lParam, BOOL* pfEaten) {
 }
 
 STDMETHODIMP WeaselTSF::OnSetFocus(BOOL fForeground) {
-  if (fForeground)
+  if (fForeground) {
     m_client.FocusIn();
-  else {
+    const bool caps_lock = (GetKeyState(VK_CAPITAL) & 0x01) != 0;
+    m_client.UpdateCapsLockState(caps_lock);
+    _UpdateCapsLockState(caps_lock);
+  } else {
     m_client.FocusOut();
     _AbortComposition();
   }

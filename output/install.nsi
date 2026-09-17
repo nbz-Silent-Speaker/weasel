@@ -312,7 +312,6 @@ program_files:
   File /x *.custom.yaml /x weasel.yaml "data\*.yaml"
   File /oname=weasel.yaml "..\data\weasel.yaml"
   File /nonfatal "data\*.txt"
-  File /nonfatal "data\*.gram"
   ; bundled Wanxiang Lite dependencies and package metadata
   SetOutPath $INSTDIR\data\dicts
   File /r "data\dicts\*.*"

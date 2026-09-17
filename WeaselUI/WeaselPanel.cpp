@@ -2924,6 +2924,7 @@ void WeaselPanel::_CreateLayout() {
 // 更新界面
 void WeaselPanel::Refresh() {
   const bool acrylicModeChanged = _UpdateAcrylicBackdropMode();
+  const bool styleChanged = m_ostyle != m_style;
   LocalAcrylicGeometryBatch geometry(m_hWnd);
   IncrementPlacementDiag(m_hWnd, kPlacementDiagRefreshCount);
   bool should_show_icon =
@@ -2970,11 +2971,18 @@ void WeaselPanel::Refresh() {
     CommitPlacementDiagEvent(m_hWnd,
                              PlacementDiagEvent::RefreshBeforeReposition);
     _RepositionWindow();
-    if (m_ctx != m_octx || acrylicModeChanged) {
+    if (m_ctx != m_octx || acrylicModeChanged || styleChanged) {
       m_octx = m_ctx;
       RedrawWindow();
     }
   }
+}
+
+void WeaselPanel::ReloadUserSettings() {
+  if (pDWR)
+    pDWR->ReloadUserSettings();
+  Refresh();
+  RedrawWindow();
 }
 
 void WeaselPanel::_InitFontRes(bool forced) {
@@ -3995,10 +4003,7 @@ LRESULT WeaselPanel::OnUserSettingsChanged(UINT uMsg,
     bHandled = FALSE;
     return 0;
   }
-  if (pDWR)
-    pDWR->ReloadUserSettings();
-  Refresh();
-  RedrawWindow();
+  ReloadUserSettings();
   return 0;
 }
 

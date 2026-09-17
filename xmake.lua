@@ -18,7 +18,7 @@ add_includedirs("$(projectdir)/include")
 -- 设置Boost库的全局路径
 boost_root = os.getenv("BOOST_ROOT")
 boost_include_path = boost_root
-boost_lib_path = boost_root .. "/stage/lib"
+boost_lib_path = os.getenv("BOOST_LIB_PATH") or (boost_root .. "/stage/lib")
 add_includedirs(boost_include_path)
 add_linkdirs(boost_lib_path)
 add_cxflags("/utf-8 /MP /O2 /Oi /Gm- /EHsc /MT /GS /Gy /fp:precise /Zc:wchar_t /Zc:forScope /Zc:inline /external:W3 /Gd /TP")
@@ -52,6 +52,7 @@ end
 add_links("atls", "shell32", "advapi32", "gdi32", "user32", "uuid", "ole32")
 
 includes("WeaselIPC", "WeaselUI", "WeaselTSF")
+includes("test/FontSettingsRuntimeProbe")
 
 if is_arch("x64") or is_arch("x86") then
   includes("RimeWithWeasel", "WeaselIPCServer", "WeaselServer", "WeaselDeployer")
@@ -67,6 +68,7 @@ if is_mode("debug") then
 else
   add_cxflags("/GL")
   add_ldflags("/LTCG /INCREMENTAL:NO", {force = true})
+  add_shflags("/LTCG /INCREMENTAL:NO", {force = true})
 end
 
 rule("subcmd")

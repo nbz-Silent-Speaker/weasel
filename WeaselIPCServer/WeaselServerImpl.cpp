@@ -30,8 +30,6 @@ using namespace weasel;
 extern CAppModule _Module;
 
 namespace {
-constexpr UINT_PTR kSystemStateTimer = 0x5749;
-
 BOOL EffectiveDarkMode() {
   const auto settings = UserSettings::Load();
   return ResolveAppearanceDarkMode(settings.appearance_theme_mode,
@@ -60,7 +58,6 @@ void ServerImpl::_Finailize() {
   }
 
   if (IsWindow()) {
-    KillTimer(kSystemStateTimer);
     DestroyWindow();
   }
 }
@@ -102,17 +99,6 @@ LRESULT ServerImpl::OnCreate(UINT uMsg,
                              BOOL& bHandled) {
   // not neccessary...
   ::SetWindowText(m_hWnd, WEASEL_IPC_WINDOW);
-  SetTimer(kSystemStateTimer, 250);
-  return 0;
-}
-
-LRESULT ServerImpl::OnTimer(UINT, WPARAM wParam, LPARAM, BOOL& bHandled) {
-  if (wParam == kSystemStateTimer) {
-    if (m_systemStateChangedCallback)
-      m_systemStateChangedCallback();
-    return 0;
-  }
-  bHandled = FALSE;
   return 0;
 }
 
@@ -128,7 +114,6 @@ LRESULT ServerImpl::OnDestroy(UINT uMsg,
                               WPARAM wParam,
                               LPARAM lParam,
                               BOOL& bHandled) {
-  KillTimer(kSystemStateTimer);
   bHandled = FALSE;
   return 1;
 }
@@ -275,11 +260,18 @@ DWORD ServerImpl::OnKeyEvent(WEASEL_IPC_COMMAND uMsg,
   if (!m_pRequestHandler /* || !m_pSharedMemory*/)
     return 0;
 
+  const KeyEvent key_event(wParam);
   auto eat = [this](std::wstring& msg) -> bool {
     *channel << msg;
     return true;
   };
-  return m_pRequestHandler->ProcessKeyEvent(KeyEvent(wParam), lParam, eat);
+  return m_pRequestHandler->ProcessKeyEvent(key_event, lParam, eat);
+}
+
+DWORD ServerImpl::OnCapsLockState(WEASEL_IPC_COMMAND, DWORD wParam, DWORD) {
+  if (m_capsLockStateCallback)
+    m_capsLockStateCallback(wParam != 0);
+  return 1;
 }
 
 DWORD ServerImpl::OnShutdownServer(WEASEL_IPC_COMMAND uMsg,
@@ -447,6 +439,7 @@ void ServerImpl::HandlePipeMessage(PipeMessage pipe_msg, _Resp resp) {
   PIPE_MSG_HANDLE(WEASEL_IPC_START_SESSION, OnStartSession)
   PIPE_MSG_HANDLE(WEASEL_IPC_END_SESSION, OnEndSession)
   PIPE_MSG_HANDLE(WEASEL_IPC_PROCESS_KEY_EVENT, OnKeyEvent)
+  PIPE_MSG_HANDLE(WEASEL_IPC_UPDATE_CAPS_LOCK, OnCapsLockState)
   PIPE_MSG_HANDLE(WEASEL_IPC_SHUTDOWN_SERVER, OnShutdownServer)
   PIPE_MSG_HANDLE(WEASEL_IPC_FOCUS_IN, OnFocusIn)
   PIPE_MSG_HANDLE(WEASEL_IPC_FOCUS_OUT, OnFocusOut)
@@ -538,8 +531,8 @@ void Server::SetSettingsChangedCallback(std::function<void()> callback) {
   m_pImpl->SetSettingsChangedCallback(callback);
 }
 
-void Server::SetSystemStateChangedCallback(std::function<void()> callback) {
-  m_pImpl->SetSystemStateChangedCallback(callback);
+void Server::SetCapsLockStateCallback(std::function<void(bool)> callback) {
+  m_pImpl->SetCapsLockStateCallback(callback);
 }
 
 HWND Server::GetHWnd() {

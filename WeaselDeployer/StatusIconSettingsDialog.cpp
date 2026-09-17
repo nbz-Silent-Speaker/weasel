@@ -81,28 +81,6 @@ HICON LoadBuiltInIcon(bool english, bool caps = false) {
   return ::CopyIcon(::LoadIconW(nullptr, IDI_APPLICATION));
 }
 
-std::wstring LoadSchemaIconPath(RimeConfig* config,
-                                const char* primary,
-                                const char* legacy = nullptr) {
-  constexpr size_t kBufferSize = 1024;
-  char buffer[kBufferSize] = {};
-  RimeApi* api = rime_get_api();
-  if (!api->config_get_string(config, primary, buffer, kBufferSize) &&
-      (!legacy || !api->config_get_string(config, legacy, buffer, kBufferSize)))
-    return {};
-  const std::filesystem::path resource = u8tow(buffer);
-  if (resource.empty())
-    return {};
-  if (resource.is_absolute() && std::filesystem::is_regular_file(resource))
-    return resource.wstring();
-  const auto user = WeaselUserDataPath() / resource;
-  if (std::filesystem::is_regular_file(user))
-    return user.wstring();
-  const auto shared = WeaselSharedDataPath() / resource;
-  return std::filesystem::is_regular_file(shared) ? shared.wstring()
-                                                  : std::wstring();
-}
-
 bool IsSupportedIcon(const std::filesystem::path& path) {
   std::wstring extension = path.extension().wstring();
   std::transform(extension.begin(), extension.end(), extension.begin(),
@@ -1287,14 +1265,6 @@ void StatusIconSettingsDialog::PopulateSchemas() {
     entry.name = u8tow(item.name && *item.name ? item.name : item.schema_id);
     entry.initial = weasel::SchemaStatusIconSettings::Load(entry.id);
     entry.draft = entry.initial;
-    RimeConfig config{};
-    if (api->schema_open(item.schema_id, &config)) {
-      entry.native[0] =
-          LoadSchemaIconPath(&config, "schema/icon", "schema/zhung_icon");
-      entry.native[1] = LoadSchemaIconPath(&config, "schema/ascii_icon");
-      entry.native[2] = LoadSchemaIconPath(&config, "schema/caps_icon");
-      api->config_close(&config);
-    }
     const int row = schema_combo_.AddString(entry.name.c_str());
     if (row != CB_ERR && row != CB_ERRSPACE) {
       schemas_.push_back(std::move(entry));
@@ -1453,9 +1423,6 @@ HICON StatusIconSettingsDialog::ResolveActiveIcon(size_t state) const {
                                                   : &schema->draft.caps;
       if (!override->empty() && !weasel::StatusIconUsesGlobal(*override)) {
         if (HICON icon = LoadIconFile(*override))
-          return icon;
-      } else if (override->empty()) {
-        if (HICON icon = LoadIconFile(schema->native[state]))
           return icon;
       }
     }

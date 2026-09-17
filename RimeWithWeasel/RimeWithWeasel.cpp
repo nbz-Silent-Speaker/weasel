@@ -279,6 +279,7 @@ void RimeWithWeaselHandler::UpdateColorTheme(BOOL darkMode) {
     m_ui->style() = m_base_style;
     _ApplyModeColorScheme(m_ui->style());
   }
+  m_ui->Refresh();
 }
 
 void RimeWithWeaselHandler::RefreshUserSettings() {

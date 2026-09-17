@@ -116,11 +116,13 @@ if ($configurator -notmatch 'class\s+SettingsPageInstance' -or
     $configurator -notmatch 'kHostNavigateMessage') {
   throw 'Settings pages no longer use the shared navigation host.'
 }
-$showReplacement = $configurator.IndexOf('SWP_SHOWWINDOW')
+$freezeHost = $configurator.IndexOf('SendMessageW(host.window(), WM_SETREDRAW, FALSE')
 $hideCurrent = $configurator.IndexOf('ShowWindow(active->window(), SW_HIDE)')
-if ($showReplacement -lt 0 -or $hideCurrent -lt 0 -or
-    $showReplacement -gt $hideCurrent) {
-  throw 'A replacement settings page must be painted before the current page is hidden.'
+$showReplacement = $configurator.IndexOf('SWP_SHOWWINDOW', $hideCurrent)
+$thawHost = $configurator.IndexOf('SendMessageW(host.window(), WM_SETREDRAW, TRUE')
+if ($freezeHost -lt 0 -or $hideCurrent -lt $freezeHost -or
+    $showReplacement -lt $hideCurrent -or $thawHost -lt $showReplacement) {
+  throw 'Settings pages must swap in a frozen host using hide-then-show order.'
 }
 
 $hostedSources = @(
@@ -138,6 +140,17 @@ foreach ($source in $hostedSources) {
   if ($text -notmatch 'settings_navigation::RequestApply\(m_hWnd\)') {
     throw "$source bypasses the shared apply command."
   }
+}
+
+$inputPage = Get-Content -LiteralPath (
+  Join-Path $root 'WeaselDeployer/SwitcherSettingsDialog.cpp') -Raw
+if ($inputPage -match 'IDC_SCHEMA_DETAIL_VERSION,[\s\S]{0,120}?kInstalledVersion' -or
+    $inputPage -notmatch 'wanxiang\s*\?\s*WanxiangUpdateManager::LoadInstalledSchemeVersion\(\)') {
+  throw 'Scheme details must display the installed Lite version, not the bundled baseline.'
+}
+if ($inputPage -notmatch
+    'operation->success[\s\S]{0,420}?ShowDetails\(selected_schema_\)') {
+  throw 'Scheme details are not refreshed after a successful package update.'
 }
 
 $configuratorPath = Join-Path $root 'WeaselDeployer/Configurator.cpp'
@@ -330,6 +343,100 @@ if ($status -notmatch
     'saved_schema\.Save\(schema\.id\)[\s\S]{0,420}?' +
       'SchemaStatusIconSettings::Load\(schema\.id\) != saved_schema') {
   throw 'Status icon settings must be read back before Apply reports success.'
+}
+
+$traySdk = Get-Content -LiteralPath (
+  Join-Path $root 'WeaselServer/SystemTraySDK.cpp') -Raw
+$serverApp = Get-Content -LiteralPath (
+  Join-Path $root 'WeaselServer/WeaselServerApp.cpp') -Raw
+$panel = Get-Content -LiteralPath (
+  Join-Path $root 'WeaselUI/WeaselPanel.cpp') -Raw
+$directWrite = Get-Content -LiteralPath (
+  Join-Path $root 'WeaselUI/DirectWriteResources.cpp') -Raw
+$runtime = Get-Content -LiteralPath (
+  Join-Path $root 'RimeWithWeasel/RimeWithWeasel.cpp') -Raw
+$ipcServer = Get-Content -LiteralPath (
+  Join-Path $root 'WeaselIPCServer/WeaselServerImpl.cpp') -Raw
+$ipcClient = Get-Content -LiteralPath (
+  Join-Path $root 'WeaselIPC/WeaselClientImpl.cpp') -Raw
+$keySink = Get-Content -LiteralPath (
+  Join-Path $root 'WeaselTSF/KeyEventSink.cpp') -Raw
+$languageBar = Get-Content -LiteralPath (
+  Join-Path $root 'WeaselTSF/LanguageBar.cpp') -Raw
+$tsfResource = Get-Content -LiteralPath (
+  Join-Path $root 'WeaselTSF/WeaselTSF.rc') -Raw
+$uiHost = Get-Content -LiteralPath (
+  Join-Path $root 'WeaselUI/WeaselUI.cpp') -Raw
+$deployer = Get-Content -LiteralPath (
+  Join-Path $root 'WeaselDeployer/WeaselDeployer.cpp') -Raw
+$serverResource = Get-Content -LiteralPath (
+  Join-Path $root 'WeaselServer/WeaselServer.rc') -Raw
+$switcher = Get-Content -LiteralPath (
+  Join-Path $root 'WeaselDeployer/SwitcherSettingsDialog.cpp') -Raw
+$updateManager = Get-Content -LiteralPath (
+  Join-Path $root 'WeaselDeployer/WanxiangUpdateManager.cpp') -Raw
+if ($traySdk -notmatch 'm_hCurrentIcon = icon \? ::CopyIcon\(icon\)' -or
+    $traySdk -notmatch 'HICON replacement = ::CopyIcon\(hIcon\)' -or
+    $traySdk -notmatch 'Shell_NotifyIcon\(NIM_DELETE, &m_tnd\)[\s\S]{0,160}?AddIcon\(\)' -or
+    $tray -notmatch 'SetIcon\(mode_icon\[mode\]\)[\s\S]{0,80}?ShowIcon\(\)' -or
+    $tray -match 'LoadResolvedStatusIcon\([^\)]*native_schema' -or
+    $status -match 'LoadIconFile\(schema->native\[state\]\)' -or
+    $serverApp -notmatch 'm_ui\.ReloadUserSettings\(\)[\s\S]{0,100}?tray_icon\.ReloadSettings\(\)' -or
+    $panel -notmatch 'styleChanged = m_ostyle != m_style' -or
+    $panel -notmatch 'acrylicModeChanged \|\| styleChanged' -or
+    $directWrite -notmatch 'CreateFontFromLOGFONT' -or
+    $directWrite -notmatch 'SetFontFamilyName\(resolved\.family' -or
+    $directWrite -notmatch 'pPreeditTextFormat\.Get\(\)[\s\S]{0,80}?FontRole::Preedit' -or
+    $directWrite -notmatch 'pLabelTextFormat\.Get\(\)[\s\S]{0,80}?FontRole::Label' -or
+    $directWrite -notmatch 'pCommentTextFormat\.Get\(\)[\s\S]{0,80}?FontRole::Comment' -or
+    $directWrite -notmatch 'return FontRole::Candidate' -or
+    $ipcServer -notmatch 'WEASEL_IPC_UPDATE_CAPS_LOCK, OnCapsLockState' -or
+    $ipcClient -notmatch 'WEASEL_IPC_UPDATE_CAPS_LOCK, enabled \? 1 : 0' -or
+    $keySink -notmatch 'GetKeyboardState\(_lpbKeyState\)[\s\S]{0,520}?' +
+      'UpdateCapsLockState\(caps_lock\)' -or
+    $keySink -notmatch '_UpdateCapsLockState\(caps_lock\)' -or
+    $languageBar -notmatch 'if \(caps_lock\)[\s\S]{0,100}?' +
+      'LoadResolvedStatusIcon\(schema\.caps, global\.caps, IDI_CAPS\)' -or
+    $languageBar -notmatch 'SchemaStatusIconSettings::Load\(_schema_id\)' -or
+    $tsfResource -notmatch 'IDI_CAPS\s+ICON\s+"\.\.\\\\resource\\\\caps\.ico"' -or
+    $tsfResource -match 'ID_WEASELTRAY_EXTENDED_SETTINGS|ID_WEASELTRAY_ACRYLIC' -or
+    $serverApp -notmatch 'SetCapsLockStateCallback' -or
+    $uiHost -notmatch 'panel\.Create\([\s\S]{0,450}?' +
+      'panel\.ReloadUserSettings\(\)' -or
+    $deployer -notmatch 'SetProcessDpiAwareness\(PROCESS_PER_MONITOR_DPI_AWARE\)' -or
+    $serverApp -notmatch 'ID_WEASELTRAY_SETTINGS,[\s\S]{0,160}?L"/input"' -or
+    $deployer -notmatch 'L"/input"[\s\S]{0,80}?configurator\.Run\(false\)' -or
+    $serverResource -match 'ID_WEASELTRAY_EXTENDED_SETTINGS|ID_WEASELTRAY_ACRYLIC' -or
+    $runtime -notmatch 'm_ui->Refresh\(\)[\s\S]{0,20}?\n\}') {
+  throw 'Runtime settings must resolve selected font faces, track Caps Lock, ' +
+    'recover missing tray icons, and repaint font/theme changes.'
+}
+
+if ($switcher -notmatch 'SWP_NOCOPYBITS \| SWP_NOREDRAW' -or
+    $switcher -notmatch 'SetWindowRgn\(control, nullptr, FALSE\)' -or
+    $switcher -notmatch 'GetWindowLongPtrW\(control, GWL_STYLE\) & WS_VISIBLE' -or
+    $switcher -match 'IsWindowVisible\(control\)' -or
+    $switcher -notmatch 'ModelUiNeedsRefresh\(progress\)' -or
+    $switcher -notmatch 'progress\.state == State::Downloading &&[\s\S]{0,100}?' +
+      'progress\.transferred != model_ui_transferred_' -or
+    $switcher -notmatch 'RedrawWindow\(control, nullptr, nullptr,[\s\S]{0,100}?' +
+      'RDW_INVALIDATE \| RDW_ERASE \| RDW_FRAME \| RDW_UPDATENOW' -or
+    $switcher -notmatch 'RDW_INVALIDATE \| RDW_ERASE \| RDW_FRAME \| RDW_ALLCHILDREN' -or
+    $switcher -notmatch 'scheme_update_available_ \+ model_update_available_' -or
+    $switcher -notmatch 'open_update_list_after_check_ = true' -or
+    $switcher -notmatch 'result\.scheme_update_available = scheme_update_available_' -or
+    $switcher -notmatch 'StartSchemeUpdate\(latest_scheme_release_\)' -or
+    $switcher -notmatch 'QueryGithubSchemeRelease' -or
+    $updateManager -notmatch 'kCnbReleasesPath' -or
+    $updateManager -notmatch 'ParseCnbSchemeReleases\(response, release\)' -or
+    $updateManager -notmatch 'ParseGithubSchemeReleases\(response, release\)' -or
+    $updateManager -notmatch 'result\.scheme_update_available \|\|' -or
+    $updateManager -notmatch 'SaveLastRelease\(result\.latest_tag\)[\s\S]{0,220}?' +
+      'QueryLatestModel') {
+  throw 'Wanxiang update checks must keep scheme and model results independent, ' +
+    'refresh cached results before use, leave stable model UI idle, preserve ' +
+    'child visibility while the parent is hidden, and repaint moved rounded ' +
+    'buttons including their labels.'
 }
 
 Write-Output ('Settings layout contract verified for: ' +

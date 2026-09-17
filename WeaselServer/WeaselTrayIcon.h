@@ -3,6 +3,7 @@
 #include <WeaselIPC.h>
 #include "SystemTraySDK.h"
 
+#include <atomic>
 #include <condition_variable>
 #include <mutex>
 
@@ -29,19 +30,13 @@ struct WeaselTrayIconState {
     state.disabled = status.disabled;
     state.ascii_mode = status.ascii_mode;
     state.schema_id = status.schema_id;
-    state.current_zhung_icon = style.current_zhung_icon;
-    state.current_ascii_icon = style.current_ascii_icon;
-    state.current_caps_icon = style.current_caps_icon;
     return state;
   }
 
   bool operator==(const WeaselTrayIconState& rhs) const {
     return valid == rhs.valid && display_tray_icon == rhs.display_tray_icon &&
            disabled == rhs.disabled && ascii_mode == rhs.ascii_mode &&
-           caps_lock == rhs.caps_lock && schema_id == rhs.schema_id &&
-           current_zhung_icon == rhs.current_zhung_icon &&
-           current_ascii_icon == rhs.current_ascii_icon &&
-           current_caps_icon == rhs.current_caps_icon;
+           caps_lock == rhs.caps_lock && schema_id == rhs.schema_id;
   }
 
   bool operator!=(const WeaselTrayIconState& rhs) const {
@@ -54,9 +49,6 @@ struct WeaselTrayIconState {
   bool ascii_mode;
   bool caps_lock;
   std::wstring schema_id;
-  std::wstring current_zhung_icon;
-  std::wstring current_ascii_icon;
-  std::wstring current_caps_icon;
 };
 
 class WeaselTrayIcon : public CSystemTray {
@@ -83,7 +75,7 @@ class WeaselTrayIcon : public CSystemTray {
   // Runs on the server message thread (no g_api_mutex held).
   void ApplyRefresh();
   void ReloadSettings();
-  void PollSystemState();
+  void SetCapsLockState(bool enabled);
 
  protected:
   virtual void CustomizeMenu(HMENU hMenu);
@@ -94,10 +86,8 @@ class WeaselTrayIcon : public CSystemTray {
   weasel::Status& m_status;
   WeaselTrayMode m_mode;
   std::wstring m_schema_id;
-  std::wstring m_schema_zhung_icon;
-  std::wstring m_schema_ascii_icon;
-  std::wstring m_schema_caps_icon;
   bool m_disabled;
+  std::atomic<bool> m_caps_lock;
   WeaselTrayIconState m_last_state;
   ULONG_PTR m_graphics_token = 0;
 

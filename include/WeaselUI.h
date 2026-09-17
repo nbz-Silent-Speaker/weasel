@@ -20,6 +20,11 @@ enum ClientCapabilities {
 
 class UIImpl;
 class DirectWriteResources;
+struct ResolvedFontChoice {
+  std::wstring family;
+  DWRITE_FONT_WEIGHT weight = DWRITE_FONT_WEIGHT_NORMAL;
+  DWRITE_FONT_STYLE style = DWRITE_FONT_STYLE_NORMAL;
+};
 template <class T>
 using an = std::shared_ptr<T>;
 
@@ -60,6 +65,7 @@ class UI {
 
   // 更新界面显示内容
   void Update(Context const& ctx, Status const& status);
+  void ReloadUserSettings();
 
   Context& ctx() { return ctx_; }
   Context& octx() { return octx_; }
@@ -168,6 +174,9 @@ class DirectWriteResources {
  private:
   UIStyle& _style;
   FontSettings font_settings_;
+  std::array<ResolvedFontChoice, FontSettings::kChoiceCount>
+      resolved_font_settings_;
+  void _ResolveFontSettings();
   void _ParseFontFace(const std::wstring& fontFaceStr,
                       DWRITE_FONT_WEIGHT& fontWeight,
                       DWRITE_FONT_STYLE& fontStyle);

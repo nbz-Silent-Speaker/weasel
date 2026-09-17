@@ -12,6 +12,37 @@
 
 static const DWORD LANGBARITEMSINK_COOKIE = 0x42424242;
 
+namespace {
+HICON LoadStatusIconFile(const std::wstring& path) {
+  if (path.empty() ||
+      ::GetFileAttributesW(path.c_str()) == INVALID_FILE_ATTRIBUTES) {
+    return nullptr;
+  }
+  return reinterpret_cast<HICON>(::LoadImageW(
+      nullptr, path.c_str(), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON),
+      GetSystemMetrics(SM_CYSMICON), LR_LOADFROMFILE));
+}
+
+HICON LoadStatusIconResource(UINT resource) {
+  return reinterpret_cast<HICON>(::LoadImageW(
+      g_hInst, MAKEINTRESOURCEW(resource), IMAGE_ICON,
+      GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_SHARED));
+}
+
+HICON LoadResolvedStatusIcon(const std::wstring& schema_override,
+                             const std::wstring& global,
+                             UINT fallback) {
+  if (!schema_override.empty() &&
+      !weasel::StatusIconUsesGlobal(schema_override)) {
+    if (HICON icon = LoadStatusIconFile(schema_override))
+      return icon;
+  }
+  if (HICON icon = LoadStatusIconFile(global))
+    return icon;
+  return LoadStatusIconResource(fallback);
+}
+}  // namespace
+
 static LPCWSTR GetWeaselRegName() {
   LPCWSTR WEASEL_REG_NAME_;
   if (is_wow64())
@@ -31,16 +62,16 @@ CLangBarItemButton::CLangBarItemButton(com_ptr<WeaselTSF> pTextService,
                                        REFGUID guid,
                                        weasel::UIStyle& style)
     : _status(0),
+      ascii_mode(false),
+      caps_lock((::GetKeyState(VK_CAPITAL) & 1) != 0),
       _style(style),
-      _current_schema_zhung_icon(),
-      _current_schema_ascii_icon() {
+      _schema_id() {
   DllAddRef();
 
   _pLangBarItemSink = NULL;
   _cRef = 1;
   _pTextService = pTextService;
   _guid = guid;
-  ascii_mode = false;
 }
 
 CLangBarItemButton::~CLangBarItemButton() {
@@ -150,8 +181,6 @@ STDMETHODIMP CLangBarItemButton::OnClick(TfLBIClick click,
         menu = LoadMenuW(g_hInst, MAKEINTRESOURCE(IDR_MENU_POPUP));
       }
       HMENU popupMenu = GetSubMenu(menu, 0);
-      weasel::SetMenuCommandChecked(popupMenu, ID_WEASELTRAY_ACRYLIC,
-                                    weasel::UserSettings::Load().acrylic);
       UINT wID = weasel::TrackTrayMenu(popupMenu, pt, hwnd,
                                        TPM_NONOTIFY | TPM_RETURNCMD, prcArea);
       DestroyMenu(menu);
@@ -164,8 +193,6 @@ STDMETHODIMP CLangBarItemButton::OnClick(TfLBIClick click,
 STDMETHODIMP CLangBarItemButton::InitMenu(ITfMenu* pMenu) {
   HMENU menu = LoadMenuW(g_hInst, MAKEINTRESOURCE(IDR_MENU_POPUP));
   HMENU popupMenu = GetSubMenu(menu, 0);
-  weasel::SetMenuCommandChecked(popupMenu, ID_WEASELTRAY_ACRYLIC,
-                                weasel::UserSettings::Load().acrylic);
   const HRESULT result = weasel::CopyMenuToTfMenu(popupMenu, pMenu);
   DestroyMenu(menu);
   return result;
@@ -177,27 +204,16 @@ STDMETHODIMP CLangBarItemButton::OnMenuSelect(UINT wID) {
 }
 
 STDMETHODIMP CLangBarItemButton::GetIcon(HICON* phIcon) {
-  if (ascii_mode) {
-    if (_style.current_ascii_icon.empty())
-      *phIcon = (HICON)LoadImageW(g_hInst, MAKEINTRESOURCEW(IDI_EN), IMAGE_ICON,
-                                  GetSystemMetrics(SM_CXSMICON),
-                                  GetSystemMetrics(SM_CYSMICON), LR_SHARED);
-    else
-      *phIcon =
-          (HICON)LoadImageW(NULL, _style.current_ascii_icon.c_str(), IMAGE_ICON,
-                            GetSystemMetrics(SM_CXSMICON),
-                            GetSystemMetrics(SM_CYSMICON), LR_LOADFROMFILE);
-  } else {
-    if (_style.current_zhung_icon.empty())
-      *phIcon = (HICON)LoadImageW(g_hInst, MAKEINTRESOURCEW(IDI_ZH), IMAGE_ICON,
-                                  GetSystemMetrics(SM_CXSMICON),
-                                  GetSystemMetrics(SM_CYSMICON), LR_SHARED);
-    else
-      *phIcon =
-          (HICON)LoadImageW(NULL, _style.current_zhung_icon.c_str(), IMAGE_ICON,
-                            GetSystemMetrics(SM_CXSMICON),
-                            GetSystemMetrics(SM_CYSMICON), LR_LOADFROMFILE);
-  }
+  if (!phIcon)
+    return E_INVALIDARG;
+  const auto global = weasel::StatusIconSettings::Load();
+  const auto schema = weasel::SchemaStatusIconSettings::Load(_schema_id);
+  if (caps_lock)
+    *phIcon = LoadResolvedStatusIcon(schema.caps, global.caps, IDI_CAPS);
+  else if (ascii_mode)
+    *phIcon = LoadResolvedStatusIcon(schema.ascii, global.english, IDI_EN);
+  else
+    *phIcon = LoadResolvedStatusIcon(schema.chinese, global.chinese, IDI_ZH);
   return (*phIcon == NULL) ? E_FAIL : S_OK;
 }
 
@@ -231,18 +247,19 @@ STDMETHODIMP CLangBarItemButton::UnadviseSink(DWORD dwCookie) {
 }
 
 void CLangBarItemButton::UpdateWeaselStatus(weasel::Status stat) {
-  if (stat.ascii_mode != ascii_mode) {
-    ascii_mode = stat.ascii_mode;
-  }
-  if (_current_schema_zhung_icon != _style.current_zhung_icon) {
-    _current_schema_zhung_icon = _style.current_zhung_icon;
-  }
-  if (_current_schema_ascii_icon != _style.current_ascii_icon) {
-    _current_schema_ascii_icon = _style.current_ascii_icon;
-  }
+  ascii_mode = stat.ascii_mode;
+  _schema_id = stat.schema_id;
   if (_pLangBarItemSink) {
     _pLangBarItemSink->OnUpdate(TF_LBI_STATUS | TF_LBI_ICON);
   }
+}
+
+void CLangBarItemButton::UpdateCapsLockState(bool enabled) {
+  if (caps_lock == enabled)
+    return;
+  caps_lock = enabled;
+  if (_pLangBarItemSink)
+    _pLangBarItemSink->OnUpdate(TF_LBI_STATUS | TF_LBI_ICON);
 }
 
 void CLangBarItemButton::SetLangbarStatus(DWORD dwStatus, BOOL fSet) {
@@ -396,6 +413,11 @@ void WeaselTSF::_UpdateLanguageBar(weasel::Status stat) {
   _SetCompartmentDWORD(flags, GUID_COMPARTMENT_KEYBOARD_INPUTMODE_CONVERSION);
 
   _pLangBarButton->UpdateWeaselStatus(stat);
+}
+
+void WeaselTSF::_UpdateCapsLockState(bool enabled) {
+  if (_pLangBarButton)
+    _pLangBarButton->UpdateCapsLockState(enabled);
 }
 
 void WeaselTSF::_ShowLanguageBar(BOOL show) {

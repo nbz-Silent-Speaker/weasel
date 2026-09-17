@@ -64,6 +64,11 @@ bool ClientImpl::ProcessKeyEvent(KeyEvent const& keyEvent) {
   return ret != 0;
 }
 
+void ClientImpl::UpdateCapsLockState(bool enabled) {
+  if (_Active())
+    _SendMessage(WEASEL_IPC_UPDATE_CAPS_LOCK, enabled ? 1 : 0, session_id);
+}
+
 bool ClientImpl::CommitComposition() {
   if (!_Active())
     return false;
@@ -235,6 +240,10 @@ void Client::ShutdownServer() {
 
 bool Client::ProcessKeyEvent(KeyEvent const& keyEvent) {
   return m_pImpl->ProcessKeyEvent(keyEvent);
+}
+
+void Client::UpdateCapsLockState(bool enabled) {
+  m_pImpl->UpdateCapsLockState(enabled);
 }
 
 bool Client::CommitComposition() {

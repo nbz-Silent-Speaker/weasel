@@ -33,6 +33,7 @@ class CLangBarItemButton : public ITfLangBarItemButton, public ITfSource {
   BOOL IsLangBarDisabled() { return (_status & TF_LBI_STATUS_DISABLED); }
 
   void UpdateWeaselStatus(weasel::Status stat);
+  void UpdateCapsLockState(bool enabled);
   void SetLangbarStatus(DWORD dwStatus, BOOL fSet);
 
  private:
@@ -42,7 +43,7 @@ class CLangBarItemButton : public ITfLangBarItemButton, public ITfSource {
   LONG _cRef; /* COM Reference count */
   DWORD _status;
   bool ascii_mode;
+  bool caps_lock;
   weasel::UIStyle& _style;
-  std::wstring _current_schema_zhung_icon;
-  std::wstring _current_schema_ascii_icon;
+  std::wstring _schema_id;
 };

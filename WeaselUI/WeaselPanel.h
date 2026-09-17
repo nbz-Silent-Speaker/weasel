@@ -68,6 +68,7 @@ class WeaselPanel
 
   void MoveTo(RECT const& rc);
   void Refresh();
+  void ReloadUserSettings();
   void DoPaint(CDCHandle dc);
   bool GetIsReposition() { return m_istorepos; }
   void RedrawWindow();

@@ -93,15 +93,11 @@ HICON LoadResourceIcon(UINT resource) {
 }
 
 HICON LoadResolvedStatusIcon(const std::wstring& schema_override,
-                             const std::wstring& native_schema,
                              const std::wstring& global,
                              UINT fallback) {
   if (!schema_override.empty() &&
       !weasel::StatusIconUsesGlobal(schema_override)) {
     if (HICON icon = LoadIconFile(schema_override))
-      return icon;
-  } else if (schema_override.empty()) {
-    if (HICON icon = LoadIconFile(native_schema))
       return icon;
   }
   if (HICON icon = LoadIconFile(global))
@@ -115,10 +111,8 @@ WeaselTrayIcon::WeaselTrayIcon(weasel::UI& ui)
       m_status(ui.status()),
       m_mode(INITIAL),
       m_schema_id(),
-      m_schema_zhung_icon(),
-      m_schema_ascii_icon(),
-      m_schema_caps_icon(),
-      m_disabled(false) {
+      m_disabled(false),
+      m_caps_lock(CapsLockEnabled()) {
   Gdiplus::GdiplusStartupInput startup;
   if (Gdiplus::GdiplusStartup(&m_graphics_token, &startup, nullptr) !=
       Gdiplus::Ok) {
@@ -132,8 +126,6 @@ WeaselTrayIcon::~WeaselTrayIcon() {
 }
 
 void WeaselTrayIcon::CustomizeMenu(HMENU hMenu) {
-  weasel::SetMenuCommandChecked(hMenu, ID_WEASELTRAY_ACRYLIC,
-                                weasel::UserSettings::Load().acrylic);
   const auto update_count = LoadPackageUpdateCount();
   if (update_count)
     SetMenuCommandText(hMenu, ID_WEASELTRAY_SETTINGS,
@@ -181,7 +173,7 @@ void WeaselTrayIcon::ApplyRefresh() {
       return;
     }
     state = m_pending_state;
-    state.caps_lock = CapsLockEnabled();
+    state.caps_lock = m_caps_lock.load();
     m_refresh_pending = false;
     m_refresh_in_progress = true;
   }
@@ -197,19 +189,14 @@ void WeaselTrayIcon::ReloadSettings() {
   if (!m_last_state.valid)
     return;
   auto state = m_last_state;
-  state.caps_lock = CapsLockEnabled();
+  state.caps_lock = m_caps_lock.load();
   Refresh(state, true);
 }
 
-void WeaselTrayIcon::PollSystemState() {
-  if (!m_last_state.valid)
+void WeaselTrayIcon::SetCapsLockState(bool enabled) {
+  if (m_caps_lock.exchange(enabled) == enabled)
     return;
-  const bool caps_lock = CapsLockEnabled();
-  if (caps_lock == m_last_state.caps_lock)
-    return;
-  auto state = m_last_state;
-  state.caps_lock = caps_lock;
-  Refresh(state);
+  RequestRefresh();
 }
 
 void WeaselTrayIcon::DisableRefresh() {
@@ -235,39 +222,20 @@ void WeaselTrayIcon::Refresh(const WeaselTrayIconState& state, bool force) {
                         : state.ascii_mode
                             ? (state.caps_lock ? ASCII_CAPS : ASCII)
                             : (state.caps_lock ? ZHUNG_CAPS : ZHUNG);
-  /* change icon, when
-          1,mode changed
-          2,icon changed
-          3,both m_schema_zhung_icon and state.current_zhung_icon empty(for
-     initialize) 4,both m_schema_ascii_icon and state.current_ascii_icon
-     empty(for initialize)
-  */
-  if (force || mode != m_mode || m_schema_id != state.schema_id ||
-      m_schema_zhung_icon != state.current_zhung_icon ||
-      (m_schema_zhung_icon.empty() && state.current_zhung_icon.empty()) ||
-      m_schema_ascii_icon != state.current_ascii_icon ||
-      (m_schema_ascii_icon.empty() && state.current_ascii_icon.empty()) ||
-      m_schema_caps_icon != state.current_caps_icon ||
-      (m_schema_caps_icon.empty() && state.current_caps_icon.empty())) {
-    ShowIcon();
+  if (force || mode != m_mode || m_schema_id != state.schema_id) {
     m_mode = mode;
     m_schema_id = state.schema_id;
-    m_schema_zhung_icon = state.current_zhung_icon;
-    m_schema_ascii_icon = state.current_ascii_icon;
-    m_schema_caps_icon = state.current_caps_icon;
     const auto icons = weasel::StatusIconSettings::Load();
     const auto schema_icons =
         weasel::SchemaStatusIconSettings::Load(state.schema_id);
     HICON icon = nullptr;
     if (mode == ASCII) {
-      icon = LoadResolvedStatusIcon(schema_icons.ascii, m_schema_ascii_icon,
-                                    icons.english, IDI_EN);
+      icon = LoadResolvedStatusIcon(schema_icons.ascii, icons.english, IDI_EN);
     } else if (mode == ZHUNG) {
-      icon = LoadResolvedStatusIcon(schema_icons.chinese, m_schema_zhung_icon,
-                                    icons.chinese, IDI_ZH);
+      icon =
+          LoadResolvedStatusIcon(schema_icons.chinese, icons.chinese, IDI_ZH);
     } else if (mode == ASCII_CAPS || mode == ZHUNG_CAPS) {
-      icon = LoadResolvedStatusIcon(schema_icons.caps, m_schema_caps_icon,
-                                    icons.caps, IDI_CAPS);
+      icon = LoadResolvedStatusIcon(schema_icons.caps, icons.caps, IDI_CAPS);
     }
     if (icon) {
       SetIcon(icon);
@@ -275,6 +243,7 @@ void WeaselTrayIcon::Refresh(const WeaselTrayIconState& state, bool force) {
     } else {
       SetIcon(mode_icon[mode]);
     }
+    ShowIcon();
 
     if (mode_label[mode] && m_disabled == false) {
       CString info;

@@ -36,9 +36,12 @@ int WeaselServerApp::Run() {
 
   tray_icon.Create(m_server.GetHWnd());
   m_server.SetTrayRefreshCallback([this]() { tray_icon.ApplyRefresh(); });
-  m_server.SetSettingsChangedCallback([this]() { tray_icon.ReloadSettings(); });
-  m_server.SetSystemStateChangedCallback(
-      [this]() { tray_icon.PollSystemState(); });
+  m_server.SetSettingsChangedCallback([this]() {
+    m_ui.ReloadUserSettings();
+    tray_icon.ReloadSettings();
+  });
+  m_server.SetCapsLockStateCallback(
+      [this](bool enabled) { tray_icon.SetCapsLockState(enabled); });
   tray_icon.RequestRefresh();
 
   execute_hidden(install_dir() / L"WeaselDeployer.exe",
@@ -64,7 +67,7 @@ void WeaselServerApp::SetupMenuHandlers() {
                                     std::wstring(L"/deploy")));
   m_server.AddMenuHandler(
       ID_WEASELTRAY_SETTINGS,
-      std::bind(execute, dir / L"WeaselDeployer.exe", std::wstring()));
+      std::bind(execute, dir / L"WeaselDeployer.exe", std::wstring(L"/input")));
   m_server.AddMenuHandler(
       ID_WEASELTRAY_DICT_MANAGEMENT,
       std::bind(execute, dir / L"WeaselDeployer.exe", std::wstring(L"/dict")));
@@ -77,24 +80,7 @@ void WeaselServerApp::SetupMenuHandlers() {
                           std::bind(open, L"https://rime.im/"));
   m_server.AddMenuHandler(ID_WEASELTRAY_FORUM,
                           std::bind(open, L"https://rime.im/discuss/"));
-  m_server.AddMenuHandler(ID_WEASELTRAY_ACRYLIC, [this] {
-    const bool enabled = !weasel::UserSettings::Load().acrylic;
-    const LSTATUS result = weasel::UserSettingsStore().WriteBool(
-        weasel::kAcrylicEnabledSetting, enabled);
-    if (result != ERROR_SUCCESS) {
-      CString message;
-      message.LoadStringW(IDS_STR_SETTINGS_SAVE_FAILED);
-      ::MessageBoxW(m_server.GetHWnd(), message, get_weasel_ime_name().c_str(),
-                    MB_OK | MB_ICONERROR);
-      return false;
-    }
-    weasel::NotifyUserSettingsChanged();
-    return true;
-  });
   m_server.AddMenuHandler(ID_WEASELTRAY_CHECKUPDATE, check_update);
-  m_server.AddMenuHandler(ID_WEASELTRAY_EXTENDED_SETTINGS,
-                          std::bind(execute, dir / L"WeaselDeployer.exe",
-                                    std::wstring(L"/settings")));
   m_server.AddMenuHandler(ID_WEASELTRAY_ACRYLIC_COLOR,
                           std::bind(execute, dir / L"WeaselDeployer.exe",
                                     std::wstring(L"/acrylic-color")));

@@ -107,6 +107,7 @@ void CSystemTray::Initialise() {
   m_bShowIconPending = FALSE;
 
   m_uIDTimer = 0;
+  m_hCurrentIcon = NULL;
   m_hSavedIcon = NULL;
 
   m_hTargetWnd = NULL;
@@ -199,7 +200,8 @@ BOOL CSystemTray::Create(HINSTANCE hInst,
       NOTIFYICONDATA_V2_SIZE;  // 2012-01-05 GONG Chen, XP compatibility
   m_tnd.hWnd = (hParent) ? hParent : m_hWnd;
   m_tnd.uID = uID;
-  m_tnd.hIcon = icon;
+  m_hCurrentIcon = icon ? ::CopyIcon(icon) : NULL;
+  m_tnd.hIcon = m_hCurrentIcon;
   m_tnd.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
   m_tnd.uCallbackMessage = uCallbackMessage;
 
@@ -273,8 +275,14 @@ BOOL CSystemTray::Create(HINSTANCE hInst,
 }
 
 CSystemTray::~CSystemTray() {
+  StopAnimation();
   RemoveIcon();
   m_IconList.clear();
+  if (m_hCurrentIcon) {
+    ::DestroyIcon(m_hCurrentIcon);
+    m_hCurrentIcon = NULL;
+    m_tnd.hIcon = NULL;
+  }
   if (m_hWnd)
     ::DestroyWindow(m_hWnd);
 }
@@ -359,16 +367,29 @@ BOOL CSystemTray::ShowIcon() {
 }
 
 BOOL CSystemTray::SetIcon(HICON hIcon) {
-  if (!m_bEnabled)
+  if (!m_bEnabled || !hIcon)
     return FALSE;
 
+  HICON replacement = ::CopyIcon(hIcon);
+  if (!replacement)
+    return FALSE;
+  HICON previous = m_hCurrentIcon;
+  m_hCurrentIcon = replacement;
   m_tnd.uFlags = NIF_ICON;
-  m_tnd.hIcon = hIcon;
+  m_tnd.hIcon = m_hCurrentIcon;
 
-  if (m_bHidden)
-    return TRUE;
-  else
-    return Shell_NotifyIcon(NIM_MODIFY, &m_tnd);
+  BOOL result = TRUE;
+  if (!m_bRemoved && !Shell_NotifyIcon(NIM_MODIFY, &m_tnd)) {
+    // Explorer can retain a stale visual after the underlying notification
+    // item has disappeared. Recreate the item so its callback message and
+    // context menu are restored together with the icon.
+    Shell_NotifyIcon(NIM_DELETE, &m_tnd);
+    m_bRemoved = m_bHidden = TRUE;
+    result = AddIcon();
+  }
+  if (previous)
+    ::DestroyIcon(previous);
+  return result;
 }
 
 BOOL CSystemTray::SetIcon(LPCTSTR lpszIconName) {
@@ -448,7 +469,9 @@ BOOL CSystemTray::Animate(UINT nDelayMilliSeconds, int nNumSeconds /*=-1*/) {
   m_nCurrentIcon = 0;
   time(&m_StartTime);
   m_nAnimationPeriod = nNumSeconds;
-  m_hSavedIcon = GetIcon();
+  if (m_hSavedIcon)
+    ::DestroyIcon(m_hSavedIcon);
+  m_hSavedIcon = GetIcon() ? ::CopyIcon(GetIcon()) : NULL;
 
   // Setup a timer for the animation
   m_uIDTimer = ::SetTimer(m_hWnd, m_nTimerID, nDelayMilliSeconds, NULL);
@@ -473,9 +496,11 @@ BOOL CSystemTray::StopAnimation() {
     bResult = ::KillTimer(m_hWnd, m_uIDTimer);
   m_uIDTimer = 0;
 
-  if (m_hSavedIcon)
+  if (m_hSavedIcon) {
     SetIcon(m_hSavedIcon);
-  m_hSavedIcon = NULL;
+    ::DestroyIcon(m_hSavedIcon);
+    m_hSavedIcon = NULL;
+  }
 
   return bResult;
 }

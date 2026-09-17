@@ -8,6 +8,9 @@
 #include "Configurator.h"
 #include "WanxiangModelManager.h"
 #include "WanxiangUpdateManager.h"
+#include <ShellScalingApi.h>
+
+#pragma comment(lib, "Shcore.lib")
 
 CAppModule _Module;
 
@@ -18,6 +21,11 @@ int APIENTRY _tWinMain(HINSTANCE hInstance,
                        LPTSTR lpCmdLine,
                        int nCmdShow) {
   UNREFERENCED_PARAMETER(hPrevInstance);
+
+  // Establish DPI awareness before any window, font, or dialog resource is
+  // created.  The project setting alone did not emit a manifest resource in
+  // the packaged executable, which left Windows bitmap-scaling this UI.
+  ::SetProcessDpiAwareness(PROCESS_PER_MONITOR_DPI_AWARE);
 
   LANGID langId = get_language_id();
   SetThreadUILanguage(langId);
@@ -129,6 +137,8 @@ static int Run(LPTSTR lpCmdLine) {
   if (!wcscmp(L"/settings", lpCmdLine))
     return configurator.ConfigureColorScheme(
         weasel::ColorSchemeTarget::Default);
+  if (!wcscmp(L"/input", lpCmdLine))
+    return configurator.Run(false);
   if (!wcscmp(L"/fonts", lpCmdLine))
     return configurator.ConfigureFonts();
   if (!wcscmp(L"/status-icons", lpCmdLine))

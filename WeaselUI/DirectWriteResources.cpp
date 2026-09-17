@@ -40,6 +40,7 @@ DirectWriteResources::DirectWriteResources(weasel::UIStyle& style,
   HR(DWriteCreateFactory(
       DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory),
       reinterpret_cast<IUnknown**>(pDWFactory.ReleaseAndGetAddressOf())));
+  _ResolveFontSettings();
   /* ID2D1HwndRenderTarget */
   const D2D1_PIXEL_FORMAT format = D2D1::PixelFormat(
       DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED);
@@ -69,6 +70,63 @@ bool IsChineseCodePoint(UINT32 codepoint) {
          (codepoint >= 0xf900 && codepoint <= 0xfaff) ||
          (codepoint >= 0x20000 && codepoint <= 0x2fa1f) ||
          (codepoint >= 0xff01 && codepoint <= 0xff60);
+}
+
+std::wstring LocalizedFontName(IDWriteLocalizedStrings* names) {
+  if (!names || names->GetCount() == 0)
+    return {};
+
+  UINT32 index = 0;
+  BOOL exists = FALSE;
+  wchar_t locale[LOCALE_NAME_MAX_LENGTH] = {};
+  if (::GetUserDefaultLocaleName(locale, _countof(locale)))
+    names->FindLocaleName(locale, &index, &exists);
+  if (!exists)
+    names->FindLocaleName(L"en-us", &index, &exists);
+  if (!exists)
+    index = 0;
+
+  UINT32 length = 0;
+  if (FAILED(names->GetStringLength(index, &length)))
+    return {};
+  std::wstring name(static_cast<size_t>(length) + 1, L'\0');
+  if (FAILED(names->GetString(index, name.data(), length + 1)))
+    return {};
+  name.resize(length);
+  return name;
+}
+
+ResolvedFontChoice ResolveFontChoice(IDWriteFactory2* factory,
+                                     const FontChoice& choice) {
+  ResolvedFontChoice resolved;
+  resolved.family = std::regex_replace(
+      choice.family, std::wregex(STYLEORWEIGHT, std::wregex::icase), L"");
+
+  ComPtr<IDWriteGdiInterop> interop;
+  ComPtr<IDWriteFont> font;
+  LOGFONTW logical = {};
+  logical.lfCharSet = DEFAULT_CHARSET;
+  logical.lfWeight = FW_DONTCARE;
+  wcsncpy_s(logical.lfFaceName, resolved.family.c_str(), _TRUNCATE);
+  if (factory && SUCCEEDED(factory->GetGdiInterop(&interop)) && interop &&
+      SUCCEEDED(interop->CreateFontFromLOGFONT(&logical, &font)) && font) {
+    ComPtr<IDWriteFontFamily> family;
+    ComPtr<IDWriteLocalizedStrings> names;
+    if (SUCCEEDED(font->GetFontFamily(&family)) && family &&
+        SUCCEEDED(family->GetFamilyNames(&names))) {
+      const std::wstring family_name = LocalizedFontName(names.Get());
+      if (!family_name.empty())
+        resolved.family = family_name;
+    }
+    resolved.weight = font->GetWeight();
+    resolved.style = font->GetStyle();
+  }
+
+  if (choice.shape == FontShape::Bold)
+    resolved.weight = DWRITE_FONT_WEIGHT_BOLD;
+  else if (choice.shape == FontShape::Italic)
+    resolved.style = DWRITE_FONT_STYLE_ITALIC;
+  return resolved;
 }
 
 FontRole TextRole(const DirectWriteResources& resources,
@@ -127,18 +185,14 @@ HRESULT DirectWriteResources::CreateTextLayout(
       }
     }
     const auto& choice = font_settings_.At(role, language);
+    const auto& resolved =
+        resolved_font_settings_[FontSettings::Index(role, language)];
     const DWRITE_TEXT_RANGE range{start, end - start};
-    if (!choice.family.empty())
-      pTextLayout->SetFontFamilyName(choice.family.c_str(), range);
+    if (!resolved.family.empty())
+      pTextLayout->SetFontFamilyName(resolved.family.c_str(), range);
     pTextLayout->SetFontSize(choice.point * dpiScaleFontPoint, range);
-    pTextLayout->SetFontWeight(choice.shape == FontShape::Bold
-                                   ? DWRITE_FONT_WEIGHT_BOLD
-                                   : DWRITE_FONT_WEIGHT_NORMAL,
-                               range);
-    pTextLayout->SetFontStyle(choice.shape == FontShape::Italic
-                                  ? DWRITE_FONT_STYLE_ITALIC
-                                  : DWRITE_FONT_STYLE_NORMAL,
-                              range);
+    pTextLayout->SetFontWeight(resolved.weight, range);
+    pTextLayout->SetFontStyle(resolved.style, range);
     start = end;
   }
   return result;
@@ -146,6 +200,14 @@ HRESULT DirectWriteResources::CreateTextLayout(
 
 void DirectWriteResources::ReloadUserSettings() {
   font_settings_ = FontSettings::Load();
+  _ResolveFontSettings();
+}
+
+void DirectWriteResources::_ResolveFontSettings() {
+  for (size_t index = 0; index < FontSettings::kChoiceCount; ++index) {
+    resolved_font_settings_[index] =
+        ResolveFontChoice(pDWFactory.Get(), font_settings_.choices[index]);
+  }
 }
 
 HRESULT DirectWriteResources::InitResources(const wstring& label_font_face,

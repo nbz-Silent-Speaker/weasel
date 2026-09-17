@@ -24,6 +24,7 @@ class ClientImpl {
                             DWORD& stage,
                             DWORD& error) const;
   bool ProcessKeyEvent(KeyEvent const& keyEvent);
+  void UpdateCapsLockState(bool enabled);
   bool CommitComposition();
   bool ClearComposition();
   bool SelectCandidateOnCurrentPage(size_t index);

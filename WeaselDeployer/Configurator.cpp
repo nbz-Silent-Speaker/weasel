@@ -1,4 +1,4 @@
-﻿#include "stdafx.h"
+#include "stdafx.h"
 #include "WeaselDeployer.h"
 #include "Configurator.h"
 #include "FontSettingsDialog.h"
@@ -259,6 +259,8 @@ class SettingsPageInstance {
   bool Create(settings_navigation::Page page, HWND owner) {
     Reset();
     if (page == settings_navigation::Page::Input) {
+      const ULONGLONG started = ::GetTickCount64();
+      LOG(INFO) << "Creating Input settings page.";
       RimeModule* levers = rime_get_api()->find_module("levers");
       if (!levers) {
         LOG(ERROR) << "Settings preview could not load the Rime levers module.";
@@ -269,15 +271,23 @@ class SettingsPageInstance {
         LOG(ERROR) << "Settings preview could not load the Rime levers API.";
         return false;
       }
+      LOG(INFO) << "Input settings levers API ready after "
+                << (::GetTickCount64() - started) << " ms.";
       switcher_ = input_api_->switcher_settings_init();
+      LOG(INFO) << "Input switcher object ready after "
+                << (::GetTickCount64() - started) << " ms.";
       auto* settings = reinterpret_cast<RimeCustomSettings*>(switcher_);
       if (!switcher_ || !input_api_->load_settings(settings)) {
         LOG(ERROR) << "Settings preview could not load switcher settings.";
         Reset();
         return false;
       }
+      LOG(INFO) << "Input switcher settings loaded after "
+                << (::GetTickCount64() - started) << " ms.";
       input_dialog_ = std::make_unique<SwitcherSettingsDialog>(switcher_);
       window_ = input_dialog_->Create(owner);
+      LOG(INFO) << "Input settings window created after "
+                << (::GetTickCount64() - started) << " ms.";
     } else if (page == settings_navigation::Page::Appearance) {
       RimeModule* levers = rime_get_api()->find_module("levers");
       if (!levers) {
@@ -458,6 +468,20 @@ int Configurator::ConfigureSettings(settings_navigation::Page initial_page) {
   ::UpdateWindow(host.window());
   ::SetForegroundWindow(host.window());
 
+  wchar_t preview_navigation[2] = {};
+  const bool preview_navigation_test =
+      weasel::IsSettingsPreviewMode() &&
+      ::GetEnvironmentVariableW(L"WEASEL_PREVIEW_NAVIGATE_INPUT",
+                                preview_navigation,
+                                _countof(preview_navigation)) &&
+      preview_navigation[0] == L'1';
+  if (preview_navigation_test) {
+    ::PostThreadMessageW(::GetCurrentThreadId(),
+                         settings_navigation::kHostNavigateMessage,
+                         settings_navigation::kInput,
+                         reinterpret_cast<LPARAM>(active->window()));
+  }
+
   const auto refresh_shared_state = [&pages]() {
     const bool applying = std::any_of(
         pages.begin(), pages.end(),
@@ -475,6 +499,7 @@ int Configurator::ConfigureSettings(settings_navigation::Page initial_page) {
 
   MSG message{};
   bool running = true;
+  int navigation_test_result = 0;
   while (running) {
     const BOOL result = ::GetMessageW(&message, nullptr, 0, 0);
     if (result <= 0) {
@@ -557,6 +582,8 @@ int Configurator::ConfigureSettings(settings_navigation::Page initial_page) {
           destination = std::make_unique<SettingsPageInstance>();
           if (!destination->Create(page, owner) ||
               !destination->EmbedIn(host.window())) {
+            LOG(ERROR) << "Unable to create or embed settings page "
+                       << static_cast<int>(page) << ".";
             destination.reset();
             continue;
           }
@@ -564,18 +591,42 @@ int Configurator::ConfigureSettings(settings_navigation::Page initial_page) {
         if (destination.get() == active)
           continue;
 
+        // Swap the hosted dialogs while painting is suspended.  Showing the
+        // replacement before hiding the current child can cause the dialog
+        // manager to hide the newly activated sibling again.  Keeping the
+        // host frozen makes the correct hide-then-show order atomic on screen.
+        ::SendMessageW(host.window(), WM_SETREDRAW, FALSE, 0);
+        ::ShowWindow(active->window(), SW_HIDE);
         ::SetWindowPos(
             destination->window(), HWND_TOP, 0, 0, 0, 0,
             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
-        ::RedrawWindow(
-            destination->window(), nullptr, nullptr,
-            RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
-        ::ShowWindow(active->window(), SW_HIDE);
         active = destination.get();
         host.SetActivePage(active->window());
+        ::SendMessageW(host.window(), WM_SETREDRAW, TRUE, 0);
+        ::RedrawWindow(host.window(), nullptr, nullptr,
+                       RDW_INVALIDATE | RDW_ERASE | RDW_FRAME |
+                           RDW_ALLCHILDREN | RDW_UPDATENOW);
+        LOG(INFO) << "Navigated settings host to page "
+                  << static_cast<int>(page) << ".";
         refresh_shared_state();
         ::SetFocus(
             ::GetDlgItem(active->window(), static_cast<WORD>(message.wParam)));
+        if (preview_navigation_test &&
+            page == settings_navigation::Page::Input) {
+          if (!::IsWindowVisible(active->window()))
+            navigation_test_result |= 1;
+          if (::GetPropW(host.window(), kSettingsHostActivePage) !=
+              reinterpret_cast<HANDLE>(active->window())) {
+            navigation_test_result |= 2;
+          }
+          if (!::GetDlgItem(active->window(), IDC_SWITCHER_TITLE))
+            navigation_test_result |= 4;
+          for (auto& loaded_page : pages) {
+            if (loaded_page)
+              loaded_page->PrepareClose();
+          }
+          running = false;
+        }
         continue;
       }
     }
@@ -585,7 +636,7 @@ int Configurator::ConfigureSettings(settings_navigation::Page initial_page) {
     ::TranslateMessage(&message);
     ::DispatchMessageW(&message);
   }
-  return 0;
+  return navigation_test_result;
 }
 
 int Configurator::UpdateWorkspace(bool report_errors) {
