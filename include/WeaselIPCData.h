@@ -235,6 +235,8 @@ struct UIStyle {
   // custom icon settings
   std::wstring current_zhung_icon;
   std::wstring current_ascii_icon;
+  // Server-only. Keep this out of the Boost IPC archive so that an upgraded
+  // server remains compatible with TSF clients already loaded in applications.
   std::wstring current_caps_icon;
   std::wstring current_half_icon;
   std::wstring current_full_icon;
@@ -448,7 +450,6 @@ void serialize(Archive& ar, weasel::UIStyle& s, const unsigned int version) {
   ar & s.ascii_tip_follow_cursor;
   ar & s.current_zhung_icon;
   ar & s.current_ascii_icon;
-  ar & s.current_caps_icon;
   ar & s.current_half_icon;
   ar & s.current_full_icon;
   ar & s.enhanced_position;
