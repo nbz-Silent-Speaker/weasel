@@ -16,27 +16,49 @@ namespace weasel {
 // Always use the same registry view in the server and both frontend bitnesses.
 inline constexpr wchar_t kUserSettingsKey[] =
     L"Software\\Rime\\Weasel\\UserSettings";
+inline constexpr wchar_t kPreviewUserSettingsKey[] =
+    L"Software\\Rime\\Weasel\\PreviewUserSettings";
 inline constexpr wchar_t kAcrylicEnabledSetting[] = L"AcrylicEnabled";
 inline constexpr wchar_t kAppearanceThemeModeSetting[] = L"AppearanceThemeMode";
 inline constexpr wchar_t kStatusIconChineseSetting[] = L"StatusIconChinese";
 inline constexpr wchar_t kStatusIconEnglishSetting[] = L"StatusIconEnglish";
+inline constexpr wchar_t kStatusIconCapsSetting[] = L"StatusIconCaps";
+// Legacy four-state values are read once and cleared when the three-state
+// settings are saved.
 inline constexpr wchar_t kStatusIconChineseCapsSetting[] =
     L"StatusIconChineseCaps";
 inline constexpr wchar_t kStatusIconEnglishCapsSetting[] =
     L"StatusIconEnglishCaps";
 inline constexpr wchar_t kStatusIconCapsBadgeSetting[] = L"StatusIconCapsBadge";
 inline constexpr wchar_t kStatusIconCapsModeSetting[] = L"StatusIconCapsMode";
+inline constexpr wchar_t kSchemaStatusIconsSubkey[] = L"SchemaStatusIcons";
+inline constexpr wchar_t kSchemaStatusIconChineseSetting[] = L"Chinese";
+inline constexpr wchar_t kSchemaStatusIconAsciiSetting[] = L"Ascii";
+inline constexpr wchar_t kSchemaStatusIconCapsSetting[] = L"Caps";
+inline constexpr wchar_t kStatusIconUseGlobalMarker[] = L"|use-global|";
 inline constexpr wchar_t kFontSettingsEnabledSetting[] = L"FontSettingsEnabled";
+
+inline bool IsSettingsPreviewMode() {
+  wchar_t value[2] = {};
+  return ::GetEnvironmentVariableW(L"WEASEL_SETTINGS_PREVIEW", value,
+                                   _countof(value)) != 0 &&
+         value[0] != L'0';
+}
 
 class UserSettingsStore {
  public:
-  explicit UserSettingsStore(HKEY root = HKEY_CURRENT_USER,
-                             const wchar_t* key = kUserSettingsKey)
+  UserSettingsStore()
+      : root_(HKEY_CURRENT_USER),
+        key_(IsSettingsPreviewMode() ? kPreviewUserSettingsKey
+                                     : kUserSettingsKey) {}
+  explicit UserSettingsStore(HKEY root, const wchar_t* key = kUserSettingsKey)
       : root_(root), key_(key) {}
+  explicit UserSettingsStore(std::wstring key)
+      : root_(HKEY_CURRENT_USER), key_(std::move(key)) {}
 
   bool ReadBool(const wchar_t* name, bool fallback) const {
     HKEY key = nullptr;
-    LSTATUS result = ::RegOpenKeyExW(root_, key_, 0,
+    LSTATUS result = ::RegOpenKeyExW(root_, key_.c_str(), 0,
                                      KEY_QUERY_VALUE | KEY_WOW64_64KEY, &key);
     if (result == ERROR_FILE_NOT_FOUND || result == ERROR_PATH_NOT_FOUND)
       return fallback;
@@ -57,7 +79,7 @@ class UserSettingsStore {
 
   LSTATUS WriteBool(const wchar_t* name, bool value) const {
     HKEY key = nullptr;
-    LSTATUS result = ::RegCreateKeyExW(root_, key_, 0, nullptr, 0,
+    LSTATUS result = ::RegCreateKeyExW(root_, key_.c_str(), 0, nullptr, 0,
                                        KEY_SET_VALUE | KEY_WOW64_64KEY, nullptr,
                                        &key, nullptr);
     if (result != ERROR_SUCCESS)
@@ -73,7 +95,7 @@ class UserSettingsStore {
   std::wstring ReadString(const wchar_t* name,
                           const std::wstring& fallback = {}) const {
     HKEY key = nullptr;
-    LSTATUS result = ::RegOpenKeyExW(root_, key_, 0,
+    LSTATUS result = ::RegOpenKeyExW(root_, key_.c_str(), 0,
                                      KEY_QUERY_VALUE | KEY_WOW64_64KEY, &key);
     if (result != ERROR_SUCCESS)
       return fallback;
@@ -98,7 +120,7 @@ class UserSettingsStore {
 
   LSTATUS WriteString(const wchar_t* name, const std::wstring& value) const {
     HKEY key = nullptr;
-    LSTATUS result = ::RegCreateKeyExW(root_, key_, 0, nullptr, 0,
+    LSTATUS result = ::RegCreateKeyExW(root_, key_.c_str(), 0, nullptr, 0,
                                        KEY_SET_VALUE | KEY_WOW64_64KEY, nullptr,
                                        &key, nullptr);
     if (result != ERROR_SUCCESS)
@@ -120,7 +142,7 @@ class UserSettingsStore {
 
   DWORD ReadDword(const wchar_t* name, DWORD fallback) const {
     HKEY key = nullptr;
-    LSTATUS result = ::RegOpenKeyExW(root_, key_, 0,
+    LSTATUS result = ::RegOpenKeyExW(root_, key_.c_str(), 0,
                                      KEY_QUERY_VALUE | KEY_WOW64_64KEY, &key);
     if (result != ERROR_SUCCESS)
       return fallback;
@@ -138,7 +160,7 @@ class UserSettingsStore {
 
   LSTATUS WriteDword(const wchar_t* name, DWORD value) const {
     HKEY key = nullptr;
-    LSTATUS result = ::RegCreateKeyExW(root_, key_, 0, nullptr, 0,
+    LSTATUS result = ::RegCreateKeyExW(root_, key_.c_str(), 0, nullptr, 0,
                                        KEY_SET_VALUE | KEY_WOW64_64KEY, nullptr,
                                        &key, nullptr);
     if (result != ERROR_SUCCESS)
@@ -152,33 +174,43 @@ class UserSettingsStore {
 
  private:
   HKEY root_;
-  const wchar_t* key_;
+  std::wstring key_;
 };
 
-enum class StatusIconCapsBadge : DWORD { LetterA = 0, Dot = 1 };
-enum class StatusIconCapsMode : DWORD { Automatic = 0, Custom = 1 };
+inline std::wstring SchemaStatusIconKey(const std::wstring& schema_id) {
+  static constexpr wchar_t digits[] = L"0123456789abcdef";
+  std::wstring encoded;
+  encoded.reserve(schema_id.size() * 4);
+  for (wchar_t character : schema_id) {
+    const unsigned value = static_cast<unsigned>(character);
+    encoded.push_back(digits[(value >> 12) & 0xf]);
+    encoded.push_back(digits[(value >> 8) & 0xf]);
+    encoded.push_back(digits[(value >> 4) & 0xf]);
+    encoded.push_back(digits[value & 0xf]);
+  }
+  const wchar_t* root =
+      IsSettingsPreviewMode() ? kPreviewUserSettingsKey : kUserSettingsKey;
+  return std::wstring(root) + L"\\" + kSchemaStatusIconsSubkey + L"\\" +
+         encoded;
+}
 
 struct StatusIconSettings {
   std::wstring chinese;
   std::wstring english;
-  std::wstring chinese_caps;
-  std::wstring english_caps;
-  StatusIconCapsBadge caps_badge = StatusIconCapsBadge::LetterA;
-  StatusIconCapsMode caps_mode = StatusIconCapsMode::Automatic;
+  std::wstring caps;
 
   static StatusIconSettings Load() {
     const UserSettingsStore store;
     StatusIconSettings settings;
     settings.chinese = store.ReadString(kStatusIconChineseSetting);
     settings.english = store.ReadString(kStatusIconEnglishSetting);
-    settings.chinese_caps = store.ReadString(kStatusIconChineseCapsSetting);
-    settings.english_caps = store.ReadString(kStatusIconEnglishCapsSetting);
-    settings.caps_badge = store.ReadDword(kStatusIconCapsBadgeSetting, 0) == 1
-                              ? StatusIconCapsBadge::Dot
-                              : StatusIconCapsBadge::LetterA;
-    settings.caps_mode = store.ReadDword(kStatusIconCapsModeSetting, 0) == 1
-                             ? StatusIconCapsMode::Custom
-                             : StatusIconCapsMode::Automatic;
+    settings.caps = store.ReadString(kStatusIconCapsSetting);
+    if (settings.caps.empty() &&
+        store.ReadDword(kStatusIconCapsModeSetting, 0) == 1) {
+      settings.caps = store.ReadString(kStatusIconEnglishCapsSetting);
+      if (settings.caps.empty())
+        settings.caps = store.ReadString(kStatusIconChineseCapsSetting);
+    }
     return settings;
   }
 
@@ -187,32 +219,70 @@ struct StatusIconSettings {
     for (const auto& value : {
              std::pair{kStatusIconChineseSetting, chinese},
              std::pair{kStatusIconEnglishSetting, english},
-             std::pair{kStatusIconChineseCapsSetting, chinese_caps},
-             std::pair{kStatusIconEnglishCapsSetting, english_caps},
+             std::pair{kStatusIconCapsSetting, caps},
          }) {
       const LSTATUS result = store.WriteString(value.first, value.second);
       if (result != ERROR_SUCCESS)
         return result;
     }
-    LSTATUS result = store.WriteDword(kStatusIconCapsBadgeSetting,
-                                      static_cast<DWORD>(caps_badge));
+    // Prevent cleared three-state defaults from being repopulated by an old
+    // four-state configuration on the next load.
+    LSTATUS result = store.WriteString(kStatusIconChineseCapsSetting, L"");
     if (result != ERROR_SUCCESS)
       return result;
-    return store.WriteDword(kStatusIconCapsModeSetting,
-                            static_cast<DWORD>(caps_mode));
+    return store.WriteString(kStatusIconEnglishCapsSetting, L"");
   }
 
   bool operator==(const StatusIconSettings& other) const {
     return chinese == other.chinese && english == other.english &&
-           chinese_caps == other.chinese_caps &&
-           english_caps == other.english_caps &&
-           caps_badge == other.caps_badge && caps_mode == other.caps_mode;
+           caps == other.caps;
   }
 
   bool operator!=(const StatusIconSettings& other) const {
     return !(*this == other);
   }
 };
+
+struct SchemaStatusIconSettings {
+  std::wstring chinese;
+  std::wstring ascii;
+  std::wstring caps;
+
+  static SchemaStatusIconSettings Load(const std::wstring& schema_id) {
+    const UserSettingsStore store(SchemaStatusIconKey(schema_id));
+    SchemaStatusIconSettings settings;
+    settings.chinese = store.ReadString(kSchemaStatusIconChineseSetting);
+    settings.ascii = store.ReadString(kSchemaStatusIconAsciiSetting);
+    settings.caps = store.ReadString(kSchemaStatusIconCapsSetting);
+    return settings;
+  }
+
+  LSTATUS Save(const std::wstring& schema_id) const {
+    const UserSettingsStore store(SchemaStatusIconKey(schema_id));
+    for (const auto& value : {
+             std::pair{kSchemaStatusIconChineseSetting, chinese},
+             std::pair{kSchemaStatusIconAsciiSetting, ascii},
+             std::pair{kSchemaStatusIconCapsSetting, caps},
+         }) {
+      const LSTATUS result = store.WriteString(value.first, value.second);
+      if (result != ERROR_SUCCESS)
+        return result;
+    }
+    return ERROR_SUCCESS;
+  }
+
+  bool operator==(const SchemaStatusIconSettings& other) const {
+    return chinese == other.chinese && ascii == other.ascii &&
+           caps == other.caps;
+  }
+  bool operator!=(const SchemaStatusIconSettings& other) const {
+    return !(*this == other);
+  }
+};
+
+inline bool StatusIconUsesGlobal(const std::wstring& value) {
+  return value == kStatusIconUseGlobalMarker;
+}
 
 enum class FontRole : size_t { Preedit = 0, Candidate, Label, Comment, Count };
 enum class FontLanguage : size_t { Chinese = 0, Latin, Count };
@@ -383,6 +453,8 @@ inline UINT UserSettingsChangedMessage() {
 }
 
 inline void NotifyUserSettingsChanged() {
+  if (IsSettingsPreviewMode())
+    return;
   const UINT message = UserSettingsChangedMessage();
   if (message)
     ::PostMessageW(HWND_BROADCAST, message, 0, 0);

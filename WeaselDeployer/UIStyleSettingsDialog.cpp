@@ -12,8 +12,12 @@ constexpr int kColumnGapDlu = 12;
 constexpr int kPreviewColumnLeftDlu = settings_navigation::kPageInsetDlu +
                                       kSettingsColumnWidthDlu + kColumnGapDlu;
 constexpr int kPreviewColumnWidthDlu = 198;
-constexpr int kPaletteCardTopDlu = 90;
-constexpr int kPaletteCardHeightDlu = 158;
+constexpr int kPaletteCardTopDlu =
+    settings_navigation::kFirstCardTopDlu +
+    settings_navigation::kSingleRowCardHeightDlu * 2 +
+    settings_navigation::kCardGapDlu * 2;
+constexpr int kPaletteCardHeightDlu =
+    settings_navigation::kPageCardsBottomDlu - kPaletteCardTopDlu;
 
 HWND CreateControl(HWND dialog,
                    const wchar_t* class_name,
@@ -61,15 +65,18 @@ void LayoutAppearancePage(HWND dialog) {
               settings_navigation::kPageInsetDlu,
               settings_navigation::kFirstCardTopDlu, kSettingsColumnWidthDlu,
               settings_navigation::kSingleRowCardHeightDlu);
-  MoveControl(dialog, IDC_APPEARANCE_THEME_CARD,
-              settings_navigation::kPageInsetDlu, 52, kSettingsColumnWidthDlu,
-              settings_navigation::kSingleRowCardHeightDlu);
+  MoveControl(
+      dialog, IDC_APPEARANCE_THEME_CARD, settings_navigation::kPageInsetDlu,
+      settings_navigation::kFirstCardTopDlu +
+          settings_navigation::kSingleRowCardHeightDlu +
+          settings_navigation::kCardGapDlu,
+      kSettingsColumnWidthDlu, settings_navigation::kSingleRowCardHeightDlu);
   MoveControl(dialog, IDC_APPEARANCE_CARD, settings_navigation::kPageInsetDlu,
               kPaletteCardTopDlu, kSettingsColumnWidthDlu,
               kPaletteCardHeightDlu);
   MoveControl(dialog, IDC_APPEARANCE_ACRYLIC_LABEL, 26, 24, 116, 12);
-  MoveControl(dialog, IDC_APPEARANCE_ACRYLIC_STATE, 268, 24, 20, 12);
-  MoveControl(dialog, IDC_ACRYLIC_ENABLED, 292, 22, 14, 16);
+  MoveControl(dialog, IDC_APPEARANCE_ACRYLIC_STATE, 264, 24, 18, 12);
+  MoveControl(dialog, IDC_ACRYLIC_ENABLED, 286, 22, 20, 16);
   MoveControl(dialog, IDC_APPEARANCE_THEME_LABEL, 26, 62, 70, 12);
   MoveControl(dialog, IDC_APPEARANCE_THEME_MODE, 218, 59, 88, 80);
   MoveControl(dialog, IDC_EDIT_GROUP, 26, 103, 46,
@@ -157,7 +164,7 @@ LRESULT UIStyleSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
     ::SetWindowLongPtrW(::GetDlgItem(m_hWnd, id), GWL_STYLE,
                         style & ~static_cast<LONG_PTR>(WS_BORDER));
   }
-  RECT unit{0, 0, 0, 14};
+  RECT unit{0, 0, 0, settings_navigation::kComboItemHeightDlu};
   MapDialogRect(&unit);
   item_height_ = unit.bottom;
   for (UINT id : {IDC_APPEARANCE_THEME_MODE, IDC_COLOR_FAMILY, IDC_COLOR_LIGHT,
@@ -169,7 +176,7 @@ LRESULT UIStyleSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
       m_hWnd, settings_navigation::Page::Appearance,
       {IDC_APPLY,
        IDCANCEL,
-       WeaselUserDataPath().wstring(),
+       WeaselDisplayUserDataPath().wstring(),
        {IDOK, IDC_APPEARANCE_TITLE, IDC_SETTINGS_DIVIDER, IDC_MATERIAL_HINT,
         IDC_EDITOR_HINT, IDC_PREVIEW_HINT, IDC_APPEARANCE_LIGHT_PREVIEW_LABEL,
         IDC_APPEARANCE_DARK_PREVIEW_LABEL}});
@@ -291,7 +298,7 @@ void UIStyleSettingsDialog::FillThemeMode() {
   combo.SetCurSel(static_cast<int>(draft_.theme_mode()));
 }
 
-void UIStyleSettingsDialog::RefreshMode() {
+void UIStyleSettingsDialog::RefreshMode(bool refresh_theme_mode) {
   CheckDlgButton(IDC_ACRYLIC_ENABLED,
                  draft_.acrylic() ? BST_CHECKED : BST_UNCHECKED);
   ::SetDlgItemTextW(
@@ -308,15 +315,20 @@ void UIStyleSettingsDialog::RefreshMode() {
                                        : IDS_APPEARANCE_NORMAL_PREVIEW));
   FillGroups();
   FillSingles();
-  FillThemeMode();
+  if (refresh_theme_mode)
+    FillThemeMode();
   ShowEditor(single_[draft_.acrylic() ? 0 : 1]);
   RefreshPreview();
 }
 
 void UIStyleSettingsDialog::ShowEditor(bool single) {
   single_[draft_.acrylic() ? 0 : 1] = single;
-  CheckDlgButton(IDC_EDIT_GROUP, single ? BST_UNCHECKED : BST_CHECKED);
-  CheckDlgButton(IDC_EDIT_SINGLE, single ? BST_CHECKED : BST_UNCHECKED);
+  const UINT group_state = single ? BST_UNCHECKED : BST_CHECKED;
+  const UINT single_state = single ? BST_CHECKED : BST_UNCHECKED;
+  if (IsDlgButtonChecked(IDC_EDIT_GROUP) != group_state)
+    CheckDlgButton(IDC_EDIT_GROUP, group_state);
+  if (IsDlgButtonChecked(IDC_EDIT_SINGLE) != single_state)
+    CheckDlgButton(IDC_EDIT_SINGLE, single_state);
   ::SetDlgItemTextW(
       m_hWnd, IDC_LIGHT_LABEL,
       settings_navigation::LocalText(single ? L"浅色" : L"浅色/深色",
@@ -331,27 +343,55 @@ void UIStyleSettingsDialog::ShowEditor(bool single) {
   HWND dark = GetDlgItem(IDC_COLOR_DARK);
   HWND light_label = GetDlgItem(IDC_LIGHT_LABEL);
   HWND dark_label = GetDlgItem(IDC_DARK_LABEL);
-  for (HWND combo : {family, light, dark})
-    ::ShowWindow(combo, SW_HIDE);
-  ::ShowWindow(single ? light : family, SW_SHOW);
-  if (single)
-    ::ShowWindow(dark, SW_SHOW);
-  ::ShowWindow(light_label, SW_SHOW);
-  ::ShowWindow(dark_label, single ? SW_SHOW : SW_HIDE);
+  bool visibility_changed = false;
+  RECT dirty{};
+  bool has_dirty = false;
+  const auto show = [this, &visibility_changed, &dirty, &has_dirty](
+                        HWND control, bool visible) {
+    const bool has_visible_style =
+        (::GetWindowLongPtrW(control, GWL_STYLE) & WS_VISIBLE) != 0;
+    if (has_visible_style == visible)
+      return;
+    RECT control_bounds{};
+    if (::GetWindowRect(control, &control_bounds)) {
+      ::MapWindowPoints(HWND_DESKTOP, m_hWnd,
+                        reinterpret_cast<POINT*>(&control_bounds), 2);
+      RECT combined{};
+      if (has_dirty)
+        ::UnionRect(&combined, &dirty, &control_bounds);
+      else
+        combined = control_bounds;
+      dirty = combined;
+      has_dirty = true;
+    }
+    visibility_changed = true;
+    ::SetWindowPos(control, nullptr, 0, 0, 0, 0,
+                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
+                       SWP_NOREDRAW |
+                       (visible ? SWP_SHOWWINDOW : SWP_HIDEWINDOW));
+  };
+  show(family, !single);
+  show(light, single);
+  show(dark, single);
+  show(light_label, true);
+  show(dark_label, single);
   RefreshThemeAvailability();
-  RefreshPreview();
-  HWND card = GetDlgItem(IDC_APPEARANCE_CARD);
-  if (card) {
-    ::SetWindowPos(card, HWND_BOTTOM, 0, 0, 0, 0,
-                   SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-    ::RedrawWindow(card, nullptr, nullptr,
+  if (visibility_changed) {
+    // A hidden combo does not erase its old pixels. Repaint the owner-drawn
+    // card first, then paint the controls that remain visible so switching
+    // between paired and separate modes is presented as one complete frame.
+    ::RedrawWindow(GetDlgItem(IDC_APPEARANCE_CARD), nullptr, nullptr,
                    RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
+    if (has_dirty)
+      ::RedrawWindow(
+          m_hWnd, &dirty, nullptr,
+          RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_ALLCHILDREN);
   }
   const HWND controls[] = {light_label, dark_label, family, light, dark};
   for (HWND control : controls) {
     if (::IsWindowVisible(control))
       ::RedrawWindow(control, nullptr, nullptr,
-                     RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
+                     RDW_INVALIDATE | RDW_FRAME | RDW_UPDATENOW);
   }
 }
 
@@ -362,8 +402,12 @@ void UIStyleSettingsDialog::RefreshThemeAvailability() {
       !single || mode != weasel::AppearanceThemeMode::Dark;
   const bool dark_enabled =
       !single || mode != weasel::AppearanceThemeMode::Light;
-  ::EnableWindow(GetDlgItem(IDC_COLOR_LIGHT), light_enabled);
-  ::EnableWindow(GetDlgItem(IDC_COLOR_DARK), dark_enabled);
+  HWND light = GetDlgItem(IDC_COLOR_LIGHT);
+  HWND dark = GetDlgItem(IDC_COLOR_DARK);
+  if ((::IsWindowEnabled(light) != FALSE) != light_enabled)
+    ::EnableWindow(light, light_enabled);
+  if ((::IsWindowEnabled(dark) != FALSE) != dark_enabled)
+    ::EnableWindow(dark, dark_enabled);
 }
 void UIStyleSettingsDialog::RefreshPreview() {
   bool mismatch = false;
@@ -380,14 +424,11 @@ void UIStyleSettingsDialog::RefreshPreview() {
     message = Text(IDS_PALETTE_MISMATCH);
   SetDlgItemText(IDC_SELECTION_HINT, message);
   ::ShowWindow(GetDlgItem(IDC_SELECTION_HINT), mismatch ? SW_SHOW : SW_HIDE);
-  ::EnableWindow(GetDlgItem(IDC_APPLY), draft_.changed());
-  settings_navigation::SetStatus(
-      m_hWnd,
-      draft_.changed()
-          ? settings_navigation::LocalText(L"有更改待应用", L"有變更待套用",
-                                           L"Changes ready to apply")
-          : settings_navigation::LocalText(L"所有设置已应用", L"所有設定已套用",
-                                           L"All settings applied"));
+  const bool pending = draft_.changed();
+  settings_navigation::SetUnappliedChanges(
+      m_hWnd, settings_navigation::Page::Appearance, pending);
+  ::EnableWindow(GetDlgItem(IDC_APPLY),
+                 settings_navigation::HasAnyUnappliedChanges());
   if (ready_)
     PreparePreviews();
   ::InvalidateRect(GetDlgItem(IDC_PREVIEW_LIGHT), nullptr, FALSE);
@@ -396,9 +437,11 @@ void UIStyleSettingsDialog::RefreshPreview() {
 
 LRESULT UIStyleSettingsDialog::OnMaterial(WORD, WORD, HWND, BOOL&) {
   if (ready_) {
+    const bool single = IsDlgButtonChecked(IDC_EDIT_SINGLE) == BST_CHECKED;
     draft_.SetAcrylic(IsDlgButtonChecked(IDC_ACRYLIC_ENABLED) == BST_CHECKED);
+    single_[draft_.acrylic() ? 0 : 1] = single;
     InvalidatePreviewCache();
-    RefreshMode();
+    RefreshMode(false);
   }
   return 0;
 }
@@ -478,15 +521,27 @@ LRESULT UIStyleSettingsDialog::OnReset(WORD, WORD, HWND, BOOL&) {
 }
 
 LRESULT UIStyleSettingsDialog::OnCancel(WORD, WORD, HWND, BOOL&) {
-  if (ConfirmDiscard() && !settings_navigation::RequestClose(m_hWnd, IDCANCEL))
+  if (settings_navigation::RequestClose(m_hWnd, IDCANCEL))
+    return 0;
+  if (ConfirmClose())
     EndDialog(IDCANCEL);
   return 0;
 }
 
 LRESULT UIStyleSettingsDialog::OnClose(UINT, WPARAM, LPARAM, BOOL&) {
-  if (ConfirmDiscard() && !settings_navigation::RequestClose(m_hWnd, IDCANCEL))
+  if (settings_navigation::RequestClose(m_hWnd, IDCANCEL))
+    return 0;
+  if (ConfirmClose())
     EndDialog(IDCANCEL);
   return 0;
+}
+
+bool UIStyleSettingsDialog::HasUnappliedChanges() const {
+  return draft_.changed();
+}
+
+bool UIStyleSettingsDialog::ConfirmClose() const {
+  return ConfirmDiscard();
 }
 
 bool UIStyleSettingsDialog::ConfirmDiscard() const {
@@ -510,10 +565,9 @@ LRESULT UIStyleSettingsDialog::OnNavigate(WORD, WORD id, HWND, BOOL&) {
   const auto page = settings_navigation::PageFromCommand(id);
   if (page == settings_navigation::Page::Appearance)
     return 0;
-  if (!ConfirmDiscard()) {
-    return 0;
-  }
   if (settings_navigation::RequestNavigate(m_hWnd, id))
+    return 0;
+  if (!ConfirmDiscard())
     return 0;
   EndDialog(id);
   return 0;
@@ -532,7 +586,7 @@ LRESULT UIStyleSettingsDialog::OnDestroy(UINT, WPARAM, LPARAM, BOOL& handled) {
   return 0;
 }
 
-LRESULT UIStyleSettingsDialog::OnSave(WORD, WORD id, HWND, BOOL&) {
+bool UIStyleSettingsDialog::ApplyChanges() {
   const bool desired = draft_.acrylic();
   const auto desired_theme = draft_.theme_mode();
   const auto before = weasel::UserSettings::Load();
@@ -553,13 +607,13 @@ LRESULT UIStyleSettingsDialog::OnSave(WORD, WORD id, HWND, BOOL&) {
                        static_cast<DWORD>(before.appearance_theme_mode));
     MSG_BY_IDS(IDS_STR_SCHEME_SAVE_FAILED, IDS_STR_WEASEL,
                MB_OK | MB_ICONERROR);
-    return 0;
+    return false;
   }
   saved_ = true;
   weasel::NotifyUserSettingsChanged();
   if (settings_->configuration_changed()) {
     if (Configurator().UpdateWorkspace(true) != 0)
-      return 0;
+      return false;
     deployed_ = true;
   }
   auto api = reinterpret_cast<RimeLeversApi*>(
@@ -570,14 +624,14 @@ LRESULT UIStyleSettingsDialog::OnSave(WORD, WORD id, HWND, BOOL&) {
                MB_OK | MB_ICONERROR);
     if (!settings_navigation::RequestClose(m_hWnd, IDOK))
       EndDialog(IDOK);
-    return 0;
+    return false;
   }
   const auto applied = settings_->ActiveAppearance();
   for (size_t i = 0; i < draft_.colors().size(); ++i) {
     if (!draft_.colors()[i].empty() && applied[i] != draft_.colors()[i]) {
       MSG_BY_IDS(IDS_STR_SCHEME_DEPLOY_FAILED, IDS_STR_WEASEL,
                  MB_OK | MB_ICONERROR);
-      return 0;
+      return false;
     }
   }
   const auto saved_settings = weasel::UserSettings::Load();
@@ -585,7 +639,14 @@ LRESULT UIStyleSettingsDialog::OnSave(WORD, WORD id, HWND, BOOL&) {
               saved_settings.appearance_theme_mode);
   InvalidatePreviewCache();
   RefreshMode();
-  if (id == IDOK && !settings_navigation::RequestClose(m_hWnd, IDOK))
+  return true;
+}
+
+LRESULT UIStyleSettingsDialog::OnSave(WORD, WORD id, HWND, BOOL&) {
+  if (settings_navigation::RequestApply(m_hWnd))
+    return 0;
+  if (ApplyChanges() && id == IDOK &&
+      !settings_navigation::RequestClose(m_hWnd, IDOK))
     EndDialog(IDOK);
   return 0;
 }
@@ -718,8 +779,11 @@ void UIStyleSettingsDialog::DrawCombo(const DRAWITEMSTRUCT& draw) {
       ::DeleteObject(marker_brush);
     }
     RECT label = row;
-    label.left += field ? 5 : 13;
-    label.right -= 5;
+    const int scale = ::GetDeviceCaps(draw.hDC, LOGPIXELSX);
+    label.left += field      ? (std::max)(5, ::MulDiv(5, scale, 96))
+                  : selected ? (std::max)(13, ::MulDiv(13, scale, 96))
+                             : (std::max)(7, ::MulDiv(7, scale, 96));
+    label.right -= (std::max)(5, ::MulDiv(5, scale, 96));
     ::DrawTextW(draw.hDC, entry.label, -1, &label,
                 DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
   }
@@ -783,13 +847,15 @@ weasel::AppearancePreview UIStyleSettingsDialog::PreviewStyle(bool dark) {
   preview.label_font_face = settings_->PreviewStyleString(
       "label_font_face", preview.font_face.c_str());
   preview.title = settings_navigation::LocalText(
-      dark ? L"深色预览" : L"浅色预览", dark ? L"深色預覽" : L"淺色預覽",
-      dark ? L"Dark preview" : L"Light preview");
+      dark ? L"预览 • 深色" : L"预览 • 浅色",
+      dark ? L"預覽 • 深色" : L"預覽 • 淺色",
+      dark ? L"Preview • Dark" : L"Preview • Light");
   preview.candidates = {
       static_cast<LPCWSTR>(Text(IDS_APPEARANCE_SAMPLE)),
       static_cast<LPCWSTR>(Text(IDS_APPEARANCE_SAMPLE_2)),
       static_cast<LPCWSTR>(Text(IDS_APPEARANCE_SAMPLE_3)),
-      settings_navigation::LocalText(L"泥好", L"泥好", L"Hello")};
+      settings_navigation::LocalText(L"泥好", L"泥好", L"Input"),
+      settings_navigation::LocalText(L"你号", L"你號", L"Method")};
   return preview;
 }
 

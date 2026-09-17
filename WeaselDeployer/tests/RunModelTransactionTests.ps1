@@ -1,6 +1,8 @@
 $ErrorActionPreference = 'Stop'
 $source = Split-Path $PSScriptRoot -Parent
 $build = Join-Path $env:TEMP ('weasel-model-tests-' + [guid]::NewGuid())
+$registryRoot = 'Software\Rime\Weasel\Tests\PackageUpdates-' + [guid]::NewGuid()
+$registryLiteral = $registryRoot.Replace('\', '\\')
 New-Item -ItemType Directory -Path $build | Out-Null
 $utf8 = New-Object System.Text.UTF8Encoding($false)
 function Write-TestFile($name, $content) {
@@ -16,6 +18,7 @@ $digest = ([BitConverter]::ToString($sha.ComputeHash($fixture))).Replace('-', ''
 $sha.Dispose()
 $cpp = [IO.File]::ReadAllText((Join-Path $source 'WanxiangModelManager.cpp'))
 $cpp = $cpp.Replace('9f80530f470033cfb6d4b44bb861b540f64100426f92dd0f87140883632a3d93', $digest)
+$cpp = $cpp.Replace('Software\\Rime\\Weasel\\PackageUpdates', $registryLiteral)
 $cpp = $cpp.Replace('Weasel Wanxiang LTS Grammar Model',
     ('Weasel grammar model tests ' + [guid]::NewGuid()))
 Write-TestFile 'WanxiangModelManager.cpp' $cpp
@@ -25,7 +28,9 @@ $header = $header.Replace('9f80530f470033cfb6d4b44bb861b540f64100426f92dd0f87140
 Write-TestFile 'WanxiangModelManager.h' ($header.Replace(' private:', ' public:'))
 $updateHeader = [IO.File]::ReadAllText((Join-Path $source 'WanxiangUpdateManager.h'))
 Write-TestFile 'WanxiangUpdateManager.h' ($updateHeader.Replace(' private:', ' public:'))
-Write-TestFile 'WanxiangUpdateManager.cpp' ([IO.File]::ReadAllText((Join-Path $source 'WanxiangUpdateManager.cpp')))
+$updateCpp = [IO.File]::ReadAllText((Join-Path $source 'WanxiangUpdateManager.cpp'))
+$updateCpp = $updateCpp.Replace('Software\\Rime\\Weasel\\PackageUpdates', $registryLiteral)
+Write-TestFile 'WanxiangUpdateManager.cpp' $updateCpp
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'UpdateManagerTests.cpp') -Destination $build
 Write-TestFile 'stdafx.h' @'
 #pragma once
@@ -95,4 +100,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw "Update manager tests failed (exit $LASTEXITCODE)" }
 } finally {
     Pop-Location
+    Remove-Item -LiteralPath ('Registry::HKEY_CURRENT_USER\' + $registryRoot) `
+        -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $build -Recurse -Force -ErrorAction SilentlyContinue
 }

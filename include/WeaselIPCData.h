@@ -235,6 +235,7 @@ struct UIStyle {
   // custom icon settings
   std::wstring current_zhung_icon;
   std::wstring current_ascii_icon;
+  std::wstring current_caps_icon;
   std::wstring current_half_icon;
   std::wstring current_full_icon;
   // label format and mark_text
@@ -311,6 +312,7 @@ struct UIStyle {
         preedit_type(COMPOSITION),
         current_zhung_icon(),
         current_ascii_icon(),
+        current_caps_icon(),
         current_half_icon(),
         current_full_icon(),
         label_text_format(L"%s."),
@@ -380,6 +382,7 @@ struct UIStyle {
         ascii_tip_follow_cursor != st.ascii_tip_follow_cursor ||
         current_zhung_icon != st.current_zhung_icon ||
         current_ascii_icon != st.current_ascii_icon ||
+        current_caps_icon != st.current_caps_icon ||
         current_half_icon != st.current_half_icon ||
         current_full_icon != st.current_full_icon ||
         enhanced_position != st.enhanced_position ||
@@ -445,6 +448,7 @@ void serialize(Archive& ar, weasel::UIStyle& s, const unsigned int version) {
   ar & s.ascii_tip_follow_cursor;
   ar & s.current_zhung_icon;
   ar & s.current_ascii_icon;
+  ar & s.current_caps_icon;
   ar & s.current_half_icon;
   ar & s.current_full_icon;
   ar & s.enhanced_position;

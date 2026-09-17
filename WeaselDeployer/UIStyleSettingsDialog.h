@@ -15,6 +15,9 @@ class UIStyleSettingsDialog : public CDialogImpl<UIStyleSettingsDialog> {
       : settings_(settings) {}
   bool saved() const { return saved_; }
   bool deployed() const { return deployed_; }
+  bool HasUnappliedChanges() const;
+  bool ApplyChanges();
+  bool ConfirmClose() const;
 
  protected:
   BEGIN_MSG_MAP(UIStyleSettingsDialog)
@@ -65,7 +68,7 @@ class UIStyleSettingsDialog : public CDialogImpl<UIStyleSettingsDialog> {
   void FillGroups();
   void FillSingles();
   void FillThemeMode();
-  void RefreshMode();
+  void RefreshMode(bool refresh_theme_mode = true);
   void RefreshThemeAvailability();
   void RefreshPreview();
   void InvalidatePreviewCache();

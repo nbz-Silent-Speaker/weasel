@@ -681,6 +681,7 @@ void RimeWithWeaselHandler::_LoadSchemaSpecificSettings(
     style.current_zhung_icon =
         load_icon(config, "schema/icon", "schema/zhung_icon");
     style.current_ascii_icon = load_icon(config, "schema/ascii_icon", NULL);
+    style.current_caps_icon = load_icon(config, "schema/caps_icon", NULL);
     style.current_full_icon = load_icon(config, "schema/full_icon", NULL);
     style.current_half_icon = load_icon(config, "schema/half_icon", NULL);
   }

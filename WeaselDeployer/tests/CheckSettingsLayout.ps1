@@ -21,7 +21,7 @@ $requiredConstants = [ordered]@{
   kToggleGapDlu = 0
   kButtonHeightDlu = 18
   kCardRadiusDlu = 8
-  kControlRadiusDlu = 5
+  kControlCornerRadiusPx = 5
   kSingleRowCardHeightDlu = 32
   kCompactToggleHeightDlu = 14
 }
@@ -116,7 +116,7 @@ if ($configurator -notmatch 'class\s+SettingsPageInstance' -or
     $configurator -notmatch 'kHostNavigateMessage') {
   throw 'Settings pages no longer use the shared navigation host.'
 }
-$showReplacement = $configurator.IndexOf('SWP_NOACTIVATE | SWP_SHOWWINDOW')
+$showReplacement = $configurator.IndexOf('SWP_SHOWWINDOW')
 $hideCurrent = $configurator.IndexOf('ShowWindow(active->window(), SW_HIDE)')
 if ($showReplacement -lt 0 -or $hideCurrent -lt 0 -or
     $showReplacement -gt $hideCurrent) {
@@ -135,6 +135,19 @@ foreach ($source in $hostedSources) {
   if ($text -notmatch 'settings_navigation::RequestNavigate\(m_hWnd, id\)') {
     throw "$source bypasses the shared navigation host."
   }
+  if ($text -notmatch 'settings_navigation::RequestApply\(m_hWnd\)') {
+    throw "$source bypasses the shared apply command."
+  }
+}
+
+$configuratorPath = Join-Path $root 'WeaselDeployer/Configurator.cpp'
+$configurator = Get-Content -LiteralPath $configuratorPath -Raw
+if ($navigation -notmatch 'HasAnyUnappliedChanges\(\)' -or
+    $navigation -notmatch 'kHostStateChangedMessage' -or
+    $configurator -notmatch 'kHostApplyMessage' -or
+    $configurator -notmatch 'refresh_shared_state' -or
+    $configurator -notmatch 'Page::Appearance,[\s\S]{0,180}?Page::Fonts,[\s\S]{0,180}?Page::StatusIcons,[\s\S]{0,180}?Page::Input') {
+  throw 'Apply must remain enabled across pages and commit every dirty page.'
 }
 
 $restoreButtons = [ordered]@{
@@ -160,7 +173,7 @@ $appearance = Get-Content -LiteralPath $appearancePath -Raw
 $appearanceContracts = @(
   'MoveControl\(dialog, IDC_APPEARANCE_ACRYLIC_CARD,[\s\S]{0,180}?' +
     'kSingleRowCardHeightDlu\);'
-  'MoveControl\(dialog, IDC_APPEARANCE_THEME_CARD,[\s\S]{0,160}?' +
+  'MoveControl\(\s*dialog,\s*IDC_APPEARANCE_THEME_CARD,[\s\S]{0,520}?' +
     'kSingleRowCardHeightDlu\);'
   'constexpr int kSettingsColumnWidthDlu = 302;'
   'constexpr int kPreviewColumnWidthDlu = 198;'
@@ -208,10 +221,11 @@ if ($userSettings -notmatch 'enum class AppearanceThemeMode' -or
 
 $previewPath = Join-Path $root 'WeaselDeployer/AppearancePreview.h'
 $preview = Get-Content -LiteralPath $previewPath -Raw
-if ($preview -notmatch 'std::array<std::wstring, 4> candidates' -or
-    $preview -notmatch 'L"1\.", L"2\.", L"3\.", L"4\."' -or
+if ($preview -notmatch 'std::array<std::wstring, 5> candidates' -or
+    $preview -notmatch 'L"1\.", L"2\.", L"3\.", L"4\.",' -or
+    $preview -notmatch 'L"5\."' -or
     $preview -notmatch 'canvas\.SetClip\(&scene_path\)') {
-  throw 'Candidate-window previews must render four candidates.'
+  throw 'Candidate-window previews must render five candidates.'
 }
 
 $hiddenPageTitles = [ordered]@{
@@ -228,6 +242,61 @@ foreach ($entry in $hiddenPageTitles.GetEnumerator()) {
   if ($text -notmatch $pattern) {
     throw "$($entry.Key) exposes a duplicate page title."
   }
+}
+
+$statusPath = Join-Path $root 'WeaselDeployer/StatusIconSettingsDialog.cpp'
+$status = Get-Content -LiteralPath $statusPath -Raw
+$trayPath = Join-Path $root 'WeaselServer/WeaselTrayIcon.cpp'
+$tray = Get-Content -LiteralPath $trayPath -Raw
+$serverResources = Get-Content -LiteralPath (Join-Path $root 'WeaselServer/resource.h') -Raw
+$serverRc = Get-Content -LiteralPath (Join-Path $root 'WeaselServer/WeaselServer.rc') -Raw
+if ($userSettings -notmatch 'kStatusIconCapsSetting' -or
+    $userSettings -notmatch 'std::wstring caps;' -or
+    $userSettings -notmatch 'SchemaStatusIconSettings' -or
+    $userSettings -notmatch 'kStatusIconUseGlobalMarker' -or
+    $status -notmatch 'PreviewMode::Western' -or
+    $status -notmatch 'PreviewMode::Caps' -or
+    $status -notmatch 'EditScope::Schema' -or
+    $status -notmatch 'IDC_STATUS_SCHEMA_COMBO' -or
+    $status -notmatch 'StatusIconUsesGlobal' -or
+    $tray -notmatch 'mode == ASCII_CAPS \|\| mode == ZHUNG_CAPS' -or
+    $tray -notmatch 'LoadResolvedStatusIcon\(schema_icons\.caps' -or
+    $tray -notmatch 'SchemaStatusIconSettings::Load\(state\.schema_id\)' -or
+    $tray -notmatch 'icons\.caps, IDI_CAPS' -or
+    $serverResources -notmatch 'IDI_CAPS' -or
+    $serverRc -notmatch 'resource\\\\caps\.ico' -or
+    -not (Test-Path -LiteralPath (Join-Path $root 'resource/caps.ico'))) {
+  throw 'Status icons must support the three-state global and scheme override model.'
+}
+
+$bundledStatusIcons = @(
+  'ascii-black.ico',
+  'ascii-red.ico',
+  'caps-blue.ico',
+  'caps-red.ico',
+  'chinese-black.ico',
+  'chinese-blue.ico'
+)
+foreach ($icon in $bundledStatusIcons) {
+  if (-not (Test-Path -LiteralPath (
+        Join-Path $root "resource/status-icons/$icon"))) {
+    throw "Missing bundled status icon: $icon"
+  }
+}
+$installer = Get-Content -LiteralPath (Join-Path $root 'output/install.nsi') -Raw
+if ($status -notmatch 'BundledStatusIconDirectory' -or
+    $status -notmatch 'IsBundledStatusIcon' -or
+    $installer -notmatch 'resource\\status-icons\\\*\.ico') {
+  throw 'Bundled status icon alternatives must be selectable and installed read-only.'
+}
+
+if ($status -notmatch 'set_visible_without_redraw' -or
+    $status -notmatch 'SWP_NOREDRAW' -or
+    $status -notmatch 'RedrawWindow\(card, nullptr, nullptr,[\s\S]{0,100}?' +
+      'RDW_INVALIDATE \| RDW_NOERASE \| RDW_UPDATENOW\)' -or
+    $status -match 'RedrawWindow\(m_hWnd, &bounds, nullptr,[\s\S]{0,120}?' +
+      'RDW_ALLCHILDREN') {
+  throw 'Status-icon scope switching must repaint the card without staging child windows.'
 }
 
 Write-Output ('Settings layout contract verified for: ' +

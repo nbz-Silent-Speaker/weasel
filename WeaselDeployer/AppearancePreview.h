@@ -38,7 +38,7 @@ struct AppearancePreview {
   std::wstring title;
   COLORREF background, border, text, label, highlight, highlighted_text,
       highlighted_label, mark;
-  std::array<std::wstring, 4> candidates;
+  std::array<std::wstring, 5> candidates;
 };
 
 inline Gdiplus::Color PreviewColor(COLORREF rgb, BYTE alpha = 255) {
@@ -61,6 +61,19 @@ inline void PreviewRoundRect(Gdiplus::GraphicsPath& path,
   path.AddArc(right, bottom, diameter, diameter, 0, 90);
   path.AddArc(rect.X, bottom, diameter, diameter, 90, 90);
   path.CloseFigure();
+}
+
+inline void DrawPreviewGlow(Gdiplus::Graphics& canvas,
+                            const Gdiplus::RectF& bounds,
+                            const Gdiplus::Color& color) {
+  Gdiplus::GraphicsPath path;
+  path.AddEllipse(bounds);
+  Gdiplus::PathGradientBrush glow(&path);
+  glow.SetCenterColor(color);
+  Gdiplus::Color edge(0, color.GetR(), color.GetG(), color.GetB());
+  INT edge_count = 1;
+  glow.SetSurroundColors(&edge, &edge_count);
+  canvas.FillPath(&glow, &path);
 }
 
 inline void DrawAppearancePreview(HDC dc,
@@ -92,9 +105,19 @@ inline void DrawAppearancePreview(HDC dc,
   // A fixed smooth scene illustrates the backdrop without capturing desktop
   // contents. Normal mode covers it with a fully opaque background.
   LinearGradientBrush scenery(
-      scene, style.dark ? Color(255, 40, 79, 99) : Color(255, 190, 220, 229),
-      style.dark ? Color(255, 87, 59, 83) : Color(255, 232, 207, 220), 35.0f);
+      scene, style.dark ? Color(255, 27, 72, 96) : Color(255, 171, 214, 229),
+      style.dark ? Color(255, 91, 47, 88) : Color(255, 235, 187, 216), 35.0f);
   canvas.FillPath(&scenery, &scene_path);
+  DrawPreviewGlow(
+      canvas,
+      RectF(scene.X - scene.Width * 0.18f, scene.Y + scene.Height * 0.48f,
+            scene.Width * 0.72f, scene.Height * 0.72f),
+      style.dark ? Color(92, 41, 170, 196) : Color(118, 97, 193, 221));
+  DrawPreviewGlow(
+      canvas,
+      RectF(scene.X + scene.Width * 0.58f, scene.Y - scene.Height * 0.18f,
+            scene.Width * 0.62f, scene.Height * 0.68f),
+      style.dark ? Color(84, 194, 71, 151) : Color(112, 239, 137, 188));
   const auto pixels = [dpi_scale](int value) {
     return static_cast<float>(value) * dpi_scale;
   };
@@ -127,8 +150,8 @@ inline void DrawAppearancePreview(HDC dc,
                         style.hilite_padding_y));
   const float label_gap = pixels(style.hilite_spacing);
   const float candidate_gap = pixels(style.candidate_spacing);
-  const std::array<std::wstring, 4> labels{L"1.", L"2.", L"3.", L"4."};
-  std::array<float, 4> entry_widths{};
+  const std::array<std::wstring, 5> labels{L"1.", L"2.", L"3.", L"4.", L"5."};
+  std::array<float, 5> entry_widths{};
   float widest_entry = 0;
   for (size_t i = 0; i < style.candidates.size(); ++i) {
     entry_widths[i] = measure(labels[i], label_font) + label_gap +
@@ -163,10 +186,12 @@ inline void DrawAppearancePreview(HDC dc,
       (std::min)(1.0f, (std::min)(available_width / panel_width,
                                   available_height / panel_height));
   const float origin_x = (width - panel_width * zoom) / 2.0f;
-  const float origin_y = (height - panel_height * zoom) / 2.0f;
+  // Center against the clipped scene so the candidate panel has exactly the
+  // same top and bottom inset.  The preview title uses this same top edge.
+  const float origin_y = scene.Y + (scene.Height - panel_height * zoom) / 2.0f;
   LOGFONTW title_logical{};
   ::GetObjectW(font, sizeof(title_logical), &title_logical);
-  title_logical.lfWeight = FW_SEMIBOLD;
+  title_logical.lfWeight = FW_NORMAL;
   Font title_font(dc, &title_logical);
   SolidBrush title_brush(
       PreviewColor(style.dark ? RGB(245, 245, 245) : RGB(24, 24, 24)));
@@ -184,6 +209,14 @@ inline void DrawAppearancePreview(HDC dc,
   SolidBrush background(
       PreviewColor(style.background, style.acrylic ? 176 : 255));
   canvas.FillPath(&background, &outline);
+  if (style.acrylic) {
+    // A soft directional veil gives the translucent panel a clearer frosted
+    // glass appearance while keeping the configured colors recognizable.
+    LinearGradientBrush frost(
+        panel, style.dark ? Color(24, 255, 255, 255) : Color(62, 255, 255, 255),
+        style.dark ? Color(16, 0, 0, 0) : Color(18, 255, 255, 255), 118.0f);
+    canvas.FillPath(&frost, &outline);
+  }
   const auto contentState = canvas.Save();
   canvas.SetClip(&outline);
   StringFormat format;

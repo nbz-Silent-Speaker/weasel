@@ -127,8 +127,9 @@ void LayoutInputPage(HWND dialog) {
               10, 170, 10);
   MoveControl(dialog, IDC_SCHEMA_DETAIL_LABEL, 196, 10, 330, 10);
   MoveControl(dialog, IDC_SCHEMA_LIST_PANEL, settings_navigation::kPageInsetDlu,
-              24, 170, 224);
-  MoveControl(dialog, IDC_SCHEMA_DETAIL_GROUP, 196, 24, 330, 224);
+              24, 170, settings_navigation::kPageCardsBottomDlu - 24);
+  MoveControl(dialog, IDC_SCHEMA_DETAIL_GROUP, 196, 24, 330,
+              settings_navigation::kPageCardsBottomDlu - 24);
   MoveControl(dialog, IDC_SCHEMA_LIST, 16, 26, 166, 200);
   MoveControl(dialog, IDC_SCHEMA_DETAIL_NAME, 210, 36, 142, 12);
   MoveControl(dialog, IDC_SCHEMA_DETAIL_VERSION, 354, 36, 58, 12);
@@ -150,6 +151,9 @@ void LayoutInputPage(HWND dialog) {
   MoveControl(dialog, IDC_MODEL_DOWNLOAD_STATUS, 210, 185, 302, 10);
   MoveControl(dialog, IDC_MODEL_PROGRESS, 210, 202, 124, 6);
   MoveControl(dialog, IDC_MODEL_PROGRESS_TEXT, 336, 199, 28, 12);
+  MoveControl(dialog, IDC_SCHEMA_UPDATE_SETTINGS, 432, 230,
+              settings_navigation::kComboWidthDlu,
+              settings_navigation::kButtonHeightDlu);
 }
 
 struct UpdateSelection {
@@ -471,12 +475,10 @@ void SwitcherSettingsDialog::UpdateApplyButton() {
   if (apply_operation_)
     return;
   const bool pending = HasPendingChanges();
-  ::EnableWindow(GetDlgItem(IDOK), pending);
-  settings_navigation::SetStatus(
-      m_hWnd, pending ? LocalText(L"有更改待应用", L"有變更待套用",
-                                  L"Changes ready to apply")
-                      : LocalText(L"所有设置已应用", L"所有設定已套用",
-                                  L"All settings applied"));
+  settings_navigation::SetUnappliedChanges(
+      m_hWnd, settings_navigation::Page::Input, pending);
+  ::EnableWindow(GetDlgItem(IDOK),
+                 settings_navigation::HasAnyUnappliedChanges());
 }
 
 void SwitcherSettingsDialog::DiscardPendingModel() {
@@ -769,7 +771,19 @@ void SwitcherSettingsDialog::AdjustInputModeWidth() {
                  input_mode_base_rect_.top, width,
                  input_mode_base_rect_.Height(), SWP_NOZORDER | SWP_NOACTIVATE);
   input_mode_.SetDroppedWidth((std::max)(width, desired));
-  ApplyRoundedRegion(input_mode_, 5);
+}
+
+bool SwitcherSettingsDialog::HasUnappliedChanges() const {
+  return HasPendingChanges();
+}
+
+bool SwitcherSettingsDialog::ConfirmClose() {
+  return ConfirmDiscardChanges();
+}
+
+void SwitcherSettingsDialog::PrepareClose() {
+  DiscardPendingModel();
+  KillTimer(kModelTimer);
 }
 
 void SwitcherSettingsDialog::UpdateDescriptionLayout() {
@@ -815,12 +829,11 @@ void SwitcherSettingsDialog::ApplyRoundedRegion(HWND control, int radius_dlu) {
 }
 
 void SwitcherSettingsDialog::ApplyControlRounding() {
-  for (const int id :
-       {IDOK, IDC_CHECK_SCHEME_UPDATES, IDC_MODEL_DOWNLOAD, IDC_MODEL_SECONDARY,
-        IDC_INPUT_MODE, IDC_SCHEMA_UPDATE_SETTINGS}) {
-    ApplyRoundedRegion(GetDlgItem(id), 5);
+  for (const int id : {IDOK, IDC_CHECK_SCHEME_UPDATES, IDC_MODEL_DOWNLOAD,
+                       IDC_MODEL_SECONDARY}) {
+    settings_navigation::StyleActionButton(m_hWnd, static_cast<WORD>(id));
   }
-  ApplyRoundedRegion(GetDlgItem(IDC_SCHEMA_DESCRIPTION), 6);
+  settings_navigation::StyleInput(m_hWnd, IDC_SCHEMA_DESCRIPTION);
   ApplyRoundedRegion(GetDlgItem(IDC_MODEL_PROGRESS), 3);
 }
 
@@ -1145,8 +1158,8 @@ void SwitcherSettingsDialog::UpdateModelUi() {
   move_control(GetDlgItem(IDC_MODEL_SECONDARY), secondary_rect);
   ::ShowWindow(GetDlgItem(IDC_MODEL_SECONDARY),
                secondary.empty() ? SW_HIDE : SW_SHOW);
-  ApplyRoundedRegion(GetDlgItem(IDC_MODEL_DOWNLOAD), 5);
-  ApplyRoundedRegion(GetDlgItem(IDC_MODEL_SECONDARY), 5);
+  settings_navigation::StyleActionButton(m_hWnd, IDC_MODEL_DOWNLOAD);
+  settings_navigation::StyleActionButton(m_hWnd, IDC_MODEL_SECONDARY);
   ::InvalidateRect(GetDlgItem(IDC_MODEL_DOWNLOAD), nullptr, TRUE);
 }
 
@@ -1160,7 +1173,7 @@ LRESULT SwitcherSettingsDialog::OnMeasureItem(UINT,
     handled = FALSE;
     return 0;
   }
-  RECT height = {0, 0, 0, 10};
+  RECT height = {0, 0, 0, settings_navigation::kComboItemHeightDlu};
   ::MapDialogRect(m_hWnd, &height);
   measure->itemHeight = (std::max)(16u, static_cast<UINT>(height.bottom));
   handled = TRUE;
@@ -1182,13 +1195,48 @@ LRESULT SwitcherSettingsDialog::OnDrawItem(UINT,
     const bool edit_portion = (draw->itemState & ODS_COMBOBOXEDIT) != 0;
     const bool selected =
         (draw->itemState & ODS_SELECTED) != 0 && !edit_portion;
-    const COLORREF background =
-        ::GetSysColor(selected ? COLOR_HIGHLIGHT : COLOR_WINDOW);
-    const COLORREF foreground =
-        ::GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : COLOR_WINDOWTEXT);
-    HBRUSH brush = ::CreateSolidBrush(background);
-    ::FillRect(draw->hDC, &draw->rcItem, brush);
-    ::DeleteObject(brush);
+    const bool disabled = (draw->itemState & ODS_DISABLED) != 0;
+    const COLORREF surface = ::GetSysColor(COLOR_WINDOW);
+    const COLORREF selected_fill =
+        settings_navigation::Mix(::GetSysColor(COLOR_3DSHADOW), surface, 25);
+    ::FillRect(draw->hDC, &draw->rcItem, ::GetSysColorBrush(COLOR_WINDOW));
+
+    RECT selection = draw->rcItem;
+    const int scale = ::GetDeviceCaps(draw->hDC, LOGPIXELSX);
+    if (selected) {
+      const int horizontal_inset = (std::max)(3, ::MulDiv(3, scale, 96));
+      const int vertical_inset = (std::max)(1, ::MulDiv(1, scale, 96));
+      selection.left += horizontal_inset;
+      selection.top += vertical_inset;
+      selection.right -= horizontal_inset;
+      selection.bottom -= vertical_inset;
+      HBRUSH selection_brush = ::CreateSolidBrush(selected_fill);
+      HPEN selection_pen = ::CreatePen(PS_NULL, 0, selected_fill);
+      const HGDIOBJ old_brush = ::SelectObject(draw->hDC, selection_brush);
+      const HGDIOBJ old_pen = ::SelectObject(draw->hDC, selection_pen);
+      const int radius = (std::max)(6, ::MulDiv(8, scale, 96));
+      ::RoundRect(draw->hDC, selection.left, selection.top, selection.right,
+                  selection.bottom, radius, radius);
+      ::SelectObject(draw->hDC, old_pen);
+      ::SelectObject(draw->hDC, old_brush);
+      ::DeleteObject(selection_pen);
+      ::DeleteObject(selection_brush);
+
+      const int marker_width = (std::max)(2, ::MulDiv(3, scale, 96));
+      RECT marker{selection.left + horizontal_inset,
+                  selection.top + (selection.bottom - selection.top) / 4,
+                  selection.left + horizontal_inset + marker_width,
+                  selection.bottom - (selection.bottom - selection.top) / 4};
+      HBRUSH marker_brush = ::CreateSolidBrush(::GetSysColor(COLOR_HIGHLIGHT));
+      HRGN marker_region =
+          ::CreateRoundRectRgn(marker.left, marker.top, marker.right,
+                               marker.bottom, marker_width, marker_width);
+      if (marker_region) {
+        ::FillRgn(draw->hDC, marker_region, marker_brush);
+        ::DeleteObject(marker_region);
+      }
+      ::DeleteObject(marker_brush);
+    }
 
     std::wstring label;
     int item = static_cast<int>(draw->itemID);
@@ -1206,12 +1254,12 @@ LRESULT SwitcherSettingsDialog::OnDrawItem(UINT,
       }
     }
     RECT text_rectangle = draw->rcItem;
-    RECT padding = {0, 0, 5, 0};
-    ::MapDialogRect(m_hWnd, &padding);
-    text_rectangle.left += padding.right;
-    text_rectangle.right -= padding.right;
+    text_rectangle.left += selected ? (std::max)(13, ::MulDiv(13, scale, 96))
+                                    : (std::max)(7, ::MulDiv(7, scale, 96));
+    text_rectangle.right -= (std::max)(7, ::MulDiv(7, scale, 96));
     ::SetBkMode(draw->hDC, TRANSPARENT);
-    ::SetTextColor(draw->hDC, foreground);
+    ::SetTextColor(draw->hDC,
+                   ::GetSysColor(disabled ? COLOR_GRAYTEXT : COLOR_WINDOWTEXT));
     HFONT font = reinterpret_cast<HFONT>(
         ::SendMessageW(draw->hwndItem, WM_GETFONT, 0, 0));
     const HGDIOBJ old_font = font ? ::SelectObject(draw->hDC, font) : nullptr;
@@ -1220,8 +1268,6 @@ LRESULT SwitcherSettingsDialog::OnDrawItem(UINT,
         DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS | DT_NOPREFIX);
     if (old_font)
       ::SelectObject(draw->hDC, old_font);
-    if ((draw->itemState & ODS_FOCUS) != 0 && !edit_portion)
-      ::DrawFocusRect(draw->hDC, &draw->rcItem);
     handled = TRUE;
     return TRUE;
   }
@@ -1521,6 +1567,8 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   model_progress_.SetRange32(0, 1000);
   input_mode_.Attach(GetDlgItem(IDC_INPUT_MODE));
   update_frequency_.Attach(GetDlgItem(IDC_SCHEMA_UPDATE_SETTINGS));
+  settings_navigation::StyleCombo(m_hWnd, IDC_INPUT_MODE);
+  settings_navigation::StyleCombo(m_hWnd, IDC_SCHEMA_UPDATE_SETTINGS);
   loading_input_mode_ = true;
   if (!LoadInputMode(&selected_input_mode_))
     selected_input_mode_ = L"全拼";
@@ -1616,7 +1664,7 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
       m_hWnd, settings_navigation::Page::Input,
       {IDOK,
        IDCANCEL,
-       WeaselUserDataPath().wstring(),
+       WeaselDisplayUserDataPath().wstring(),
        {IDC_SWITCHER_TITLE, IDC_USER_DATA_LABEL, IDC_USER_DATA_FOLDER}});
   const int navigation_offset = static_cast<int>(
       settings_navigation::MapDialogUnits(
@@ -1640,12 +1688,11 @@ LRESULT SwitcherSettingsDialog::OnClose(UINT, WPARAM, LPARAM, BOOL&) {
     ShowWindow(SW_HIDE);
     return 0;
   }
-  if (!ConfirmDiscardChanges())
-    return 0;
-  DiscardPendingModel();
-  KillTimer(kModelTimer);
   if (settings_navigation::RequestClose(m_hWnd, IDCANCEL))
     return 0;
+  if (!ConfirmClose())
+    return 0;
+  PrepareClose();
   EndDialog(IDCANCEL);
   return 0;
 }
@@ -1656,12 +1703,11 @@ LRESULT SwitcherSettingsDialog::OnCloseCommand(WORD, WORD, HWND, BOOL&) {
     ShowWindow(SW_HIDE);
     return 0;
   }
-  if (!ConfirmDiscardChanges())
-    return 0;
-  DiscardPendingModel();
-  KillTimer(kModelTimer);
   if (settings_navigation::RequestClose(m_hWnd, IDCANCEL))
     return 0;
+  if (!ConfirmClose())
+    return 0;
+  PrepareClose();
   EndDialog(IDCANCEL);
   return 0;
 }
@@ -1670,12 +1716,11 @@ LRESULT SwitcherSettingsDialog::OnNavigate(WORD, WORD id, HWND, BOOL&) {
   const auto page = settings_navigation::PageFromCommand(id);
   if (page == settings_navigation::Page::Input || apply_operation_)
     return 0;
-  if (!ConfirmDiscardChanges())
-    return 0;
-  DiscardPendingModel();
-  KillTimer(kModelTimer);
   if (settings_navigation::RequestNavigate(m_hWnd, id))
     return 0;
+  if (!ConfirmDiscardChanges())
+    return 0;
+  PrepareClose();
   EndDialog(id);
   return 0;
 }
@@ -1869,6 +1914,8 @@ LRESULT SwitcherSettingsDialog::OnUpdateSettingsChanged(WORD,
                 update_frequency_modified_;
     UpdateApplyButton();
   }
+  ::RedrawWindow(update_frequency_, nullptr, nullptr,
+                 RDW_INVALIDATE | RDW_FRAME | RDW_UPDATENOW);
   return 0;
 }
 
@@ -1924,6 +1971,8 @@ LRESULT SwitcherSettingsDialog::OnInputModeChanged(WORD, WORD, HWND, BOOL&) {
     UpdateApplyButton();
   }
   AdjustInputModeWidth();
+  ::RedrawWindow(input_mode_, nullptr, nullptr,
+                 RDW_INVALIDATE | RDW_FRAME | RDW_UPDATENOW);
   return 0;
 }
 
@@ -2098,6 +2147,7 @@ void SwitcherSettingsDialog::SetApplyingUi(bool applying) {
     UpdateCheckButton();
     UpdateModelUi();
   }
+  settings_navigation::NotifyHostStateChanged(m_hWnd);
 }
 
 void SwitcherSettingsDialog::FinishApply() {
@@ -2261,6 +2311,8 @@ void SwitcherSettingsDialog::FinishApply() {
 }
 
 LRESULT SwitcherSettingsDialog::OnOK(WORD, WORD, HWND, BOOL&) {
+  if (settings_navigation::RequestApply(m_hWnd))
+    return 0;
   ApplyChanges();
   return 0;
 }

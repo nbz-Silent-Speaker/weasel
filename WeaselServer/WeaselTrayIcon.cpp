@@ -13,7 +13,8 @@
 // nasty
 #include <resource.h>
 
-static UINT mode_icon[] = {IDI_ZH, IDI_ZH, IDI_EN, IDI_ZH, IDI_EN, IDI_RELOAD};
+static UINT mode_icon[] = {IDI_ZH,   IDI_ZH,   IDI_EN,
+                           IDI_CAPS, IDI_CAPS, IDI_RELOAD};
 static const WCHAR* mode_label[] = {NULL,
                                     /*L"中文"*/ NULL,
                                     /*L"西文"*/ NULL,
@@ -91,53 +92,21 @@ HICON LoadResourceIcon(UINT resource) {
                    IMAGE_ICON, 0, 0, LR_DEFAULTSIZE));
 }
 
-HICON LoadBaseIcon(const std::wstring& custom,
-                   const std::wstring& schema,
-                   UINT fallback) {
-  if (HICON icon = LoadIconFile(custom))
-    return icon;
-  if (HICON icon = LoadIconFile(schema))
+HICON LoadResolvedStatusIcon(const std::wstring& schema_override,
+                             const std::wstring& native_schema,
+                             const std::wstring& global,
+                             UINT fallback) {
+  if (!schema_override.empty() &&
+      !weasel::StatusIconUsesGlobal(schema_override)) {
+    if (HICON icon = LoadIconFile(schema_override))
+      return icon;
+  } else if (schema_override.empty()) {
+    if (HICON icon = LoadIconFile(native_schema))
+      return icon;
+  }
+  if (HICON icon = LoadIconFile(global))
     return icon;
   return LoadResourceIcon(fallback);
-}
-
-HICON AddCapsBadge(HICON base, weasel::StatusIconCapsBadge badge) {
-  if (!base)
-    return nullptr;
-  constexpr INT size = 32;
-  Gdiplus::Bitmap canvas(size, size, PixelFormat32bppARGB);
-  Gdiplus::Graphics graphics(&canvas);
-  graphics.SetCompositingMode(Gdiplus::CompositingModeSourceCopy);
-  graphics.Clear(Gdiplus::Color(0, 0, 0, 0));
-  Gdiplus::Bitmap source(base);
-  graphics.SetInterpolationMode(Gdiplus::InterpolationModeHighQualityBicubic);
-  graphics.DrawImage(&source, Gdiplus::Rect(0, 0, size, size));
-  graphics.SetCompositingMode(Gdiplus::CompositingModeSourceOver);
-  graphics.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
-
-  const Gdiplus::Color fill_color(255, 213, 67, 62);
-  const Gdiplus::Color outline_color(235, 255, 255, 255);
-  Gdiplus::SolidBrush fill(fill_color);
-  Gdiplus::Pen outline(outline_color, 2.0f);
-  if (badge == weasel::StatusIconCapsBadge::Dot) {
-    const Gdiplus::RectF dot(21.0f, 2.0f, 9.0f, 9.0f);
-    graphics.FillEllipse(&fill, dot);
-    graphics.DrawEllipse(&outline, dot);
-  } else {
-    const Gdiplus::RectF circle(16.0f, 0.0f, 16.0f, 16.0f);
-    graphics.FillEllipse(&fill, circle);
-    graphics.DrawEllipse(&outline, circle);
-    Gdiplus::FontFamily family(L"Segoe UI");
-    Gdiplus::Font font(&family, 10.0f, Gdiplus::FontStyleBold,
-                       Gdiplus::UnitPixel);
-    Gdiplus::SolidBrush text(Gdiplus::Color(255, 255, 255, 255));
-    Gdiplus::StringFormat format;
-    format.SetAlignment(Gdiplus::StringAlignmentCenter);
-    format.SetLineAlignment(Gdiplus::StringAlignmentCenter);
-    graphics.DrawString(L"A", 1, &font, circle, &format, &text);
-  }
-  HICON result = nullptr;
-  return canvas.GetHICON(&result) == Gdiplus::Ok ? result : nullptr;
 }
 }  // namespace
 
@@ -145,8 +114,10 @@ WeaselTrayIcon::WeaselTrayIcon(weasel::UI& ui)
     : m_style(ui.style()),
       m_status(ui.status()),
       m_mode(INITIAL),
+      m_schema_id(),
       m_schema_zhung_icon(),
       m_schema_ascii_icon(),
+      m_schema_caps_icon(),
       m_disabled(false) {
   Gdiplus::GdiplusStartupInput startup;
   if (Gdiplus::GdiplusStartup(&m_graphics_token, &startup, nullptr) !=
@@ -271,39 +242,32 @@ void WeaselTrayIcon::Refresh(const WeaselTrayIconState& state, bool force) {
      initialize) 4,both m_schema_ascii_icon and state.current_ascii_icon
      empty(for initialize)
   */
-  if (force || mode != m_mode ||
+  if (force || mode != m_mode || m_schema_id != state.schema_id ||
       m_schema_zhung_icon != state.current_zhung_icon ||
       (m_schema_zhung_icon.empty() && state.current_zhung_icon.empty()) ||
       m_schema_ascii_icon != state.current_ascii_icon ||
-      (m_schema_ascii_icon.empty() && state.current_ascii_icon.empty())) {
+      (m_schema_ascii_icon.empty() && state.current_ascii_icon.empty()) ||
+      m_schema_caps_icon != state.current_caps_icon ||
+      (m_schema_caps_icon.empty() && state.current_caps_icon.empty())) {
     ShowIcon();
     m_mode = mode;
+    m_schema_id = state.schema_id;
     m_schema_zhung_icon = state.current_zhung_icon;
     m_schema_ascii_icon = state.current_ascii_icon;
+    m_schema_caps_icon = state.current_caps_icon;
     const auto icons = weasel::StatusIconSettings::Load();
+    const auto schema_icons =
+        weasel::SchemaStatusIconSettings::Load(state.schema_id);
     HICON icon = nullptr;
     if (mode == ASCII) {
-      icon = LoadBaseIcon(icons.english, m_schema_ascii_icon, IDI_EN);
+      icon = LoadResolvedStatusIcon(schema_icons.ascii, m_schema_ascii_icon,
+                                    icons.english, IDI_EN);
     } else if (mode == ZHUNG) {
-      icon = LoadBaseIcon(icons.chinese, m_schema_zhung_icon, IDI_ZH);
-    } else if (mode == ASCII_CAPS) {
-      if (icons.caps_mode == weasel::StatusIconCapsMode::Custom)
-        icon = LoadIconFile(icons.english_caps);
-      if (!icon) {
-        HICON base = LoadBaseIcon(icons.english, m_schema_ascii_icon, IDI_EN);
-        icon = AddCapsBadge(base, icons.caps_badge);
-        if (base)
-          ::DestroyIcon(base);
-      }
-    } else if (mode == ZHUNG_CAPS) {
-      if (icons.caps_mode == weasel::StatusIconCapsMode::Custom)
-        icon = LoadIconFile(icons.chinese_caps);
-      if (!icon) {
-        HICON base = LoadBaseIcon(icons.chinese, m_schema_zhung_icon, IDI_ZH);
-        icon = AddCapsBadge(base, icons.caps_badge);
-        if (base)
-          ::DestroyIcon(base);
-      }
+      icon = LoadResolvedStatusIcon(schema_icons.chinese, m_schema_zhung_icon,
+                                    icons.chinese, IDI_ZH);
+    } else if (mode == ASCII_CAPS || mode == ZHUNG_CAPS) {
+      icon = LoadResolvedStatusIcon(schema_icons.caps, m_schema_caps_icon,
+                                    icons.caps, IDI_CAPS);
     }
     if (icon) {
       SetIcon(icon);

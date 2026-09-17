@@ -10,11 +10,13 @@
 #include <WeaselConstants.h>
 #include <WeaselIPC.h>
 #include <WeaselIPCData.h>
+#include <WeaselUserSettings.h>
 #include <WeaselUtility.h>
 #pragma warning(disable : 4005)
 #include <rime_api.h>
 #include <rime_levers_api.h>
 #pragma warning(default : 4005)
+#include <array>
 #include <filesystem>
 #include <fstream>
 #include <memory>
@@ -150,6 +152,103 @@ int Configurator::ConfigureStatusIcons() {
 }
 
 namespace {
+inline constexpr wchar_t kSettingsHostClass[] = L"Weasel.SettingsWindow";
+inline constexpr wchar_t kSettingsHostActivePage[] =
+    L"Weasel.SettingsActivePage";
+
+LRESULT CALLBACK SettingsHostProc(HWND window,
+                                  UINT message,
+                                  WPARAM wparam,
+                                  LPARAM lparam) {
+  if (message == WM_CLOSE) {
+    const HWND active =
+        reinterpret_cast<HWND>(::GetPropW(window, kSettingsHostActivePage));
+    if (active) {
+      ::PostThreadMessageW(::GetCurrentThreadId(),
+                           settings_navigation::kHostCloseMessage, IDCANCEL,
+                           reinterpret_cast<LPARAM>(active));
+    }
+    return 0;
+  }
+  if (message == WM_SIZE) {
+    struct ResizePages {
+      HWND host;
+      int width;
+      int height;
+    } resize{window, LOWORD(lparam), HIWORD(lparam)};
+    ::EnumChildWindows(
+        window,
+        [](HWND child, LPARAM data) {
+          const auto resize = reinterpret_cast<const ResizePages*>(data);
+          if (::GetParent(child) != resize->host)
+            return TRUE;
+          ::SetWindowPos(child, nullptr, 0, 0, resize->width, resize->height,
+                         SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+          return TRUE;
+        },
+        reinterpret_cast<LPARAM>(&resize));
+  }
+  if (message == WM_NCDESTROY)
+    ::RemovePropW(window, kSettingsHostActivePage);
+  return ::DefWindowProcW(window, message, wparam, lparam);
+}
+
+class SettingsHostWindow {
+ public:
+  SettingsHostWindow() = default;
+  SettingsHostWindow(const SettingsHostWindow&) = delete;
+  SettingsHostWindow& operator=(const SettingsHostWindow&) = delete;
+  ~SettingsHostWindow() {
+    if (window_ && ::IsWindow(window_))
+      ::DestroyWindow(window_);
+  }
+
+  bool Create(HWND page, HWND owner) {
+    const HINSTANCE instance = ::GetModuleHandleW(nullptr);
+    WNDCLASSEXW existing{sizeof(existing)};
+    if (!::GetClassInfoExW(instance, kSettingsHostClass, &existing)) {
+      WNDCLASSEXW type{sizeof(type)};
+      type.lpfnWndProc = SettingsHostProc;
+      type.hInstance = instance;
+      type.hCursor = ::LoadCursorW(nullptr, IDC_ARROW);
+      type.hbrBackground = ::GetSysColorBrush(COLOR_BTNFACE);
+      type.lpszClassName = kSettingsHostClass;
+      if (!::RegisterClassExW(&type) &&
+          ::GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
+        return false;
+      }
+    }
+
+    RECT bounds{};
+    ::GetWindowRect(page, &bounds);
+    const DWORD style =
+        static_cast<DWORD>(::GetWindowLongPtrW(page, GWL_STYLE)) & ~WS_VISIBLE;
+    const DWORD ex_style =
+        static_cast<DWORD>(::GetWindowLongPtrW(page, GWL_EXSTYLE));
+    window_ = ::CreateWindowExW(
+        ex_style, kSettingsHostClass,
+        settings_navigation::LocalText(L"小狼毫设置", L"小狼毫設定",
+                                       L"Weasel settings")
+            .c_str(),
+        style | WS_CLIPCHILDREN, bounds.left, bounds.top,
+        bounds.right - bounds.left, bounds.bottom - bounds.top, owner, nullptr,
+        instance, nullptr);
+    if (window_)
+      settings_navigation::DisableWindowTransitions(window_);
+    return window_ != nullptr;
+  }
+
+  HWND window() const { return window_; }
+
+  void SetActivePage(HWND page) const {
+    ::SetPropW(window_, kSettingsHostActivePage,
+               reinterpret_cast<HANDLE>(page));
+  }
+
+ private:
+  HWND window_ = nullptr;
+};
+
 class SettingsPageInstance {
  public:
   SettingsPageInstance() = default;
@@ -161,14 +260,19 @@ class SettingsPageInstance {
     Reset();
     if (page == settings_navigation::Page::Input) {
       RimeModule* levers = rime_get_api()->find_module("levers");
-      if (!levers)
+      if (!levers) {
+        LOG(ERROR) << "Settings preview could not load the Rime levers module.";
         return false;
+      }
       input_api_ = reinterpret_cast<RimeLeversApi*>(levers->get_api());
-      if (!input_api_)
+      if (!input_api_) {
+        LOG(ERROR) << "Settings preview could not load the Rime levers API.";
         return false;
+      }
       switcher_ = input_api_->switcher_settings_init();
       auto* settings = reinterpret_cast<RimeCustomSettings*>(switcher_);
       if (!switcher_ || !input_api_->load_settings(settings)) {
+        LOG(ERROR) << "Settings preview could not load switcher settings.";
         Reset();
         return false;
       }
@@ -176,12 +280,15 @@ class SettingsPageInstance {
       window_ = input_dialog_->Create(owner);
     } else if (page == settings_navigation::Page::Appearance) {
       RimeModule* levers = rime_get_api()->find_module("levers");
-      if (!levers)
+      if (!levers) {
+        LOG(ERROR) << "Settings preview could not load the Rime levers module.";
         return false;
+      }
       auto* api = reinterpret_cast<RimeLeversApi*>(levers->get_api());
       appearance_settings_ =
           std::make_unique<UIStyleSettings>(weasel::ColorSchemeTarget::Default);
       if (!api || !api->load_settings(appearance_settings_->settings())) {
+        LOG(ERROR) << "Settings preview could not load appearance settings.";
         MSG_BY_IDS(IDS_STR_SCHEME_SAVE_FAILED, IDS_STR_WEASEL,
                    MB_OK | MB_ICONERROR);
         Reset();
@@ -191,7 +298,15 @@ class SettingsPageInstance {
           std::make_unique<UIStyleSettingsDialog>(appearance_settings_.get());
       window_ = appearance_dialog_->Create(owner);
     } else if (page == settings_navigation::Page::Fonts) {
-      font_dialog_ = std::make_unique<FontSettingsDialog>();
+      RimeModule* levers = rime_get_api()->find_module("levers");
+      if (!levers || !levers->get_api()) {
+        LOG(ERROR) << "Font preview could not load the Rime levers module.";
+        return false;
+      }
+      appearance_settings_ =
+          std::make_unique<UIStyleSettings>(weasel::ColorSchemeTarget::Default);
+      font_dialog_ =
+          std::make_unique<FontSettingsDialog>(appearance_settings_.get());
       window_ = font_dialog_->Create(owner);
     } else {
       status_dialog_ = std::make_unique<StatusIconSettingsDialog>();
@@ -199,6 +314,9 @@ class SettingsPageInstance {
     }
 
     if (!window_) {
+      LOG(ERROR) << "Settings page window creation failed for page "
+                 << static_cast<int>(page) << ", error " << ::GetLastError()
+                 << ".";
       Reset();
       return false;
     }
@@ -207,6 +325,81 @@ class SettingsPageInstance {
   }
 
   HWND window() const { return window_; }
+
+  bool EmbedIn(HWND host) {
+    if (!window_ || !host)
+      return false;
+    LONG_PTR style = ::GetWindowLongPtrW(window_, GWL_STYLE);
+    style &= ~(static_cast<LONG_PTR>(WS_POPUP) | WS_CAPTION | WS_SYSMENU |
+               WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX);
+    style |= WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
+    ::SetWindowLongPtrW(window_, GWL_STYLE, style);
+    LONG_PTR ex_style = ::GetWindowLongPtrW(window_, GWL_EXSTYLE);
+    ex_style &= ~(static_cast<LONG_PTR>(WS_EX_APPWINDOW) | WS_EX_DLGMODALFRAME |
+                  WS_EX_WINDOWEDGE);
+    ::SetWindowLongPtrW(window_, GWL_EXSTYLE, ex_style);
+    ::SetLastError(ERROR_SUCCESS);
+    if (!::SetParent(window_, host) && ::GetLastError() != ERROR_SUCCESS)
+      return false;
+    RECT client{};
+    ::GetClientRect(host, &client);
+    ::SetWindowPos(window_, HWND_TOP, 0, 0, client.right, client.bottom,
+                   SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    return true;
+  }
+
+  bool HasUnappliedChanges() const {
+    if (input_dialog_)
+      return input_dialog_->HasUnappliedChanges();
+    if (appearance_dialog_)
+      return appearance_dialog_->HasUnappliedChanges();
+    if (font_dialog_)
+      return font_dialog_->HasUnappliedChanges();
+    return status_dialog_ && status_dialog_->HasUnappliedChanges();
+  }
+
+  bool ApplyChanges() {
+    if (input_dialog_)
+      return input_dialog_->ApplyChanges();
+    if (appearance_dialog_)
+      return appearance_dialog_->ApplyChanges();
+    if (font_dialog_)
+      return font_dialog_->ApplyChanges();
+    return status_dialog_ && status_dialog_->ApplyChanges();
+  }
+
+  bool IsApplying() const {
+    return input_dialog_ && input_dialog_->IsApplying();
+  }
+
+  void SetApplyEnabled(bool enabled) const {
+    WORD id = 0;
+    if (input_dialog_)
+      id = IDOK;
+    else if (appearance_dialog_)
+      id = IDC_APPLY;
+    else if (font_dialog_)
+      id = IDC_FONT_APPLY;
+    else if (status_dialog_)
+      id = IDC_STATUS_APPLY;
+    if (id) {
+      if (HWND button = ::GetDlgItem(window_, id))
+        ::EnableWindow(button, enabled ? TRUE : FALSE);
+    }
+  }
+
+  void RefreshNavigation() const {
+    for (WORD id = settings_navigation::kInput;
+         id <= settings_navigation::kStatusIcons; ++id) {
+      if (HWND item = ::GetDlgItem(window_, id))
+        ::InvalidateRect(item, nullptr, FALSE);
+    }
+  }
+
+  void PrepareClose() {
+    if (input_dialog_)
+      input_dialog_->PrepareClose();
+  }
 
  private:
   void Reset() {
@@ -241,13 +434,44 @@ class SettingsPageInstance {
 
 int Configurator::ConfigureSettings(settings_navigation::Page initial_page) {
   HWND owner = ::GetActiveWindow();
-  auto active = std::make_unique<SettingsPageInstance>();
-  if (!active->Create(initial_page, owner))
+  settings_navigation::ClearUnappliedChanges();
+  SettingsHostWindow host;
+  std::array<std::unique_ptr<SettingsPageInstance>,
+             settings_navigation::kPageCount>
+      pages;
+  auto& initial = pages[settings_navigation::PageIndex(initial_page)];
+  initial = std::make_unique<SettingsPageInstance>();
+  if (!initial->Create(initial_page, owner)) {
+    LOG(ERROR) << "Unable to create the initial settings page.";
     return 1;
+  }
+  SettingsPageInstance* active = initial.get();
+  if (!host.Create(active->window(), owner) ||
+      !active->EmbedIn(host.window())) {
+    LOG(ERROR) << "Unable to create the stable settings window frame.";
+    return 1;
+  }
+  host.SetActivePage(active->window());
 
   ::ShowWindow(active->window(), SW_SHOW);
-  ::UpdateWindow(active->window());
-  ::SetForegroundWindow(active->window());
+  ::ShowWindow(host.window(), SW_SHOW);
+  ::UpdateWindow(host.window());
+  ::SetForegroundWindow(host.window());
+
+  const auto refresh_shared_state = [&pages]() {
+    const bool applying = std::any_of(
+        pages.begin(), pages.end(),
+        [](const auto& page) { return page && page->IsApplying(); });
+    const bool enable_apply =
+        settings_navigation::HasAnyUnappliedChanges() && !applying;
+    for (const auto& page : pages) {
+      if (!page)
+        continue;
+      page->SetApplyEnabled(enable_apply);
+      page->RefreshNavigation();
+    }
+  };
+  refresh_shared_state();
 
   MSG message{};
   bool running = true;
@@ -260,28 +484,89 @@ int Configurator::ConfigureSettings(settings_navigation::Page initial_page) {
     }
 
     if (!message.hwnd &&
+        message.message == settings_navigation::kHostStateChangedMessage) {
+      refresh_shared_state();
+      continue;
+    }
+
+    if (!message.hwnd &&
         message.lParam == reinterpret_cast<LPARAM>(active->window())) {
+      if (message.message == settings_navigation::kHostApplyMessage) {
+        // Apply pages that complete synchronously first.  The input page may
+        // start a background deployment, so it must be the final operation.
+        constexpr std::array<settings_navigation::Page,
+                             settings_navigation::kPageCount>
+            apply_order = {settings_navigation::Page::Appearance,
+                           settings_navigation::Page::Fonts,
+                           settings_navigation::Page::StatusIcons,
+                           settings_navigation::Page::Input};
+        for (const auto page_id : apply_order) {
+          auto& page = pages[settings_navigation::PageIndex(page_id)];
+          if (page && page->HasUnappliedChanges() && !page->ApplyChanges())
+            break;
+        }
+        refresh_shared_state();
+        continue;
+      }
       if (message.message == settings_navigation::kHostCloseMessage) {
-        running = false;
+        const bool has_unapplied =
+            std::any_of(pages.begin(), pages.end(), [](const auto& page) {
+              return page && page->HasUnappliedChanges();
+            });
+        bool close = !has_unapplied;
+        if (has_unapplied) {
+          close =
+              ::MessageBoxW(
+                  host.window(),
+                  settings_navigation::LocalText(
+                      L"一个或多个页面存在尚未应用的设置。是否放弃全部未应用的"
+                      L"更改？",
+                      L"一個或多個頁面存在尚未套用的設定。是否放棄全部未套用的"
+                      L"變更？",
+                      L"One or more pages contain unapplied settings. "
+                      L"Discard all unapplied changes?")
+                      .c_str(),
+                  settings_navigation::LocalText(
+                      L"未应用的设置", L"未套用的設定", L"Unapplied settings")
+                      .c_str(),
+                  MB_YESNO | MB_ICONWARNING | MB_DEFBUTTON2) == IDYES;
+        }
+        if (close) {
+          for (auto& page : pages) {
+            if (page)
+              page->PrepareClose();
+          }
+          running = false;
+        }
         continue;
       }
       if (message.message == settings_navigation::kHostNavigateMessage) {
-        auto replacement = std::make_unique<SettingsPageInstance>();
         const auto page = settings_navigation::PageFromCommand(
             static_cast<WORD>(message.wParam));
-        if (!replacement->Create(page, owner))
+        auto& destination = pages[settings_navigation::PageIndex(page)];
+        if (!destination) {
+          destination = std::make_unique<SettingsPageInstance>();
+          if (!destination->Create(page, owner) ||
+              !destination->EmbedIn(host.window())) {
+            destination.reset();
+            continue;
+          }
+        }
+        if (destination.get() == active)
           continue;
 
-        RECT bounds{};
-        ::GetWindowRect(active->window(), &bounds);
-        ::SetWindowPos(replacement->window(), HWND_TOP, bounds.left, bounds.top,
-                       0, 0, SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        ::SetWindowPos(
+            destination->window(), HWND_TOP, 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
         ::RedrawWindow(
-            replacement->window(), nullptr, nullptr,
+            destination->window(), nullptr, nullptr,
             RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
         ::ShowWindow(active->window(), SW_HIDE);
-        ::SetForegroundWindow(replacement->window());
-        active = std::move(replacement);
+        active = destination.get();
+        host.SetActivePage(active->window());
+        refresh_shared_state();
+        ::SetFocus(
+            ::GetDlgItem(active->window(), static_cast<WORD>(message.wParam)));
         continue;
       }
     }
@@ -295,7 +580,10 @@ int Configurator::ConfigureSettings(settings_navigation::Page initial_page) {
 }
 
 int Configurator::UpdateWorkspace(bool report_errors) {
-  HANDLE hMutex = CreateMutex(NULL, TRUE, L"WeaselDeployerMutex");
+  const bool preview = weasel::IsSettingsPreviewMode();
+  HANDLE hMutex = CreateMutex(
+      NULL, TRUE,
+      preview ? L"WeaselSettingsPreviewDeployMutex" : L"WeaselDeployerMutex");
   if (!hMutex) {
     LOG(ERROR) << "Error creating WeaselDeployerMutex.";
     return 1;
@@ -313,10 +601,12 @@ int Configurator::UpdateWorkspace(bool report_errors) {
     return 1;
   }
 
-  weasel::Client client;
-  if (client.Connect()) {
+  std::unique_ptr<weasel::Client> client;
+  if (!preview)
+    client = std::make_unique<weasel::Client>();
+  if (client && client->Connect()) {
     LOG(INFO) << "Turning WeaselServer into maintenance mode.";
-    client.StartMaintenance();
+    client->StartMaintenance();
   }
 
   bool deployed = false;
@@ -331,9 +621,9 @@ int Configurator::UpdateWorkspace(bool report_errors) {
 
   CloseHandle(hMutex);  // should be closed before resuming service.
 
-  if (client.Connect()) {
+  if (client && client->Connect()) {
     LOG(INFO) << "Resuming service.";
-    client.EndMaintenance();
+    client->EndMaintenance();
   }
   if (!deployed && report_errors) {
     MSG_BY_IDS(IDS_STR_SCHEME_DEPLOY_FAILED, IDS_STR_WEASEL,

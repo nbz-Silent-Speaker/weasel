@@ -17,6 +17,11 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
 
   SwitcherSettingsDialog(RimeSwitcherSettings* settings);
   ~SwitcherSettingsDialog();
+  bool HasUnappliedChanges() const;
+  bool ApplyChanges();
+  bool IsApplying() const { return apply_operation_ != nullptr; }
+  bool ConfirmClose();
+  void PrepareClose();
 
  protected:
   BEGIN_MSG_MAP(SwitcherSettingsDialog)
@@ -84,7 +89,6 @@ class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
   void UpdateDescriptionLayout();
   void ApplyControlRounding();
   void ApplyRoundedRegion(HWND control, int radius_dlu);
-  bool ApplyChanges();
   bool HasSchemaSelectionChanges() const;
   bool HasPendingChanges() const;
   void UpdateApplyButton();

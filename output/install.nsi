@@ -1,4 +1,4 @@
-﻿; weasel installation script
+; weasel installation script
 !include FileFunc.nsh
 !include LogicLib.nsh
 !include MUI2.nsh
@@ -303,6 +303,9 @@ program_files:
   ${Endif}
 
   File "WeaselSetup.exe"
+  ; built-in alternatives for the status icon picker
+  SetOutPath $INSTDIR\icons\status
+  File "..\resource\status-icons\*.ico"
   ; shared data files
   SetOutPath $INSTDIR\data
   ; User overrides are created in the user's profile, never shipped/overwritten.
