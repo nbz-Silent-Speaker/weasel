@@ -299,5 +299,38 @@ if ($status -notmatch 'set_visible_without_redraw' -or
   throw 'Status-icon scope switching must repaint the card without staging child windows.'
 }
 
+$configurator = Get-Content -LiteralPath (
+  Join-Path $root 'WeaselDeployer/Configurator.cpp') -Raw
+if ($configurator -notmatch
+    'message\.message == settings_navigation::kHostApplyMessage[\s\S]{0,420}?' +
+      'std::any_of\(pages\.begin\(\), pages\.end\(\)' -or
+    $configurator -notmatch
+    'apply_order = \{settings_navigation::Page::Appearance,[\s\S]{0,180}?' +
+      'settings_navigation::Page::Fonts,[\s\S]{0,180}?' +
+      'settings_navigation::Page::StatusIcons,[\s\S]{0,180}?' +
+      'settings_navigation::Page::Input\}') {
+  throw 'The shared Apply command must accept every loaded settings page and ' +
+    'apply all persistent pages in the safe order.'
+}
+
+if ($appearance -notmatch
+    'OnThemeMode\([\s\S]{0,720}?SetThemeMode[\s\S]{0,360}?RefreshPreview\(\)') {
+  throw 'Changing the candidate-window theme mode must mark the page pending.'
+}
+
+$fontPath = Join-Path $root 'WeaselDeployer/FontSettingsDialog.cpp'
+$font = Get-Content -LiteralPath $fontPath -Raw
+if ($font -notmatch
+    'draft_\.Save\(\)[\s\S]{0,100}?FontSettings::Load\(\) != draft_') {
+  throw 'Font settings must be read back before Apply reports success.'
+}
+if ($status -notmatch
+    'saved\.Save\(\)[\s\S]{0,320}?StatusIconSettings::Load\(\) != saved' -or
+    $status -notmatch
+    'saved_schema\.Save\(schema\.id\)[\s\S]{0,420}?' +
+      'SchemaStatusIconSettings::Load\(schema\.id\) != saved_schema') {
+  throw 'Status icon settings must be read back before Apply reports success.'
+}
+
 Write-Output ('Settings layout contract verified for: ' +
   (($registeredPages | Sort-Object) -join ', '))

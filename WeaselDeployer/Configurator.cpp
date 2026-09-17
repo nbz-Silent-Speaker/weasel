@@ -490,8 +490,13 @@ int Configurator::ConfigureSettings(settings_navigation::Page initial_page) {
     }
 
     if (!message.hwnd &&
-        message.lParam == reinterpret_cast<LPARAM>(active->window())) {
-      if (message.message == settings_navigation::kHostApplyMessage) {
+        message.message == settings_navigation::kHostApplyMessage) {
+      const bool sender_is_page =
+          std::any_of(pages.begin(), pages.end(), [&message](const auto& page) {
+            return page &&
+                   message.lParam == reinterpret_cast<LPARAM>(page->window());
+          });
+      if (sender_is_page) {
         // Apply pages that complete synchronously first.  The input page may
         // start a background deployment, so it must be the final operation.
         constexpr std::array<settings_navigation::Page,
@@ -506,8 +511,12 @@ int Configurator::ConfigureSettings(settings_navigation::Page initial_page) {
             break;
         }
         refresh_shared_state();
-        continue;
       }
+      continue;
+    }
+
+    if (!message.hwnd &&
+        message.lParam == reinterpret_cast<LPARAM>(active->window())) {
       if (message.message == settings_navigation::kHostCloseMessage) {
         const bool has_unapplied =
             std::any_of(pages.begin(), pages.end(), [](const auto& page) {

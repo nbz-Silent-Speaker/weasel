@@ -460,7 +460,9 @@ LRESULT UIStyleSettingsDialog::OnThemeMode(WORD notification,
   const bool single =
       selected != static_cast<int>(weasel::AppearanceThemeMode::FollowSystem);
   single_.fill(single);
+  InvalidatePreviewCache();
   ShowEditor(single);
+  RefreshPreview();
   return 0;
 }
 

@@ -1665,6 +1665,12 @@ bool StatusIconSettingsDialog::Persist(std::wstring* error) {
                        L"Could not save the status icon settings.");
     return false;
   }
+  if (weasel::StatusIconSettings::Load() != saved) {
+    *error = LocalText(L"无法验证已保存的状态图标设置。",
+                       L"無法驗證已儲存的狀態圖示設定。",
+                       L"Could not verify the saved status icon settings.");
+    return false;
+  }
   for (auto& schema : schemas_) {
     weasel::SchemaStatusIconSettings saved_schema = schema.draft;
     const struct {
@@ -1687,6 +1693,13 @@ bool StatusIconSettingsDialog::Persist(std::wstring* error) {
       *error = LocalText(L"无法保存输入方案专属图标设置。",
                          L"無法儲存輸入方案專屬圖示設定。",
                          L"Could not save the scheme-specific icon settings.");
+      return false;
+    }
+    if (weasel::SchemaStatusIconSettings::Load(schema.id) != saved_schema) {
+      *error = LocalText(L"无法验证已保存的输入方案专属图标设置。",
+                         L"無法驗證已儲存的輸入方案專屬圖示設定。",
+                         L"Could not verify the saved scheme-specific icon "
+                         L"settings.");
       return false;
     }
     schema.draft = saved_schema;

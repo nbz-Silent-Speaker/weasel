@@ -1350,7 +1350,8 @@ LRESULT FontSettingsDialog::OnRestore(WORD, WORD, HWND, BOOL&) {
 }
 
 bool FontSettingsDialog::ApplyChanges() {
-  if (draft_.Save() != ERROR_SUCCESS) {
+  if (draft_.Save() != ERROR_SUCCESS ||
+      weasel::FontSettings::Load() != draft_) {
     ::MessageBoxW(m_hWnd,
                   LocalText(L"无法保存字体设置。", L"無法儲存字型設定。",
                             L"Could not save font settings.")
