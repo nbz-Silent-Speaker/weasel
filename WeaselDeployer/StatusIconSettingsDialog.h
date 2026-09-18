@@ -4,6 +4,7 @@
 #include "SettingsNavigation.h"
 
 #include <WeaselUserSettings.h>
+#include <WeaselInputMethodIcon.h>
 
 #include <array>
 #include <string>
@@ -29,6 +30,8 @@ class StatusIconSettingsDialog
   COMMAND_ID_HANDLER(IDC_STATUS_CHINESE_CHANGE, OnChooseIcon)
   COMMAND_ID_HANDLER(IDC_STATUS_ENGLISH_CHANGE, OnChooseIcon)
   COMMAND_ID_HANDLER(IDC_STATUS_CHINESE_CAPS_CHANGE, OnChooseIcon)
+  COMMAND_ID_HANDLER(IDC_INPUT_METHOD_CHANGE, OnChooseInputMethodIcon)
+  COMMAND_ID_HANDLER(IDC_INPUT_METHOD_RESTORE, OnRestoreInputMethodIcon)
   COMMAND_RANGE_HANDLER(IDC_STATUS_CAPS_AUTOMATIC,
                         IDC_STATUS_CAPS_CUSTOM,
                         OnScopeChanged)
@@ -68,6 +71,8 @@ class StatusIconSettingsDialog
   LRESULT OnStaticColor(UINT, WPARAM, LPARAM, BOOL&);
   LRESULT OnButtonColor(UINT, WPARAM, LPARAM, BOOL&);
   LRESULT OnChooseIcon(WORD, WORD id, HWND, BOOL&);
+  LRESULT OnChooseInputMethodIcon(WORD, WORD, HWND, BOOL&);
+  LRESULT OnRestoreInputMethodIcon(WORD, WORD, HWND, BOOL&);
   LRESULT OnScopeChanged(WORD, WORD id, HWND, BOOL&);
   LRESULT OnSchemaChanged(WORD, WORD, HWND, BOOL&);
   LRESULT OnUseGlobal(WORD, WORD id, HWND, BOOL&);
@@ -104,12 +109,14 @@ class StatusIconSettingsDialog
 
   weasel::StatusIconSettings initial_;
   weasel::StatusIconSettings draft_;
+  weasel::InputMethodIconSettings initial_input_method_;
+  weasel::InputMethodIconSettings draft_input_method_;
   std::vector<SchemaEntry> schemas_;
   EditScope edit_scope_ = EditScope::Global;
   PreviewMode preview_mode_ = PreviewMode::Chinese;
   bool preview_dark_ = false;
   ULONG_PTR graphics_token_ = 0;
-  std::array<HICON, 4> preview_icons_{};
+  std::array<HICON, 5> preview_icons_{};
   CComboBox schema_combo_;
   CFont heading_font_;
 };

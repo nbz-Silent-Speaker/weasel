@@ -193,6 +193,8 @@
     <ClInclude Include="FontSettingsDialog.h" />
     <ClInclude Include="SwitcherSettingsDialog.h" />
     <ClInclude Include="StatusIconSettingsDialog.h" />
+    <ClInclude Include="InputMethodIcon.h" />
+    <ClInclude Include="..\include\WeaselInputMethodIcon.h" />
     <ClInclude Include="WanxiangModelManager.h" />
     <ClInclude Include="WanxiangSchemeManager.h" />
     <ClInclude Include="WanxiangUpdateManager.h" />

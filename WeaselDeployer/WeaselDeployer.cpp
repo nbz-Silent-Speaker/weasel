@@ -8,6 +8,7 @@
 #include "Configurator.h"
 #include "WanxiangModelManager.h"
 #include "WanxiangUpdateManager.h"
+#include "InputMethodIcon.h"
 #include <ShellScalingApi.h>
 
 #pragma comment(lib, "Shcore.lib")
@@ -21,6 +22,26 @@ int APIENTRY _tWinMain(HINSTANCE hInstance,
                        LPTSTR lpCmdLine,
                        int nCmdShow) {
   UNREFERENCED_PARAMETER(hPrevInstance);
+
+  // The elevated branding writer is independent of the running settings UI:
+  // no deployer mutex, Rime initialization, user-profile writes or windows.
+  int argument_count = 0;
+  LPWSTR* arguments =
+      ::CommandLineToArgvW(::GetCommandLineW(), &argument_count);
+  if (arguments && argument_count >= 2 &&
+      !wcscmp(arguments[1], L"/input-method-icon")) {
+    DWORD result = ERROR_INVALID_PARAMETER;
+    try {
+      if (argument_count == 3)
+        result = input_method_icon::ApplyElevated(arguments[2]);
+    } catch (const std::exception&) {
+      result = ERROR_GEN_FAILURE;
+    }
+    ::LocalFree(arguments);
+    return static_cast<int>(result);
+  }
+  if (arguments)
+    ::LocalFree(arguments);
 
   // Establish DPI awareness before any window, font, or dialog resource is
   // created.  The project setting alone did not emit a manifest resource in

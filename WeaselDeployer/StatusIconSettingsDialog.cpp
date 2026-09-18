@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "StatusIconSettingsDialog.h"
+#include "InputMethodIcon.h"
 
 #include <WeaselUtility.h>
 #include <rime_api.h>
@@ -283,13 +284,17 @@ std::filesystem::path StoreIconInLibrary(const std::filesystem::path& source,
   return destination;
 }
 
-bool BrowseIconFile(HWND owner, std::filesystem::path* path) {
+bool BrowseIconFile(HWND owner,
+                    std::filesystem::path* path,
+                    bool ico_only = false) {
   wchar_t file[32768]{};
   const std::wstring initial = WeaselUserDataPath().wstring();
   OPENFILENAMEW dialog{};
   dialog.lStructSize = sizeof(dialog);
   dialog.hwndOwner = owner;
-  dialog.lpstrFilter = L"PNG / ICO\0*.png;*.ico\0PNG\0*.png\0ICO\0*.ico\0";
+  dialog.lpstrFilter =
+      ico_only ? L"ICO\0*.ico\0"
+               : L"PNG / ICO\0*.png;*.ico\0PNG\0*.png\0ICO\0*.ico\0";
   dialog.lpstrFile = file;
   dialog.nMaxFile = static_cast<DWORD>(std::size(file));
   dialog.lpstrInitialDir = initial.c_str();
@@ -752,6 +757,13 @@ HWND CreateStatusControl(HWND dialog,
 }
 
 void EnsureStatusControls(HWND dialog) {
+  CreateStatusControl(dialog, L"BUTTON", BS_OWNERDRAW, IDC_INPUT_METHOD_CARD);
+  for (UINT id : {IDC_INPUT_METHOD_TITLE, IDC_INPUT_METHOD_HINT})
+    CreateStatusControl(dialog, L"STATIC", SS_LEFT, id);
+  CreateStatusControl(dialog, L"STATIC", SS_ICON | SS_CENTERIMAGE,
+                      IDC_INPUT_METHOD_ICON);
+  for (UINT id : {IDC_INPUT_METHOD_CHANGE, IDC_INPUT_METHOD_RESTORE})
+    CreateStatusControl(dialog, L"BUTTON", BS_PUSHBUTTON | WS_TABSTOP, id);
   if (!::GetDlgItem(dialog, IDC_STATUS_SCHEMA_COMBO)) {
     CreateStatusControl(dialog, WC_COMBOBOXW,
                         CBS_DROPDOWNLIST | CBS_OWNERDRAWVARIABLE |
@@ -780,7 +792,7 @@ void LayoutStatusIconPage(HWND dialog) {
               settings_navigation::kButtonHeightDlu);
   MoveControl(dialog, IDC_STATUS_BASE_CARD, settings_navigation::kPageInsetDlu,
               settings_navigation::kFirstCardTopDlu,
-              settings_navigation::kPageBodyWidthDlu, 148);
+              settings_navigation::kPageBodyWidthDlu, 110);
   MoveControl(dialog, IDC_STATUS_BASE_TITLE, 26, 22, 210, 12);
   MoveControl(dialog, IDC_STATUS_CAPS_AUTOMATIC, 512 - kToggleWidthDlu * 2, 21,
               kToggleWidthDlu, settings_navigation::kCompactToggleHeightDlu);
@@ -801,7 +813,7 @@ void LayoutStatusIconPage(HWND dialog) {
                                         IDC_STATUS_ASCII_INHERIT,
                                         IDC_STATUS_CAPS_INHERIT};
   for (size_t index = 0; index < labels.size(); ++index) {
-    const int top = 70 + static_cast<int>(index) * 26;
+    const int top = 59 + static_cast<int>(index) * 20;
     MoveControl(dialog, labels[index], 28, top + 5, 160, 12);
     MoveControl(dialog, inherits[index], 310, top + 1, 76,
                 settings_navigation::kButtonHeightDlu);
@@ -809,6 +821,16 @@ void LayoutStatusIconPage(HWND dialog) {
     MoveControl(dialog, changes[index], 432, top + 1, 80,
                 settings_navigation::kButtonHeightDlu);
   }
+
+  MoveControl(dialog, IDC_INPUT_METHOD_CARD, settings_navigation::kPageInsetDlu,
+              130, settings_navigation::kPageBodyWidthDlu, 34);
+  MoveControl(dialog, IDC_INPUT_METHOD_TITLE, 26, 134, 220, 12);
+  MoveControl(dialog, IDC_INPUT_METHOD_HINT, 28, 149, 275, 10);
+  MoveControl(dialog, IDC_INPUT_METHOD_RESTORE, 310, 138, 76,
+              settings_navigation::kButtonHeightDlu);
+  MoveControl(dialog, IDC_INPUT_METHOD_ICON, 396, 137, 20, 20);
+  MoveControl(dialog, IDC_INPUT_METHOD_CHANGE, 432, 138, 80,
+              settings_navigation::kButtonHeightDlu);
 
   MoveControl(dialog, IDC_STATUS_TASKBAR_CARD,
               settings_navigation::kPageInsetDlu, 170,
@@ -866,7 +888,7 @@ RECT TaskbarPreviewIconBounds(HWND dialog, HWND card) {
                          system_icon_size * 2 - system_icon_gap -
                          input_group_gap;
   constexpr int kRepaintMargin = 2;
-  return {icon_right - icon_size - kRepaintMargin,
+  return {icon_right - icon_size * 2 - input_group_gap - kRepaintMargin,
           center_y - icon_size / 2 - kRepaintMargin,
           icon_right + kRepaintMargin,
           center_y + (icon_size + 1) / 2 + kRepaintMargin};
@@ -907,6 +929,8 @@ LRESULT StatusIconSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   }
   initial_ = weasel::StatusIconSettings::Load();
   draft_ = initial_;
+  initial_input_method_ = weasel::InputMethodIconSettings::Load();
+  draft_input_method_ = initial_input_method_;
   const auto user_settings = weasel::UserSettings::Load();
   preview_dark_ = weasel::ResolveAppearanceDarkMode(
       user_settings.appearance_theme_mode, IsUserDarkMode() != FALSE);
@@ -917,18 +941,21 @@ LRESULT StatusIconSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   ::GetObjectW(GetFont(), sizeof(title), &title);
   title.lfWeight = FW_SEMIBOLD;
   if (heading_font_.CreateFontIndirect(&title)) {
-    for (UINT id : {IDC_STATUS_BASE_TITLE, IDC_STATUS_TASKBAR_TITLE}) {
+    for (UINT id : {IDC_STATUS_BASE_TITLE, IDC_STATUS_TASKBAR_TITLE,
+                    IDC_INPUT_METHOD_TITLE}) {
       CWindow(GetDlgItem(id)).SetFont(heading_font_);
     }
   }
 
   Localize();
-  for (UINT id : {IDC_STATUS_BASE_CARD, IDC_STATUS_TASKBAR_CARD})
+  for (UINT id :
+       {IDC_STATUS_BASE_CARD, IDC_STATUS_TASKBAR_CARD, IDC_INPUT_METHOD_CARD})
     settings_navigation::PrepareCard(m_hWnd, id);
   for (UINT id : {IDC_STATUS_RESTORE, IDC_STATUS_CHINESE_CHANGE,
                   IDC_STATUS_ENGLISH_CHANGE, IDC_STATUS_CHINESE_CAPS_CHANGE,
                   IDC_STATUS_CHINESE_INHERIT, IDC_STATUS_ASCII_INHERIT,
-                  IDC_STATUS_CAPS_INHERIT})
+                  IDC_STATUS_CAPS_INHERIT, IDC_INPUT_METHOD_CHANGE,
+                  IDC_INPUT_METHOD_RESTORE})
     settings_navigation::StyleActionButton(m_hWnd, id);
   settings_navigation::StyleCombo(m_hWnd, IDC_STATUS_SCHEMA_COMBO);
   settings_navigation::StyleSegmentedToggle(
@@ -1019,6 +1046,7 @@ LRESULT StatusIconSettingsDialog::OnDrawItem(UINT,
     return TRUE;
   }
   if (draw->CtlID == IDC_STATUS_BASE_CARD ||
+      draw->CtlID == IDC_INPUT_METHOD_CARD ||
       draw->CtlID == IDC_STATUS_CAPS_CARD) {
     settings_navigation::DrawCard(*draw);
     return TRUE;
@@ -1032,7 +1060,9 @@ LRESULT StatusIconSettingsDialog::OnStaticColor(UINT,
                                                 LPARAM window,
                                                 BOOL& handled) {
   const int id = ::GetDlgCtrlID(reinterpret_cast<HWND>(window));
-  if (id < IDC_STATUS_BASE_TITLE || id > IDC_STATUS_TASKBAR_TITLE) {
+  if ((id < IDC_STATUS_BASE_TITLE || id > IDC_STATUS_TASKBAR_TITLE) &&
+      id != IDC_INPUT_METHOD_TITLE && id != IDC_INPUT_METHOD_HINT &&
+      id != IDC_INPUT_METHOD_ICON) {
     handled = FALSE;
     return 0;
   }
@@ -1048,7 +1078,8 @@ LRESULT StatusIconSettingsDialog::OnButtonColor(UINT,
   const int id = ::GetDlgCtrlID(reinterpret_cast<HWND>(window));
   if ((id < IDC_STATUS_CHINESE_CHANGE ||
        id > IDC_STATUS_PREVIEW_ENGLISH_CAPS) &&
-      id != IDC_STATUS_PREVIEW_LIGHT && id != IDC_STATUS_PREVIEW_DARK) {
+      id != IDC_STATUS_PREVIEW_LIGHT && id != IDC_STATUS_PREVIEW_DARK &&
+      id != IDC_INPUT_METHOD_CHANGE && id != IDC_INPUT_METHOD_RESTORE) {
     handled = FALSE;
     return 0;
   }
@@ -1156,6 +1187,12 @@ void StatusIconSettingsDialog::DrawTaskbarPreview(const DRAWITEMSTRUCT& draw) {
                     &foreground);
   canvas.Flush(FlushIntentionSync);
   right -= system_icon_size + input_group_gap;
+  if (preview_icons_[4]) {
+    ::DrawIconEx(draw.hDC, right - icon_size, center_y - icon_size / 2,
+                 preview_icons_[4], icon_size, icon_size, 0, nullptr,
+                 DI_NORMAL);
+  }
+  right -= icon_size + input_group_gap;
   if (preview_icons_[3]) {
     ::DrawIconEx(draw.hDC, right - icon_size, center_y - icon_size / 2,
                  preview_icons_[3], icon_size, icon_size, 0, nullptr,
@@ -1171,6 +1208,16 @@ void StatusIconSettingsDialog::Localize() {
                                      L"Weasel - Status icons")
                                .c_str());
   const std::pair<UINT, std::wstring> labels[] = {
+      {IDC_INPUT_METHOD_TITLE,
+       LocalText(L"输入法标识图标", L"輸入法識別圖示", L"Input method icon")},
+      {IDC_INPUT_METHOD_HINT,
+       LocalText(L"所有用户共用 · 应用需要管理员权限",
+                 L"所有使用者共用 · 套用需要管理員權限",
+                 L"Shared by all users · Administrator permission required")},
+      {IDC_INPUT_METHOD_CHANGE,
+       LocalText(L"更换图标…", L"更換圖示…", L"Choose icon…")},
+      {IDC_INPUT_METHOD_RESTORE,
+       LocalText(L"恢复默认", L"還原預設", L"Restore default")},
       {IDC_STATUS_TITLE, LocalText(L"状态图标", L"狀態圖示", L"Status icons")},
       {IDC_STATUS_RESTORE,
        LocalText(L"恢复全局默认", L"還原全域預設", L"Restore global defaults")},
@@ -1439,6 +1486,8 @@ void StatusIconSettingsDialog::SetPreviewIcon(UINT control, HICON icon) {
         return 1;
       case IDC_STATUS_CHINESE_CAPS_ICON:
         return 2;
+      case IDC_INPUT_METHOD_ICON:
+        return 4;
       default:
         return 3;
     }
@@ -1450,6 +1499,12 @@ void StatusIconSettingsDialog::SetPreviewIcon(UINT control, HICON icon) {
 }
 
 void StatusIconSettingsDialog::RefreshPreviews() {
+  HICON identity = LoadIconFile(draft_input_method_.source);
+  if (!identity)
+    identity = reinterpret_cast<HICON>(::LoadImageW(
+        ::GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_INPUT_METHOD),
+        IMAGE_ICON, 32, 32, 0));
+  SetPreviewIcon(IDC_INPUT_METHOD_ICON, identity);
   SetPreviewIcon(IDC_STATUS_CHINESE_ICON, ResolveActiveIcon(0));
   SetPreviewIcon(IDC_STATUS_ENGLISH_ICON, ResolveActiveIcon(1));
   SetPreviewIcon(IDC_STATUS_CHINESE_CAPS_ICON, ResolveActiveIcon(2));
@@ -1474,7 +1529,7 @@ void StatusIconSettingsDialog::RefreshPreviews() {
 }
 
 void StatusIconSettingsDialog::RefreshApplyState() {
-  const bool pending = draft_ != initial_ || HasSchemaChanges();
+  const bool pending = HasUnappliedChanges();
   settings_navigation::SetUnappliedChanges(
       m_hWnd, settings_navigation::Page::StatusIcons, pending);
   CWindow(GetDlgItem(IDC_STATUS_APPLY))
@@ -1491,8 +1546,14 @@ bool StatusIconSettingsDialog::ChooseIconFile(std::wstring* path,
                                               bool caps,
                                               bool inherit_global) {
   std::vector<std::wstring> protected_paths = {
-      draft_.chinese,   draft_.english,   draft_.caps,
-      initial_.chinese, initial_.english, initial_.caps,
+      draft_.chinese,
+      draft_.english,
+      draft_.caps,
+      initial_.chinese,
+      initial_.english,
+      initial_.caps,
+      draft_input_method_.source,
+      initial_input_method_.source,
   };
   for (const auto& schema : schemas_) {
     for (const auto* settings : {&schema.initial, &schema.draft}) {
@@ -1551,6 +1612,41 @@ LRESULT StatusIconSettingsDialog::OnScopeChanged(WORD, WORD id, HWND, BOOL&) {
   if (edit_scope_ == EditScope::Schema && schemas_.empty())
     edit_scope_ = EditScope::Global;
   RefreshScope();
+  return 0;
+}
+
+LRESULT StatusIconSettingsDialog::OnChooseInputMethodIcon(WORD,
+                                                          WORD,
+                                                          HWND,
+                                                          BOOL&) {
+  std::filesystem::path file;
+  if (!BrowseIconFile(m_hWnd, &file, true))
+    return 0;
+  if (!input_method_icon::Validate(input_method_icon::Read(file))) {
+    ::MessageBoxW(
+        m_hWnd,
+        LocalText(L"请选择有效的 ICO 图标文件。",
+                  L"請選擇有效的 ICO 圖示檔案。",
+                  L"Choose a valid ICO icon file.")
+            .c_str(),
+        LocalText(L"无法使用该图标", L"無法使用此圖示", L"Invalid icon")
+            .c_str(),
+        MB_OK | MB_ICONERROR);
+    return 0;
+  }
+  draft_input_method_.source = file.wstring();
+  RefreshPreviews();
+  RefreshApplyState();
+  return 0;
+}
+
+LRESULT StatusIconSettingsDialog::OnRestoreInputMethodIcon(WORD,
+                                                           WORD,
+                                                           HWND,
+                                                           BOOL&) {
+  draft_input_method_ = {};
+  RefreshPreviews();
+  RefreshApplyState();
   return 0;
 }
 
@@ -1613,6 +1709,24 @@ std::wstring StatusIconSettingsDialog::ImportIcon(const std::wstring& source,
 }
 
 bool StatusIconSettingsDialog::Persist(std::wstring* error) {
+  if (draft_input_method_ != initial_input_method_) {
+    const DWORD result =
+        input_method_icon::Apply(m_hWnd, draft_input_method_.source);
+    if (result != ERROR_SUCCESS) {
+      *error = result == ERROR_CANCELLED
+                   ? LocalText(
+                         L"未授权更换输入法标识图标，设置尚未应用。",
+                         L"未授權更換輸入法識別圖示，設定尚未套用。",
+                         L"Permission was cancelled. The icon was not applied.")
+                   : LocalText(L"无法更新输入法标识图标：\n",
+                               L"無法更新輸入法識別圖示：\n",
+                               L"Could not update the input method icon:\n") +
+                         input_method_icon::SystemError(result);
+      return false;
+    }
+    initial_input_method_ = weasel::InputMethodIconSettings::Load();
+    draft_input_method_ = initial_input_method_;
+  }
   weasel::StatusIconSettings saved = draft_;
   const struct {
     const std::wstring* source;
@@ -1687,6 +1801,7 @@ bool StatusIconSettingsDialog::ApplyChanges() {
     return false;
   }
   RefreshApplyState();
+  RefreshPreviews();
   return true;
 }
 
@@ -1713,7 +1828,8 @@ bool StatusIconSettingsDialog::ConfirmDiscard() {
 }
 
 bool StatusIconSettingsDialog::HasUnappliedChanges() const {
-  return draft_ != initial_ || HasSchemaChanges();
+  return draft_ != initial_ || HasSchemaChanges() ||
+         draft_input_method_ != initial_input_method_;
 }
 
 bool StatusIconSettingsDialog::ConfirmClose() {

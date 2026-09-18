@@ -2,6 +2,7 @@
 #include "Register.h"
 #include <strsafe.h>
 #include <WeaselUtility.h>
+#include <WeaselInputMethodIcon.h>
 
 #define CLSID_STRLEN 38  // strlen("{xxxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxx}")
 
@@ -72,12 +73,17 @@ BOOL RegisterProfiles() {
   WCHAR achIconFile[MAX_PATH];
   ULONG cchIconFile =
       GetModuleFileNameW(g_hInst, achIconFile, ARRAYSIZE(achIconFile));
+  const auto custom_icon = weasel::RegisteredInputMethodIconModule();
+  const std::wstring icon_file = custom_icon.empty()
+                                     ? std::wstring(achIconFile, cchIconFile)
+                                     : custom_icon;
 
   const auto register_profile = [&](LANGID langId, HKL hkl, BOOL enable) {
     return pInputProcessorProfileMgr->RegisterProfile(
         c_clsidTextService, langId, c_guidProfile, text_service_desc_str,
-        text_service_desc_len, achIconFile, cchIconFile, TEXTSERVICE_ICON_INDEX,
-        hkl, 0, enable, 0);
+        text_service_desc_len, icon_file.c_str(),
+        static_cast<ULONG>(icon_file.size()), TEXTSERVICE_ICON_INDEX, hkl, 0,
+        enable, 0);
   };
 
   const auto hkl_hans = FindIME(TEXTSERVICE_LANGID_HANS);

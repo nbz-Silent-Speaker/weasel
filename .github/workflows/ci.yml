@@ -87,6 +87,11 @@ jobs:
         shell: pwsh
         run: .\WeaselDeployer\tests\RunModelTransactionTests.ps1
 
+      - name: Test input method icon resources and profile rollback
+        if: matrix.variant == 'msbuild'
+        shell: pwsh
+        run: .\WeaselDeployer\tests\RunInputMethodIconTests.ps1
+
       # bundled winsparkle v0.9.2 to disable auto open ReleaseNoteUrl in default browser
       - name: cache bundled winsparkle
         id: cache-winsparkle
