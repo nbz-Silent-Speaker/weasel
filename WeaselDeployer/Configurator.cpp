@@ -6,6 +6,7 @@
 #include "StatusIconSettingsDialog.h"
 #include "UIStyleSettings.h"
 #include "UIStyleSettingsDialog.h"
+#include "SettingsPerformance.h"
 #include "DictManagementDialog.h"
 #include <WeaselConstants.h>
 #include <WeaselIPC.h>
@@ -133,11 +134,7 @@ int Configurator::ConfigureColorScheme(weasel::ColorSchemeTarget target) {
   if (!api)
     return 1;
   UIStyleSettings settings(target);
-  if (!api->load_settings(settings.settings())) {
-    MSG_BY_IDS(IDS_STR_SCHEME_SAVE_FAILED, IDS_STR_WEASEL,
-               MB_OK | MB_ICONERROR);
-    return 1;
-  }
+  // The dialog loads the appearance snapshot once during initialization.
   UIStyleSettingsDialog dialog(&settings);
   dialog.DoModal();
   return 0;
@@ -155,6 +152,42 @@ namespace {
 inline constexpr wchar_t kSettingsHostClass[] = L"Weasel.SettingsWindow";
 inline constexpr wchar_t kSettingsHostActivePage[] =
     L"Weasel.SettingsActivePage";
+
+HMONITOR SelectSettingsMonitor(HWND owner) {
+  if (owner && ::IsWindow(owner))
+    return ::MonitorFromWindow(owner, MONITOR_DEFAULTTONEAREST);
+
+  // The deployer is normally started by the tray process, so it has no active
+  // window of its own.  The pointer is still over the tray menu when the
+  // command is invoked and therefore identifies the display where the user
+  // expects the settings window to open.
+  POINT cursor{};
+  if (::GetCursorPos(&cursor))
+    return ::MonitorFromPoint(cursor, MONITOR_DEFAULTTONEAREST);
+
+  if (const HWND foreground = ::GetForegroundWindow())
+    return ::MonitorFromWindow(foreground, MONITOR_DEFAULTTONEAREST);
+  return ::MonitorFromPoint({}, MONITOR_DEFAULTTOPRIMARY);
+}
+
+RECT CenteredWindowBounds(HMONITOR monitor, int width, int height) {
+  MONITORINFO info{sizeof(info)};
+  RECT work_area{};
+  if (monitor && ::GetMonitorInfoW(monitor, &info)) {
+    work_area = info.rcWork;
+  } else {
+    ::SystemParametersInfoW(SPI_GETWORKAREA, 0, &work_area, 0);
+  }
+
+  const int work_width = work_area.right - work_area.left;
+  const int work_height = work_area.bottom - work_area.top;
+  const int left = work_area.left + (work_width - width) / 2;
+  const int top = work_area.top + (work_height - height) / 2;
+  const int clamped_left = left < work_area.left ? work_area.left : left;
+  const int clamped_top = top < work_area.top ? work_area.top : top;
+  return {clamped_left, clamped_top, clamped_left + width,
+          clamped_top + height};
+}
 
 LRESULT CALLBACK SettingsHostProc(HWND window,
                                   UINT message,
@@ -203,7 +236,7 @@ class SettingsHostWindow {
       ::DestroyWindow(window_);
   }
 
-  bool Create(HWND page, HWND owner) {
+  bool Create(HWND owner, HMONITOR monitor) {
     const HINSTANCE instance = ::GetModuleHandleW(nullptr);
     WNDCLASSEXW existing{sizeof(existing)};
     if (!::GetClassInfoExW(instance, kSettingsHostClass, &existing)) {
@@ -219,26 +252,67 @@ class SettingsHostWindow {
       }
     }
 
-    RECT bounds{};
-    ::GetWindowRect(page, &bounds);
-    const DWORD style =
-        static_cast<DWORD>(::GetWindowLongPtrW(page, GWL_STYLE)) & ~WS_VISIBLE;
-    const DWORD ex_style =
-        static_cast<DWORD>(::GetWindowLongPtrW(page, GWL_EXSTYLE));
-    window_ = ::CreateWindowExW(
-        ex_style, kSettingsHostClass,
-        settings_navigation::LocalText(L"小狼毫设置", L"小狼毫設定",
-                                       L"Weasel settings")
-            .c_str(),
-        style | WS_CLIPCHILDREN, bounds.left, bounds.top,
-        bounds.right - bounds.left, bounds.bottom - bounds.top, owner, nullptr,
-        instance, nullptr);
+    constexpr DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME |
+                            WS_MINIMIZEBOX | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
+    constexpr DWORD extended_style = WS_EX_WINDOWEDGE | WS_EX_CONTROLPARENT;
+    const RECT initial = CenteredWindowBounds(monitor, 1, 1);
+    window_ =
+        ::CreateWindowExW(extended_style, kSettingsHostClass,
+                          settings_navigation::LocalText(
+                              L"小狼毫设置", L"小狼毫設定", L"Weasel settings")
+                              .c_str(),
+                          style, initial.left, initial.top, 1, 1, owner,
+                          nullptr, instance, nullptr);
     if (window_)
       settings_navigation::DisableWindowTransitions(window_);
     return window_ != nullptr;
   }
 
   HWND window() const { return window_; }
+
+  bool SizeForPage(HWND page, HMONITOR monitor) const {
+    RECT page_bounds{};
+    if (!window_ || !page || !::GetWindowRect(page, &page_bounds))
+      return false;
+    RECT host_bounds{0, 0, page_bounds.right - page_bounds.left,
+                     page_bounds.bottom - page_bounds.top};
+    const DWORD style =
+        static_cast<DWORD>(::GetWindowLongPtrW(window_, GWL_STYLE));
+    const DWORD extended_style =
+        static_cast<DWORD>(::GetWindowLongPtrW(window_, GWL_EXSTYLE));
+    using GetDpiForWindowFn = UINT(WINAPI*)(HWND);
+    using AdjustWindowRectExForDpiFn =
+        BOOL(WINAPI*)(LPRECT, DWORD, BOOL, DWORD, UINT);
+    const HMODULE user32 = ::GetModuleHandleW(L"user32.dll");
+    const auto get_dpi = reinterpret_cast<GetDpiForWindowFn>(
+        ::GetProcAddress(user32, "GetDpiForWindow"));
+    const auto adjust_for_dpi = reinterpret_cast<AdjustWindowRectExForDpiFn>(
+        ::GetProcAddress(user32, "AdjustWindowRectExForDpi"));
+    const BOOL adjusted =
+        adjust_for_dpi && get_dpi
+            ? adjust_for_dpi(&host_bounds, style, FALSE, extended_style,
+                             get_dpi(window_))
+            : ::AdjustWindowRectEx(&host_bounds, style, FALSE, extended_style);
+    if (!adjusted) {
+      return false;
+    }
+    const int width = host_bounds.right - host_bounds.left;
+    const int height = host_bounds.bottom - host_bounds.top;
+    const RECT centered = CenteredWindowBounds(monitor, width, height);
+    return ::SetWindowPos(window_, nullptr, centered.left, centered.top, width,
+                          height, SWP_NOZORDER | SWP_NOACTIVATE) != FALSE;
+  }
+
+  bool ShowCentered(HMONITOR monitor) const {
+    RECT bounds{};
+    if (!window_ || !::GetWindowRect(window_, &bounds))
+      return false;
+    const RECT centered = CenteredWindowBounds(
+        monitor, bounds.right - bounds.left, bounds.bottom - bounds.top);
+    return ::SetWindowPos(window_, HWND_TOP, centered.left, centered.top, 0, 0,
+                          SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW) !=
+           FALSE;
+  }
 
   void SetActivePage(HWND page) const {
     ::SetPropW(window_, kSettingsHostActivePage,
@@ -257,6 +331,7 @@ class SettingsPageInstance {
   ~SettingsPageInstance() { Reset(); }
 
   bool Create(settings_navigation::Page page, HWND owner) {
+    settings_navigation::HostedPageCreationScope hosted_page_creation;
     Reset();
     if (page == settings_navigation::Page::Input) {
       const ULONGLONG started = ::GetTickCount64();
@@ -285,7 +360,7 @@ class SettingsPageInstance {
       LOG(INFO) << "Input switcher settings loaded after "
                 << (::GetTickCount64() - started) << " ms.";
       input_dialog_ = std::make_unique<SwitcherSettingsDialog>(switcher_);
-      window_ = input_dialog_->Create(owner);
+      window_ = input_dialog_->CreateHosted(owner);
       LOG(INFO) << "Input settings window created after "
                 << (::GetTickCount64() - started) << " ms.";
     } else if (page == settings_navigation::Page::Appearance) {
@@ -295,18 +370,18 @@ class SettingsPageInstance {
         return false;
       }
       auto* api = reinterpret_cast<RimeLeversApi*>(levers->get_api());
-      appearance_settings_ =
-          std::make_unique<UIStyleSettings>(weasel::ColorSchemeTarget::Default);
-      if (!api || !api->load_settings(appearance_settings_->settings())) {
+      if (!api) {
         LOG(ERROR) << "Settings preview could not load appearance settings.";
         MSG_BY_IDS(IDS_STR_SCHEME_SAVE_FAILED, IDS_STR_WEASEL,
                    MB_OK | MB_ICONERROR);
         Reset();
         return false;
       }
+      appearance_settings_ =
+          std::make_unique<UIStyleSettings>(weasel::ColorSchemeTarget::Default);
       appearance_dialog_ =
           std::make_unique<UIStyleSettingsDialog>(appearance_settings_.get());
-      window_ = appearance_dialog_->Create(owner);
+      window_ = appearance_dialog_->CreateHosted(owner);
     } else if (page == settings_navigation::Page::Fonts) {
       RimeModule* levers = rime_get_api()->find_module("levers");
       if (!levers || !levers->get_api()) {
@@ -317,10 +392,10 @@ class SettingsPageInstance {
           std::make_unique<UIStyleSettings>(weasel::ColorSchemeTarget::Default);
       font_dialog_ =
           std::make_unique<FontSettingsDialog>(appearance_settings_.get());
-      window_ = font_dialog_->Create(owner);
+      window_ = font_dialog_->CreateHosted(owner);
     } else {
       status_dialog_ = std::make_unique<StatusIconSettingsDialog>();
-      window_ = status_dialog_->Create(owner);
+      window_ = status_dialog_->CreateHosted(owner);
     }
 
     if (!window_) {
@@ -336,26 +411,18 @@ class SettingsPageInstance {
 
   HWND window() const { return window_; }
 
-  bool EmbedIn(HWND host) {
-    if (!window_ || !host)
-      return false;
-    LONG_PTR style = ::GetWindowLongPtrW(window_, GWL_STYLE);
-    style &= ~(static_cast<LONG_PTR>(WS_POPUP) | WS_CAPTION | WS_SYSMENU |
-               WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX);
-    style |= WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
-    ::SetWindowLongPtrW(window_, GWL_STYLE, style);
-    LONG_PTR ex_style = ::GetWindowLongPtrW(window_, GWL_EXSTYLE);
-    ex_style &= ~(static_cast<LONG_PTR>(WS_EX_APPWINDOW) | WS_EX_DLGMODALFRAME |
-                  WS_EX_WINDOWEDGE);
-    ::SetWindowLongPtrW(window_, GWL_EXSTYLE, ex_style);
-    ::SetLastError(ERROR_SUCCESS);
-    if (!::SetParent(window_, host) && ::GetLastError() != ERROR_SUCCESS)
+  bool PrepareForDisplay() {
+    return !appearance_dialog_ || appearance_dialog_->PrepareForDisplay();
+  }
+
+  bool FitIn(HWND host) {
+    if (!window_ || !host || ::GetParent(window_) != host)
       return false;
     RECT client{};
     ::GetClientRect(host, &client);
     ::SetWindowPos(window_, HWND_TOP, 0, 0, client.right, client.bottom,
-                   SWP_NOACTIVATE | SWP_FRAMECHANGED);
-    return true;
+                   SWP_NOACTIVATE | SWP_HIDEWINDOW);
+    return ::GetParent(window_) == host;
   }
 
   bool HasUnappliedChanges() const {
@@ -443,30 +510,50 @@ class SettingsPageInstance {
 }  // namespace
 
 int Configurator::ConfigureSettings(settings_navigation::Page initial_page) {
+  const auto started = settings_performance::Now();
   HWND owner = ::GetActiveWindow();
+  const HMONITOR target_monitor = SelectSettingsMonitor(owner);
   settings_navigation::ClearUnappliedChanges();
   SettingsHostWindow host;
   std::array<std::unique_ptr<SettingsPageInstance>,
              settings_navigation::kPageCount>
       pages;
+  if (!host.Create(owner, target_monitor)) {
+    LOG(ERROR) << "Unable to create the stable settings window frame.";
+    return 1;
+  }
   auto& initial = pages[settings_navigation::PageIndex(initial_page)];
   initial = std::make_unique<SettingsPageInstance>();
-  if (!initial->Create(initial_page, owner)) {
+  if (!initial->Create(initial_page, host.window())) {
     LOG(ERROR) << "Unable to create the initial settings page.";
     return 1;
   }
   SettingsPageInstance* active = initial.get();
-  if (!host.Create(active->window(), owner) ||
-      !active->EmbedIn(host.window())) {
-    LOG(ERROR) << "Unable to create the stable settings window frame.";
+  if (!host.SizeForPage(active->window(), target_monitor) ||
+      !active->FitIn(host.window())) {
+    LOG(ERROR) << "Unable to size the settings window frame.";
     return 1;
   }
   host.SetActivePage(active->window());
 
+  // Only prepare the requested page. Unvisited pages must never delay the
+  // first visible frame of the settings window.
+  if (!active->PrepareForDisplay()) {
+    return 1;
+  }
+  settings_performance::Record("host.prepared", started);
+
   ::ShowWindow(active->window(), SW_SHOW);
-  ::ShowWindow(host.window(), SW_SHOW);
+  if (!host.ShowCentered(target_monitor)) {
+    LOG(ERROR) << "Unable to center the settings window before showing it.";
+    return 1;
+  }
   ::UpdateWindow(host.window());
   ::SetForegroundWindow(host.window());
+  ::SetFocus(::GetDlgItem(
+      active->window(),
+      static_cast<WORD>(settings_navigation::kInput +
+                        settings_navigation::PageIndex(initial_page))));
 
   wchar_t preview_navigation[2] = {};
   const bool preview_navigation_test =
@@ -475,11 +562,19 @@ int Configurator::ConfigureSettings(settings_navigation::Page initial_page) {
                                 preview_navigation,
                                 _countof(preview_navigation)) &&
       preview_navigation[0] == L'1';
-  if (preview_navigation_test) {
-    ::PostThreadMessageW(::GetCurrentThreadId(),
-                         settings_navigation::kHostNavigateMessage,
-                         settings_navigation::kInput,
-                         reinterpret_cast<LPARAM>(active->window()));
+  const bool preview_appearance_test =
+      weasel::IsSettingsPreviewMode() &&
+      ::GetEnvironmentVariableW(L"WEASEL_PREVIEW_NAVIGATE_APPEARANCE",
+                                preview_navigation,
+                                _countof(preview_navigation)) &&
+      preview_navigation[0] == L'1';
+  const auto test_destination = preview_appearance_test
+                                    ? settings_navigation::kAppearance
+                                    : settings_navigation::kInput;
+  if (preview_navigation_test || preview_appearance_test) {
+    ::PostThreadMessageW(
+        ::GetCurrentThreadId(), settings_navigation::kHostNavigateMessage,
+        test_destination, reinterpret_cast<LPARAM>(active->window()));
   }
 
   const auto refresh_shared_state = [&pages]() {
@@ -575,13 +670,14 @@ int Configurator::ConfigureSettings(settings_navigation::Page initial_page) {
         continue;
       }
       if (message.message == settings_navigation::kHostNavigateMessage) {
+        const auto navigation_started = settings_performance::Now();
         const auto page = settings_navigation::PageFromCommand(
             static_cast<WORD>(message.wParam));
         auto& destination = pages[settings_navigation::PageIndex(page)];
         if (!destination) {
           destination = std::make_unique<SettingsPageInstance>();
-          if (!destination->Create(page, owner) ||
-              !destination->EmbedIn(host.window())) {
+          if (!destination->Create(page, host.window()) ||
+              !destination->FitIn(host.window())) {
             LOG(ERROR) << "Unable to create or embed settings page "
                        << static_cast<int>(page) << ".";
             destination.reset();
@@ -590,6 +686,12 @@ int Configurator::ConfigureSettings(settings_navigation::Page initial_page) {
         }
         if (destination.get() == active)
           continue;
+
+        if (!destination->PrepareForDisplay()) {
+          MSG_BY_IDS(IDS_STR_SCHEME_SAVE_FAILED, IDS_STR_WEASEL,
+                     MB_OK | MB_ICONERROR);
+          continue;
+        }
 
         // Swap the hosted dialogs while painting is suspended.  Showing the
         // replacement before hiding the current child can cause the dialog
@@ -611,15 +713,22 @@ int Configurator::ConfigureSettings(settings_navigation::Page initial_page) {
         refresh_shared_state();
         ::SetFocus(
             ::GetDlgItem(active->window(), static_cast<WORD>(message.wParam)));
-        if (preview_navigation_test &&
-            page == settings_navigation::Page::Input) {
+        settings_performance::Record(
+            page == settings_navigation::Page::Appearance
+                ? "navigation.appearance"
+                : "navigation.other",
+            navigation_started);
+        if ((preview_navigation_test || preview_appearance_test) &&
+            message.wParam == test_destination) {
           if (!::IsWindowVisible(active->window()))
             navigation_test_result |= 1;
           if (::GetPropW(host.window(), kSettingsHostActivePage) !=
               reinterpret_cast<HANDLE>(active->window())) {
             navigation_test_result |= 2;
           }
-          if (!::GetDlgItem(active->window(), IDC_SWITCHER_TITLE))
+          if (!::GetDlgItem(active->window(), preview_appearance_test
+                                                  ? IDC_PREVIEW_LIGHT
+                                                  : IDC_SWITCHER_TITLE))
             navigation_test_result |= 4;
           for (auto& loaded_page : pages) {
             if (loaded_page)

@@ -479,7 +479,7 @@ LRESULT FontSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
         LocalText(L"小狼毫", L"小狼毫", L"Weasel").c_str(),
         MB_OK | MB_ICONERROR);
     EndDialog(IDCANCEL);
-    return TRUE;
+    return settings_navigation::HostedPageInitResult();
   }
   const auto user_settings = weasel::UserSettings::Load();
   preview_dark_ = weasel::ResolveAppearanceDarkMode(
@@ -559,7 +559,7 @@ LRESULT FontSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   }
   RefreshApplyState();
   CenterWindow();
-  return TRUE;
+  return settings_navigation::HostedPageInitResult();
 }
 
 void FontSettingsDialog::Localize() {

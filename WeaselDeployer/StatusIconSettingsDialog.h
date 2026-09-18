@@ -9,7 +9,8 @@
 #include <string>
 #include <vector>
 
-class StatusIconSettingsDialog : public CDialogImpl<StatusIconSettingsDialog> {
+class StatusIconSettingsDialog
+    : public settings_navigation::HostedDialogImpl<StatusIconSettingsDialog> {
  public:
   enum { IDD = IDD_STATUS_ICON_SETTING };
   bool HasUnappliedChanges() const;

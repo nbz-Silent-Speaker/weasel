@@ -3,6 +3,8 @@
 #include "UIStyleSettingsDialog.h"
 #include "Configurator.h"
 #include "AppearancePreview.h"
+#include "AppearancePreviewCache.h"
+#include "SettingsPerformance.h"
 #include <WeaselUtility.h>
 #include <WeaselUserSettings.h>
 
@@ -105,6 +107,7 @@ CString UIStyleSettingsDialog::Text(UINT id) const {
 }
 
 LRESULT UIStyleSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
+  const auto started = settings_performance::Now();
   EnsureAppearanceControls(m_hWnd);
   LayoutAppearancePage(m_hWnd);
   Gdiplus::GdiplusStartupInput startup;
@@ -114,9 +117,10 @@ LRESULT UIStyleSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
     MSG_BY_IDS(IDS_STR_SCHEME_SAVE_FAILED, IDS_STR_WEASEL,
                MB_OK | MB_ICONERROR);
     EndDialog(IDCANCEL);
-    return TRUE;
+    return settings_navigation::HostedPageInitResult();
   }
   const auto user_settings = weasel::UserSettings::Load();
+  settings_performance::Record("appearance.config", started);
   draft_.Load(settings_->ActiveAppearance(), user_settings.acrylic,
               user_settings.appearance_theme_mode);
   single_.fill(user_settings.appearance_theme_mode !=
@@ -181,10 +185,11 @@ LRESULT UIStyleSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
         IDC_EDITOR_HINT, IDC_PREVIEW_HINT, IDC_APPEARANCE_LIGHT_PREVIEW_LABEL,
         IDC_APPEARANCE_DARK_PREVIEW_LABEL}});
   RefreshPreview();
+  settings_performance::Record("appearance.init", started);
   ::RedrawWindow(m_hWnd, nullptr, nullptr,
                  RDW_INVALIDATE | RDW_UPDATENOW | RDW_ALLCHILDREN);
   CenterWindow();
-  return TRUE;
+  return settings_navigation::HostedPageInitResult();
 }
 
 std::vector<UIStyleSettingsDialog::PaletteEntry>&
@@ -618,10 +623,7 @@ bool UIStyleSettingsDialog::ApplyChanges() {
       return false;
     deployed_ = true;
   }
-  auto api = reinterpret_cast<RimeLeversApi*>(
-      rime_get_api()->find_module("levers")->get_api());
-  if (!api->load_settings(settings_->settings()) ||
-      !settings_->LoadAppearance()) {
+  if (!settings_->LoadAppearance()) {
     MSG_BY_IDS(IDS_STR_SCHEME_SAVE_FAILED, IDS_STR_WEASEL,
                MB_OK | MB_ICONERROR);
     if (!settings_navigation::RequestClose(m_hWnd, IDOK))
@@ -796,8 +798,30 @@ void UIStyleSettingsDialog::InvalidatePreviewCache() {
   preview_dirty_.fill(true);
 }
 
+bool UIStyleSettingsDialog::PrepareForDisplay() {
+  // Keep an edited draft and its original save-conflict snapshot intact.
+  // An untouched preloaded page may have become stale while another page was
+  // being edited, so refresh it before exposing any cached pixels.
+  const auto user = weasel::UserSettings::Load();
+  const bool sources_changed = settings_->AppearanceSourcesChanged();
+  if (!draft_.changed() &&
+      (sources_changed || user.acrylic != draft_.saved_acrylic() ||
+       user.appearance_theme_mode != draft_.saved_theme_mode())) {
+    if (sources_changed && !settings_->LoadAppearance())
+      return false;
+    draft_.Load(settings_->ActiveAppearance(), user.acrylic,
+                user.appearance_theme_mode);
+    InvalidatePreviewCache();
+    RefreshMode();
+  }
+  PreparePreviews();
+  return preview_bitmaps_[0] && preview_bitmaps_[1] && !preview_dirty_[0] &&
+         !preview_dirty_[1];
+}
+
 weasel::AppearancePreview UIStyleSettingsDialog::PreviewStyle(bool dark) {
   weasel::AppearancePreview preview{};
+  preview.dpi = weasel::AppearancePreviewCache::Dpi(m_hWnd);
   preview.dark = dark;
   preview.acrylic = draft_.acrylic();
   preview.horizontal = settings_->PreviewStyleBool("horizontal", false);
@@ -862,6 +886,7 @@ weasel::AppearancePreview UIStyleSettingsDialog::PreviewStyle(bool dark) {
 }
 
 void UIStyleSettingsDialog::PreparePreview(size_t index) {
+  const auto started = settings_performance::Now();
   if (!graphics_token_ || index >= preview_bitmaps_.size())
     return;
   HWND control = GetDlgItem(index ? IDC_PREVIEW_DARK : IDC_PREVIEW_LIGHT);
@@ -872,9 +897,25 @@ void UIStyleSettingsDialog::PreparePreview(size_t index) {
   const int height = bounds.bottom - bounds.top;
   if (width <= 0 || height <= 0)
     return;
+  const auto style = PreviewStyle(index != 0);
+  const auto key = weasel::AppearancePreviewCache::Key(
+      style, GetFont(), style.dpi, width, height);
   if (!preview_dirty_[index] && preview_bitmaps_[index] &&
-      preview_sizes_[index].cx == width && preview_sizes_[index].cy == height)
+      preview_keys_[index] == key && preview_sizes_[index].cx == width &&
+      preview_sizes_[index].cy == height)
     return;
+
+  if (HBITMAP cached =
+          weasel::AppearancePreviewCache::Load(index, key, width, height)) {
+    if (preview_bitmaps_[index])
+      ::DeleteObject(preview_bitmaps_[index]);
+    preview_bitmaps_[index] = cached;
+    preview_sizes_[index] = {width, height};
+    preview_keys_[index] = key;
+    preview_dirty_[index] = false;
+    settings_performance::Record(index ? "cache.dark" : "cache.light", started);
+    return;
+  }
 
   HDC target = ::GetDC(control);
   HDC buffer = target ? ::CreateCompatibleDC(target) : nullptr;
@@ -883,15 +924,22 @@ void UIStyleSettingsDialog::PreparePreview(size_t index) {
   if (buffer && bitmap) {
     const HGDIOBJ previous = ::SelectObject(buffer, bitmap);
     const RECT preview_bounds{0, 0, width, height};
-    weasel::DrawAppearancePreview(buffer, preview_bounds, GetFont(),
-                                  PreviewStyle(index != 0));
+    const bool rendered =
+        weasel::DrawAppearancePreview(buffer, preview_bounds, GetFont(), style);
+    settings_performance::Record(index ? "preview.dark" : "preview.light",
+                                 started);
     ::SelectObject(buffer, previous);
-    if (preview_bitmaps_[index])
-      ::DeleteObject(preview_bitmaps_[index]);
-    preview_bitmaps_[index] = bitmap;
-    preview_sizes_[index] = {width, height};
-    preview_dirty_[index] = false;
-    bitmap = nullptr;
+    if (rendered) {
+      weasel::AppearancePreviewCache::Save(index, key, bitmap, target, width,
+                                           height);
+      if (preview_bitmaps_[index])
+        ::DeleteObject(preview_bitmaps_[index]);
+      preview_bitmaps_[index] = bitmap;
+      preview_sizes_[index] = {width, height};
+      preview_keys_[index] = key;
+      preview_dirty_[index] = false;
+      bitmap = nullptr;
+    }
   }
   if (bitmap)
     ::DeleteObject(bitmap);

@@ -903,7 +903,7 @@ LRESULT StatusIconSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   if (Gdiplus::GdiplusStartup(&graphics_token_, &startup, nullptr) !=
       Gdiplus::Ok) {
     EndDialog(IDCANCEL);
-    return TRUE;
+    return settings_navigation::HostedPageInitResult();
   }
   initial_ = weasel::StatusIconSettings::Load();
   draft_ = initial_;
@@ -975,7 +975,7 @@ LRESULT StatusIconSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
                                 WeaselDisplayUserDataPath().wstring(),
                                 {IDC_STATUS_TITLE, IDC_STATUS_MESSAGE}});
   CenterWindow();
-  return TRUE;
+  return settings_navigation::HostedPageInitResult();
 }
 
 LRESULT StatusIconSettingsDialog::OnDestroy(UINT, WPARAM, LPARAM, BOOL&) {

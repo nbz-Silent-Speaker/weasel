@@ -11,7 +11,8 @@
 
 class UIStyleSettings;
 
-class FontSettingsDialog : public CDialogImpl<FontSettingsDialog> {
+class FontSettingsDialog
+    : public settings_navigation::HostedDialogImpl<FontSettingsDialog> {
  public:
   enum { IDD = IDD_FONT_SETTING };
   explicit FontSettingsDialog(UIStyleSettings* appearance_settings)

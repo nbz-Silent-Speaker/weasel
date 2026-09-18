@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -16,6 +17,7 @@ namespace settings_navigation {
 enum class Page { Input, Appearance, Fonts, StatusIcons };
 inline constexpr size_t kPageCount = 4;
 inline thread_local std::array<bool, kPageCount> unapplied_pages{};
+inline thread_local unsigned hosted_page_creation_depth = 0;
 inline constexpr WORD kInput = 30001;
 inline constexpr WORD kAppearance = 30002;
 inline constexpr WORD kFonts = 30003;
@@ -28,6 +30,94 @@ inline constexpr UINT kHostStateChangedMessage = WM_APP + 0x534;
 inline constexpr wchar_t kHostProperty[] = L"Weasel.SettingsHost";
 inline constexpr wchar_t kComboAnimationProperty[] =
     L"Weasel.ComboAnimationSuppressed";
+
+class HostedPageCreationScope {
+ public:
+  HostedPageCreationScope() { ++hosted_page_creation_depth; }
+  HostedPageCreationScope(const HostedPageCreationScope&) = delete;
+  HostedPageCreationScope& operator=(const HostedPageCreationScope&) = delete;
+  ~HostedPageCreationScope() { --hosted_page_creation_depth; }
+};
+
+inline BOOL HostedPageInitResult() {
+  // Returning TRUE from WM_INITDIALOG asks the dialog manager to set focus.
+  // A modeless page is still a top-level window at this point, so that focus
+  // operation can activate and expose it before the shared host exists.
+  return hosted_page_creation_depth ? FALSE : TRUE;
+}
+
+#pragma pack(push, 2)
+struct DialogTemplateExHeader {
+  WORD version;
+  WORD signature;
+  DWORD help_id;
+  DWORD extended_style;
+  DWORD style;
+  WORD item_count;
+  short x;
+  short y;
+  short width;
+  short height;
+};
+#pragma pack(pop)
+
+template <class T>
+class HostedDialogImpl : public ATL::CDialogImpl<T> {
+ public:
+  using ATL::CDialogImpl<T>::Create;
+
+  HWND CreateHosted(HWND parent, LPARAM init_parameter = 0) {
+    ATLASSERT(parent && ::IsWindow(parent));
+    ATLASSERT(this->m_hWnd == nullptr);
+
+    const HINSTANCE instance = _AtlBaseModule.GetResourceInstance();
+    const HRSRC resource =
+        ::FindResourceW(instance, MAKEINTRESOURCEW(T::IDD), RT_DIALOG);
+    const DWORD size = resource ? ::SizeofResource(instance, resource) : 0;
+    const HGLOBAL loaded = resource ? ::LoadResource(instance, resource) : 0;
+    const void* source = loaded ? ::LockResource(loaded) : nullptr;
+    if (!source || size < sizeof(DLGTEMPLATE))
+      return nullptr;
+
+    std::vector<unsigned char> template_data(size);
+    std::memcpy(template_data.data(), source, size);
+    DWORD* style = nullptr;
+    DWORD* extended_style = nullptr;
+    const auto* words = reinterpret_cast<const WORD*>(template_data.data());
+    if (size >= sizeof(DialogTemplateExHeader) && words[1] == 0xffff) {
+      auto* header =
+          reinterpret_cast<DialogTemplateExHeader*>(template_data.data());
+      style = &header->style;
+      extended_style = &header->extended_style;
+    } else {
+      auto* header = reinterpret_cast<DLGTEMPLATE*>(template_data.data());
+      style = &header->style;
+      extended_style = &header->dwExtendedStyle;
+    }
+    *style &= ~(static_cast<DWORD>(WS_VISIBLE) | WS_POPUP | WS_CAPTION |
+                WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX);
+    *style |= WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | DS_CONTROL;
+    *extended_style &=
+        ~(WS_EX_APPWINDOW | WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE);
+    *extended_style |= WS_EX_CONTROLPARENT;
+
+    if (!this->m_thunk.Init(nullptr, nullptr)) {
+      ::SetLastError(ERROR_OUTOFMEMORY);
+      return nullptr;
+    }
+    _AtlWinModule.AddCreateWndData(
+        &this->m_thunk.cd,
+        static_cast<ATL::CDialogImplBaseT<ATL::CWindow>*>(this));
+#ifdef _DEBUG
+    this->m_bModal = false;
+#endif
+    const HWND window = ::CreateDialogIndirectParamW(
+        instance, reinterpret_cast<const DLGTEMPLATE*>(template_data.data()),
+        parent, T::StartDialogProc, init_parameter);
+    ATLASSERT(this->m_hWnd == window);
+    return window;
+  }
+};
 
 // Every settings page is hosted in the same logical content frame.  Keep
 // these values as the single source of truth so page changes cannot resize the

@@ -8,7 +8,8 @@ namespace weasel {
 struct AppearancePreview;
 }
 
-class UIStyleSettingsDialog : public CDialogImpl<UIStyleSettingsDialog> {
+class UIStyleSettingsDialog
+    : public settings_navigation::HostedDialogImpl<UIStyleSettingsDialog> {
  public:
   enum { IDD = IDD_STYLE_SETTING };
   explicit UIStyleSettingsDialog(UIStyleSettings* settings)
@@ -18,6 +19,7 @@ class UIStyleSettingsDialog : public CDialogImpl<UIStyleSettingsDialog> {
   bool HasUnappliedChanges() const;
   bool ApplyChanges();
   bool ConfirmClose() const;
+  bool PrepareForDisplay();
 
  protected:
   BEGIN_MSG_MAP(UIStyleSettingsDialog)
@@ -88,6 +90,7 @@ class UIStyleSettingsDialog : public CDialogImpl<UIStyleSettingsDialog> {
   ULONG_PTR graphics_token_ = 0;
   std::array<HBITMAP, 2> preview_bitmaps_{};
   std::array<SIZE, 2> preview_sizes_{};
+  std::array<std::string, 2> preview_keys_{};
   std::array<bool, 2> preview_dirty_{true, true};
   int item_height_ = 24;
   bool saved_ = false;

@@ -25,6 +25,7 @@ class UIStyleSettings {
   std::string GetActiveColorScheme();
   bool SelectColorScheme(const std::string& color_scheme_id);
   bool LoadAppearance();
+  bool AppearanceSourcesChanged() const;
   std::array<std::string, 4> ActiveAppearance();
   bool SaveAppearance(const std::array<std::string, 4>& colors);
   bool configuration_changed() const { return configuration_changed_; }

@@ -12,7 +12,8 @@
 #include "WanxiangUpdateManager.h"
 #include "SettingsNavigation.h"
 
-class SwitcherSettingsDialog : public CDialogImpl<SwitcherSettingsDialog> {
+class SwitcherSettingsDialog
+    : public settings_navigation::HostedDialogImpl<SwitcherSettingsDialog> {
  public:
   enum { IDD = IDD_SWITCHER_SETTING };
 

@@ -1831,8 +1831,7 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   UpdateModelUi();
   UpdateApplyButton();
   CenterWindow();
-  BringWindowToTop();
-  return TRUE;
+  return settings_navigation::HostedPageInitResult();
 }
 
 LRESULT SwitcherSettingsDialog::OnClose(UINT, WPARAM, LPARAM, BOOL&) {

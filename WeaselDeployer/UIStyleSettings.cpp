@@ -50,6 +50,13 @@ bool CopyItem(RimeConfig* from,
 }
 }  // namespace
 
+bool UIStyleSettings::AppearanceSourcesChanged() const {
+  const auto user = WeaselUserDataPath();
+  return ReadFile(user / L"weasel.custom.yaml") != original_bytes_ ||
+         ReadFile(user / L"weasel.yaml") != base_bytes_ ||
+         ReadFile(WeaselSharedDataPath() / L"weasel.yaml") != shared_bytes_;
+}
+
 bool UIStyleSettings::LoadAppearance() {
   auto rime = rime_get_api();
   for (auto* config : {&original_, &custom_}) {

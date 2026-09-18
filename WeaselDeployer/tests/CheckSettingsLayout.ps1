@@ -109,12 +109,43 @@ if ($navigation -notmatch 'LocalText\(L"小狼毫设置"') {
 if ($navigation -notmatch 'DisableWindowTransitions\(dialog\);') {
   throw 'Shared settings frame allows top-level transition flashes.'
 }
-
 $configuratorPath = Join-Path $root 'WeaselDeployer/Configurator.cpp'
 $configurator = Get-Content -LiteralPath $configuratorPath -Raw
 if ($configurator -notmatch 'class\s+SettingsPageInstance' -or
     $configurator -notmatch 'kHostNavigateMessage') {
   throw 'Settings pages no longer use the shared navigation host.'
+}
+if ($configurator -notmatch
+    'GetCursorPos\(&cursor\)[\s\S]{0,160}?MonitorFromPoint\(cursor, MONITOR_DEFAULTTONEAREST\)' -or
+    $configurator -notmatch
+    'GetMonitorInfoW\(monitor, &info\)[\s\S]{0,120}?info\.rcWork' -or
+    $configurator -notmatch
+    'SetWindowPos\(window_, HWND_TOP,[\s\S]{0,180}?SWP_SHOWWINDOW' -or
+    $configurator -notmatch 'host\.ShowCentered\(target_monitor\)' -or
+    $configurator -match 'ShowWindow\(host\.window\(\), SW_SHOW\)') {
+  throw 'Settings host must be centered on the launch monitor before its first visible frame.'
+}
+$switcherDialog = Get-Content -LiteralPath (Join-Path $root 'WeaselDeployer/SwitcherSettingsDialog.cpp') -Raw
+if ($switcherDialog -match 'BringWindowToTop\s*\(') {
+  throw 'The input settings page must remain hidden until it is embedded in the centered host.'
+}
+if ($configurator -notmatch 'HostedPageCreationScope\s+hosted_page_creation' -or
+    $configurator -notmatch 'CreateHosted\(owner\)' -or
+    $configurator -match 'SetParent\s*\(' -or
+    $navigation -notmatch 'CreateDialogIndirectParamW' -or
+    $navigation -notmatch 'WS_CHILD\s*\|\s*WS_CLIPCHILDREN') {
+  throw 'Settings pages must be created as hidden host children without a top-level reparenting transition.'
+}
+$createHost = $configurator.IndexOf('if (!host.Create(owner, target_monitor))')
+$createPage = $configurator.IndexOf('if (!initial->Create(initial_page, host.window()))')
+$sizeHost = $configurator.IndexOf('host.SizeForPage(active->window(), target_monitor)')
+$preparePage = $configurator.IndexOf('ShowWindow(active->window(), SW_SHOW)')
+$showHost = $configurator.IndexOf('host.ShowCentered(target_monitor)')
+$focusPage = $configurator.IndexOf('SetFocus(::GetDlgItem(')
+if ($createHost -lt 0 -or $createPage -lt $createHost -or
+    $sizeHost -lt $createPage -or $preparePage -lt $sizeHost -or
+    $showHost -lt $preparePage -or $focusPage -lt $showHost) {
+  throw 'Initial settings visibility order must be host, child, layout, child preparation, atomic host show, then focus.'
 }
 $freezeHost = $configurator.IndexOf('SendMessageW(host.window(), WM_SETREDRAW, FALSE')
 $hideCurrent = $configurator.IndexOf('ShowWindow(active->window(), SW_HIDE)')

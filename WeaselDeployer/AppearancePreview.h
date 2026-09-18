@@ -7,6 +7,8 @@
 #include <array>
 #include <cwchar>
 #include <string>
+#include "SettingsPerformance.h"
+#include "AppearancePreviewText.h"
 
 #pragma comment(lib, "gdiplus.lib")
 #pragma comment(lib, "gdi32.lib")
@@ -16,6 +18,7 @@ namespace weasel {
 // Only the settings illustration uses this painter. The live candidate window
 // and its composition clipping geometry are unchanged.
 struct AppearancePreview {
+  UINT dpi = 96;
   bool acrylic = true;
   bool dark = false;
   bool horizontal = false;
@@ -76,15 +79,16 @@ inline void DrawPreviewGlow(Gdiplus::Graphics& canvas,
   canvas.FillPath(&glow, &path);
 }
 
-inline void DrawAppearancePreview(HDC dc,
+inline bool DrawAppearancePreview(HDC dc,
                                   const RECT& bounds,
                                   HFONT font,
                                   const AppearancePreview& style) {
   using namespace Gdiplus;
+  const auto started = settings_performance::Now();
   const int width = bounds.right - bounds.left;
   const int height = bounds.bottom - bounds.top;
   if (width <= 0 || height <= 0)
-    return;
+    return false;
   Bitmap buffer(width, height, PixelFormat32bppPARGB);
   Graphics canvas(&buffer);
   canvas.SetSmoothingMode(SmoothingModeAntiAlias);
@@ -94,8 +98,7 @@ inline void DrawAppearancePreview(HDC dc,
                             static_cast<REAL>(height));
   SolidBrush page_background(PreviewColor(::GetSysColor(COLOR_BTNFACE)));
   canvas.FillRectangle(&page_background, bitmap_bounds);
-  const float dpi_scale =
-      static_cast<float>(::GetDeviceCaps(dc, LOGPIXELSX)) / 96.0f;
+  const float dpi_scale = static_cast<float>(style.dpi) / 96.0f;
   const RectF scene(0.5f, 0.5f, static_cast<REAL>(width) - 1.0f,
                     static_cast<REAL>(height) - 1.0f);
   GraphicsPath scene_path;
@@ -122,24 +125,26 @@ inline void DrawAppearancePreview(HDC dc,
     return static_cast<float>(value) * dpi_scale;
   };
   LOGFONTW candidate_logical{};
+  settings_performance::Record("paint.background", started);
   ::GetObjectW(font, sizeof(candidate_logical), &candidate_logical);
-  candidate_logical.lfHeight = -::MulDiv((std::max)(1, style.font_point),
-                                         ::GetDeviceCaps(dc, LOGPIXELSY), 72);
+  candidate_logical.lfHeight =
+      -::MulDiv((std::max)(1, style.font_point), style.dpi, 72);
   wcsncpy_s(candidate_logical.lfFaceName, style.font_face.c_str(), _TRUNCATE);
-  Font candidate_font(dc, &candidate_logical);
+  AppearancePreviewText candidate_font(candidate_logical);
   LOGFONTW label_logical = candidate_logical;
-  label_logical.lfHeight = -::MulDiv((std::max)(1, style.label_font_point),
-                                     ::GetDeviceCaps(dc, LOGPIXELSY), 72);
+  label_logical.lfHeight =
+      -::MulDiv((std::max)(1, style.label_font_point), style.dpi, 72);
   wcsncpy_s(label_logical.lfFaceName, style.label_font_face.c_str(), _TRUNCATE);
-  Font label_font(dc, &label_logical);
-  const auto measure = [&](const std::wstring& text, const Font& measure_font) {
-    RectF measured;
-    canvas.MeasureString(text.c_str(), static_cast<INT>(text.size()),
-                         &measure_font, PointF(0, 0), &measured);
-    return measured.Width;
+  AppearancePreviewText label_font(label_logical);
+  if (!candidate_font.valid() || !label_font.valid())
+    return false;
+  settings_performance::Record("paint.fonts", started);
+  const auto measure = [&](const std::wstring& text,
+                           const AppearancePreviewText& measure_font) {
+    return measure_font.Measure(text);
   };
-  const float candidate_height = candidate_font.GetHeight(&canvas);
-  const float label_height = label_font.GetHeight(&canvas);
+  const float candidate_height = candidate_font.height();
+  const float label_height = label_font.height();
   const float row_height = (std::max)(candidate_height, label_height) +
                            pixels(style.hilite_padding_y) * 2;
   const float margin_x =
@@ -180,26 +185,31 @@ inline void DrawAppearancePreview(HDC dc,
                              candidate_gap * (style.candidates.size() - 1);
   const float panel_height =
       margin_y * 2 + preedit_height + pixels(style.spacing) + rows_height;
+  LOGFONTW title_logical{};
+  ::GetObjectW(font, sizeof(title_logical), &title_logical);
+  title_logical.lfWeight = FW_NORMAL;
+  AppearancePreviewText title_font(title_logical);
+  if (!title_font.valid())
+    return false;
+  // Wide horizontal candidates need a separate title row so neither the
+  // translucent nor opaque panel can cover the preview's label.
+  const float title_row =
+      style.horizontal ? title_font.height() + pixels(20) : 0;
   const float available_width = static_cast<float>(width) - pixels(16);
-  const float available_height = static_cast<float>(height) - pixels(12);
+  const float available_height =
+      static_cast<float>(height) - pixels(12) - title_row;
   const float zoom =
       (std::min)(1.0f, (std::min)(available_width / panel_width,
                                   available_height / panel_height));
   const float origin_x = (width - panel_width * zoom) / 2.0f;
-  // Center against the clipped scene so the candidate panel has exactly the
-  // same top and bottom inset.  The preview title uses this same top edge.
-  const float origin_y = scene.Y + (scene.Height - panel_height * zoom) / 2.0f;
-  LOGFONTW title_logical{};
-  ::GetObjectW(font, sizeof(title_logical), &title_logical);
-  title_logical.lfWeight = FW_NORMAL;
-  Font title_font(dc, &title_logical);
-  SolidBrush title_brush(
-      PreviewColor(style.dark ? RGB(245, 245, 245) : RGB(24, 24, 24)));
-  StringFormat title_format;
-  title_format.SetFormatFlags(StringFormatFlagsNoWrap);
-  title_format.SetTrimming(StringTrimmingEllipsisCharacter);
-  canvas.DrawString(style.title.c_str(), -1, &title_font,
-                    PointF(pixels(12), origin_y), &title_format, &title_brush);
+  const float origin_y =
+      scene.Y + title_row +
+      (scene.Height - title_row - panel_height * zoom) / 2.0f;
+  bool text_drawn = title_font.Draw(
+      canvas, style.title,
+      RectF(pixels(12), style.horizontal ? pixels(12) : origin_y,
+            width - pixels(24), title_font.height()),
+      style.dark ? RGB(245, 245, 245) : RGB(24, 24, 24), false);
   const auto preview_state = canvas.Save();
   canvas.TranslateTransform(origin_x, origin_y);
   canvas.ScaleTransform(zoom, zoom);
@@ -219,15 +229,10 @@ inline void DrawAppearancePreview(HDC dc,
   }
   const auto contentState = canvas.Save();
   canvas.SetClip(&outline);
-  StringFormat format;
-  format.SetLineAlignment(StringAlignmentCenter);
-  format.SetFormatFlags(StringFormatFlagsNoWrap);
-  format.SetTrimming(StringTrimmingEllipsisCharacter);
-  SolidBrush text(PreviewColor(style.text));
-  canvas.DrawString(
-      L"ni hao", -1, &candidate_font,
+  text_drawn &= candidate_font.Draw(
+      canvas, L"ni hao",
       RectF(margin_x, margin_y, panel_width - margin_x * 2, preedit_height),
-      &format, &text);
+      style.text);
   const float candidates_top =
       margin_y + preedit_height + pixels(style.spacing);
   float candidate_left = margin_x;
@@ -256,20 +261,18 @@ inline void DrawAppearancePreview(HDC dc,
       SolidBrush marker(PreviewColor(style.mark));
       canvas.FillPath(&marker, &marker_path);
     }
-    SolidBrush number(PreviewColor(i ? style.label : style.highlighted_label));
-    SolidBrush word(PreviewColor(i ? style.text : style.highlighted_text));
     const float text_left = item.X + pixels(style.hilite_padding_x);
     const float label_width = measure(labels[i], label_font);
-    canvas.DrawString(labels[i].c_str(), -1, &label_font,
-                      RectF(text_left, top, label_width, row_height), &format,
-                      &number);
-    canvas.DrawString(
-        style.candidates[i].c_str(), -1, &candidate_font,
+    text_drawn &= label_font.Draw(
+        canvas, labels[i], RectF(text_left, top, label_width, row_height),
+        i ? style.label : style.highlighted_label);
+    text_drawn &= candidate_font.Draw(
+        canvas, style.candidates[i],
         RectF(text_left + label_width + label_gap, top,
               (std::max)(1.0f, item.Width - pixels(style.hilite_padding_x) * 2 -
                                    label_width - label_gap),
               row_height),
-        &format, &word);
+        i ? style.text : style.highlighted_text);
     if (style.horizontal)
       candidate_left += item_width + candidate_gap;
   }
@@ -294,8 +297,10 @@ inline void DrawAppearancePreview(HDC dc,
   Graphics output(dc);
   // The buffer already matches the control's physical pixels. Specifying its
   // size avoids GDI+ scaling it a second time on a different-DPI display.
-  output.DrawImage(&buffer, Rect(static_cast<INT>(bounds.left),
-                                 static_cast<INT>(bounds.top), width, height));
+  return text_drawn && canvas.GetLastStatus() == Ok &&
+         output.DrawImage(
+             &buffer, Rect(static_cast<INT>(bounds.left),
+                           static_cast<INT>(bounds.top), width, height)) == Ok;
 }
 
 }  // namespace weasel
