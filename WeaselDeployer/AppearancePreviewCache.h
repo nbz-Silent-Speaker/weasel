@@ -76,7 +76,7 @@ class AppearancePreviewCache {
     LOGFONTW logical{};
     ::GetObjectW(font, sizeof(logical), &logical);
     add(logical);
-    const COLORREF background = ::GetSysColor(COLOR_BTNFACE);
+    const COLORREF background = p.page_background;
     add(background);
     // Rebuilds and installed-font changes invalidate saved pixels as well.
     wchar_t executable[32768]{};

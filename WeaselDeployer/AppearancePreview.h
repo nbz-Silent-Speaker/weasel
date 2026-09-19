@@ -18,6 +18,7 @@ namespace weasel {
 // Only the settings illustration uses this painter. The live candidate window
 // and its composition clipping geometry are unchanged.
 struct AppearancePreview {
+  COLORREF page_background = ::GetSysColor(COLOR_BTNFACE);
   UINT dpi = 96;
   bool acrylic = true;
   bool dark = false;
@@ -96,7 +97,7 @@ inline bool DrawAppearancePreview(HDC dc,
   canvas.SetTextRenderingHint(TextRenderingHintAntiAliasGridFit);
   const RectF bitmap_bounds(0, 0, static_cast<REAL>(width),
                             static_cast<REAL>(height));
-  SolidBrush page_background(PreviewColor(::GetSysColor(COLOR_BTNFACE)));
+  SolidBrush page_background(PreviewColor(style.page_background));
   canvas.FillRectangle(&page_background, bitmap_bounds);
   const float dpi_scale = static_cast<float>(style.dpi) / 96.0f;
   const RectF scene(0.5f, 0.5f, static_cast<REAL>(width) - 1.0f,

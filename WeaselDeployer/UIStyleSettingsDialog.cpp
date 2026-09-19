@@ -693,13 +693,13 @@ LRESULT UIStyleSettingsDialog::OnStaticColor(UINT,
   const auto context = reinterpret_cast<HDC>(dc);
   if (id == IDC_MATERIAL_HINT || id == IDC_EDITOR_HINT ||
       id == IDC_PREVIEW_HINT || id == IDC_SELECTION_HINT)
-    ::SetTextColor(context, ::GetSysColor(COLOR_GRAYTEXT));
+    ::SetTextColor(context, settings_theme::GetColor(COLOR_GRAYTEXT));
   if ((id == IDC_LIGHT_LABEL &&
        !::IsWindowEnabled(GetDlgItem(IDC_COLOR_LIGHT))) ||
       (id == IDC_DARK_LABEL && !::IsWindowEnabled(GetDlgItem(IDC_COLOR_DARK))))
-    ::SetTextColor(context, ::GetSysColor(COLOR_GRAYTEXT));
+    ::SetTextColor(context, settings_theme::GetColor(COLOR_GRAYTEXT));
   ::SetBkMode(context, TRANSPARENT);
-  return reinterpret_cast<LRESULT>(::GetSysColorBrush(COLOR_WINDOW));
+  return reinterpret_cast<LRESULT>(settings_theme::GetBrush(COLOR_WINDOW));
 }
 
 LRESULT UIStyleSettingsDialog::OnButtonColor(UINT,
@@ -713,14 +713,14 @@ LRESULT UIStyleSettingsDialog::OnButtonColor(UINT,
     return 0;
   }
   const auto context = reinterpret_cast<HDC>(dc);
-  ::SetBkColor(context, ::GetSysColor(COLOR_WINDOW));
-  return reinterpret_cast<LRESULT>(::GetSysColorBrush(COLOR_WINDOW));
+  ::SetBkColor(context, settings_theme::GetColor(COLOR_WINDOW));
+  return reinterpret_cast<LRESULT>(settings_theme::GetBrush(COLOR_WINDOW));
 }
 
 void UIStyleSettingsDialog::DrawCombo(const DRAWITEMSTRUCT& draw) {
   const auto& entries = Entries(draw.CtlID);
   const int saved = ::SaveDC(draw.hDC);
-  ::FillRect(draw.hDC, &draw.rcItem, ::GetSysColorBrush(COLOR_WINDOW));
+  ::FillRect(draw.hDC, &draw.rcItem, settings_theme::GetBrush(COLOR_WINDOW));
   if (draw.itemID < entries.size()) {
     const auto& entry = entries[draw.itemID];
     RECT row = draw.rcItem;
@@ -733,17 +733,17 @@ void UIStyleSettingsDialog::DrawCombo(const DRAWITEMSTRUCT& draw) {
       RECT heading = row;
       heading.bottom = heading.top + item_height_;
       heading.left += 7;
-      ::SetTextColor(draw.hDC, ::GetSysColor(COLOR_GRAYTEXT));
+      ::SetTextColor(draw.hDC, settings_theme::GetColor(COLOR_GRAYTEXT));
       ::DrawTextW(draw.hDC, Text(entry.heading), -1, &heading,
                   DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
       row.top += item_height_;
     }
     const bool selected = (draw.itemState & ODS_SELECTED) != 0 && !field;
     const bool disabled = (draw.itemState & ODS_DISABLED) != 0;
-    const COLORREF surface = ::GetSysColor(COLOR_WINDOW);
-    const COLORREF selected_fill =
-        settings_navigation::Mix(::GetSysColor(COLOR_3DSHADOW), surface, 25);
-    ::FillRect(draw.hDC, &row, ::GetSysColorBrush(COLOR_WINDOW));
+    const COLORREF surface = settings_theme::GetColor(COLOR_WINDOW);
+    const COLORREF selected_fill = settings_navigation::Mix(
+        settings_theme::GetColor(COLOR_HIGHLIGHT), surface, 25);
+    ::FillRect(draw.hDC, &row, settings_theme::GetBrush(COLOR_WINDOW));
     RECT selection = row;
     if (selected) {
       selection.left += 3;
@@ -763,8 +763,8 @@ void UIStyleSettingsDialog::DrawCombo(const DRAWITEMSTRUCT& draw) {
       ::DeleteObject(selection_pen);
       ::DeleteObject(selection_brush);
     }
-    ::SetTextColor(draw.hDC,
-                   ::GetSysColor(disabled ? COLOR_GRAYTEXT : COLOR_WINDOWTEXT));
+    ::SetTextColor(draw.hDC, settings_theme::GetColor(
+                                 disabled ? COLOR_GRAYTEXT : COLOR_WINDOWTEXT));
     if (selected) {
       const int marker_width =
           (std::max)(2, ::MulDiv(3, ::GetDeviceCaps(draw.hDC, LOGPIXELSX), 96));
@@ -772,7 +772,8 @@ void UIStyleSettingsDialog::DrawCombo(const DRAWITEMSTRUCT& draw) {
                   selection.top + (selection.bottom - selection.top) / 4,
                   selection.left + 3 + marker_width,
                   row.bottom - (row.bottom - row.top) / 4};
-      HBRUSH marker_brush = ::CreateSolidBrush(::GetSysColor(COLOR_HIGHLIGHT));
+      HBRUSH marker_brush =
+          ::CreateSolidBrush(settings_theme::GetColor(COLOR_HIGHLIGHT));
       HRGN marker_region =
           ::CreateRoundRectRgn(marker.left, marker.top, marker.right,
                                marker.bottom, marker_width, marker_width);
@@ -872,6 +873,7 @@ weasel::AppearancePreview UIStyleSettingsDialog::PreviewStyle(bool dark) {
       settings_->PreviewStyleString("font_face", L"Microsoft YaHei");
   preview.label_font_face = settings_->PreviewStyleString(
       "label_font_face", preview.font_face.c_str());
+  preview.page_background = settings_theme::GetColor(COLOR_BTNFACE);
   preview.title = settings_navigation::LocalText(
       dark ? L"预览 • 深色" : L"预览 • 浅色",
       dark ? L"預覽 • 深色" : L"預覽 • 淺色",

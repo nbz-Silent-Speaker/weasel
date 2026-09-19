@@ -122,6 +122,11 @@ int wmain(int argc, wchar_t** argv) {
               "Color change reused stale pixels");
           Require(!weasel::AppearancePreviewCache::Load(dark, key, w + 1, h),
                   "Size change reused stale pixels");
+          changed = style;
+          changed.page_background ^= 1;
+          Require(weasel::AppearancePreviewCache::Key(changed, font, dpi, w,
+                                                      h) != key,
+                  "Settings theme change reused stale preview corners");
           Require(!weasel::AppearancePreviewCache::Load(
                       dark,
                       weasel::AppearancePreviewCache::Key(style, font, dpi + 1,

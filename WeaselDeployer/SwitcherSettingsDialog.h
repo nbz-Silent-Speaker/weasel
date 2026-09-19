@@ -50,6 +50,7 @@ class SwitcherSettingsDialog
                         settings_navigation::kStatusIcons,
                         OnNavigate)
   NOTIFY_HANDLER(IDC_SCHEMA_LIST, LVN_ITEMCHANGED, OnSchemaListItemChanged)
+  NOTIFY_HANDLER(IDC_SCHEMA_LIST, NM_CUSTOMDRAW, OnSchemaCustomDraw)
   NOTIFY_HANDLER(IDC_SCHEMA_PROJECT_LINKS, NM_CLICK, OnProjectLink)
   NOTIFY_HANDLER(IDC_SCHEMA_PROJECT_LINKS, NM_RETURN, OnProjectLink)
   NOTIFY_HANDLER(IDC_USER_DATA_FOLDER, NM_CLICK, OnUserFolderLink)
@@ -74,6 +75,7 @@ class SwitcherSettingsDialog
   LRESULT OnCloseCommand(WORD, WORD, HWND, BOOL&);
   LRESULT OnNavigate(WORD, WORD id, HWND, BOOL&);
   LRESULT OnSchemaListItemChanged(int, LPNMHDR, BOOL&);
+  LRESULT OnSchemaCustomDraw(int, LPNMHDR, BOOL&);
   LRESULT OnProjectLink(int, LPNMHDR, BOOL&);
   LRESULT OnUserFolderLink(int, LPNMHDR, BOOL&);
   LRESULT OnButtonCustomDraw(int, LPNMHDR, BOOL&);

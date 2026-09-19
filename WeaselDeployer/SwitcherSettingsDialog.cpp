@@ -212,6 +212,10 @@ class PackageUpdateDialog : public CDialogImpl<PackageUpdateDialog> {
 
   BEGIN_MSG_MAP(PackageUpdateDialog)
   MESSAGE_HANDLER(WM_INITDIALOG, OnInitDialog)
+  MESSAGE_HANDLER(WM_ERASEBKGND, OnThemeColor)
+  MESSAGE_HANDLER(WM_CTLCOLORDLG, OnThemeColor)
+  MESSAGE_HANDLER(WM_CTLCOLORSTATIC, OnThemeColor)
+  MESSAGE_HANDLER(WM_CTLCOLORBTN, OnThemeColor)
   COMMAND_HANDLER(IDC_UPDATE_SCHEME, BN_CLICKED, OnSelectionChanged)
   COMMAND_HANDLER(IDC_UPDATE_MODEL, BN_CLICKED, OnSelectionChanged)
   COMMAND_ID_HANDLER(IDOK, OnOK)
@@ -242,6 +246,21 @@ class PackageUpdateDialog : public CDialogImpl<PackageUpdateDialog> {
         desired.right + (window.right - window.left) - client.right,
         desired.bottom + (window.bottom - window.top) - client.bottom,
         SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+  }
+
+  LRESULT OnThemeColor(UINT message, WPARAM w, LPARAM, BOOL&) {
+    if (message == WM_ERASEBKGND) {
+      RECT bounds{};
+      ::GetClientRect(m_hWnd, &bounds);
+      ::FillRect(reinterpret_cast<HDC>(w), &bounds,
+                 settings_theme::GetBrush(COLOR_BTNFACE));
+      return 1;
+    }
+    HDC dc = reinterpret_cast<HDC>(w);
+    ::SetTextColor(dc, settings_theme::GetColor(COLOR_WINDOWTEXT));
+    ::SetBkColor(dc, settings_theme::GetColor(COLOR_BTNFACE));
+    ::SetBkMode(dc, TRANSPARENT);
+    return reinterpret_cast<LRESULT>(settings_theme::GetBrush(COLOR_BTNFACE));
   }
 
   LRESULT OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
@@ -306,6 +325,15 @@ class PackageUpdateDialog : public CDialogImpl<PackageUpdateDialog> {
     } else {
       ::SetDlgItemTextW(m_hWnd, IDC_UPDATE_SUMMARY, L"");
     }
+    for (WORD id : {IDC_UPDATE_SCHEME, IDC_UPDATE_MODEL})
+      settings_navigation::StyleCheckbox(
+          m_hWnd, id, settings_navigation::ToggleState::Background::ButtonFace);
+    for (WORD id : {IDC_UPDATE_SCHEME_GROUP, IDC_UPDATE_MODEL_GROUP})
+      settings_navigation::StyleGroupBox(m_hWnd, id);
+    for (WORD id : {IDOK, IDCANCEL})
+      settings_navigation::StyleActionButton(
+          m_hWnd, id, settings_navigation::ToggleState::Background::ButtonFace);
+    settings_theme::Update(m_hWnd);
     UpdateButton();
     CenterWindow(GetParent());
     return TRUE;
@@ -1347,10 +1375,11 @@ LRESULT SwitcherSettingsDialog::OnDrawItem(UINT,
     const bool selected =
         (draw->itemState & ODS_SELECTED) != 0 && !edit_portion;
     const bool disabled = (draw->itemState & ODS_DISABLED) != 0;
-    const COLORREF surface = ::GetSysColor(COLOR_WINDOW);
-    const COLORREF selected_fill =
-        settings_navigation::Mix(::GetSysColor(COLOR_3DSHADOW), surface, 25);
-    ::FillRect(draw->hDC, &draw->rcItem, ::GetSysColorBrush(COLOR_WINDOW));
+    const COLORREF surface = settings_theme::GetColor(COLOR_WINDOW);
+    const COLORREF selected_fill = settings_navigation::Mix(
+        settings_theme::GetColor(COLOR_HIGHLIGHT), surface, 25);
+    ::FillRect(draw->hDC, &draw->rcItem,
+               settings_theme::GetBrush(COLOR_WINDOW));
 
     RECT selection = draw->rcItem;
     const int scale = ::GetDeviceCaps(draw->hDC, LOGPIXELSX);
@@ -1378,7 +1407,8 @@ LRESULT SwitcherSettingsDialog::OnDrawItem(UINT,
                   selection.top + (selection.bottom - selection.top) / 4,
                   selection.left + horizontal_inset + marker_width,
                   selection.bottom - (selection.bottom - selection.top) / 4};
-      HBRUSH marker_brush = ::CreateSolidBrush(::GetSysColor(COLOR_HIGHLIGHT));
+      HBRUSH marker_brush =
+          ::CreateSolidBrush(settings_theme::GetColor(COLOR_HIGHLIGHT));
       HRGN marker_region =
           ::CreateRoundRectRgn(marker.left, marker.top, marker.right,
                                marker.bottom, marker_width, marker_width);
@@ -1409,8 +1439,9 @@ LRESULT SwitcherSettingsDialog::OnDrawItem(UINT,
                                     : (std::max)(7, ::MulDiv(7, scale, 96));
     text_rectangle.right -= (std::max)(7, ::MulDiv(7, scale, 96));
     ::SetBkMode(draw->hDC, TRANSPARENT);
-    ::SetTextColor(draw->hDC,
-                   ::GetSysColor(disabled ? COLOR_GRAYTEXT : COLOR_WINDOWTEXT));
+    ::SetTextColor(
+        draw->hDC,
+        settings_theme::GetColor(disabled ? COLOR_GRAYTEXT : COLOR_WINDOWTEXT));
     HFONT font = reinterpret_cast<HFONT>(
         ::SendMessageW(draw->hwndItem, WM_GETFONT, 0, 0));
     const HGDIOBJ old_font = font ? ::SelectObject(draw->hDC, font) : nullptr;
@@ -1433,9 +1464,9 @@ LRESULT SwitcherSettingsDialog::OnDrawItem(UINT,
         bitmap ? ::SelectObject(buffer, bitmap) : static_cast<HGDIOBJ>(nullptr);
     HDC paint = old_bitmap ? buffer : draw->hDC;
     RECT paint_area = old_bitmap ? canvas : draw->rcItem;
-    ::FillRect(paint, &paint_area, ::GetSysColorBrush(COLOR_WINDOW));
+    ::FillRect(paint, &paint_area, settings_theme::GetBrush(COLOR_WINDOW));
     ::SetBkMode(paint, TRANSPARENT);
-    ::SetTextColor(paint, ::GetSysColor(COLOR_GRAYTEXT));
+    ::SetTextColor(paint, settings_theme::GetColor(COLOR_GRAYTEXT));
     HFONT font = reinterpret_cast<HFONT>(
         ::SendMessageW(draw->hwndItem, WM_GETFONT, 0, 0));
     const HGDIOBJ old_font = font ? ::SelectObject(paint, font) : nullptr;
@@ -1490,9 +1521,9 @@ LRESULT SwitcherSettingsDialog::OnDrawItem(UINT,
         bitmap ? ::SelectObject(buffer, bitmap) : static_cast<HGDIOBJ>(nullptr);
     HDC paint = old_bitmap ? buffer : draw->hDC;
     RECT area = old_bitmap ? RECT{0, 0, width, height} : draw->rcItem;
-    ::FillRect(paint, &area, ::GetSysColorBrush(COLOR_WINDOW));
+    ::FillRect(paint, &area, settings_theme::GetBrush(COLOR_WINDOW));
     ::SetBkMode(paint, TRANSPARENT);
-    ::SetTextColor(paint, ::GetSysColor(COLOR_WINDOWTEXT));
+    ::SetTextColor(paint, settings_theme::GetColor(COLOR_WINDOWTEXT));
     HFONT font = reinterpret_cast<HFONT>(
         ::SendMessageW(draw->hwndItem, WM_GETFONT, 0, 0));
     const HGDIOBJ old_font = font ? ::SelectObject(paint, font) : nullptr;
@@ -1534,12 +1565,12 @@ LRESULT SwitcherSettingsDialog::OnDrawItem(UINT,
         (GetBValue(base) * base_percent + GetBValue(accent) * accent_percent) /
             100);
   };
-  const COLORREF window_color = ::GetSysColor(COLOR_WINDOW);
-  const COLORREF border_color =
-      blend(window_color, ::GetSysColor(COLOR_3DSHADOW), panel ? 36 : 48);
+  const COLORREF window_color = settings_theme::GetColor(COLOR_WINDOW);
+  const COLORREF border_color = blend(
+      window_color, settings_theme::GetColor(COLOR_3DSHADOW), panel ? 36 : 48);
   RECT rectangle = draw->rcItem;
   ::FillRect(draw->hDC, &rectangle,
-             ::GetSysColorBrush(panel ? COLOR_3DFACE : COLOR_WINDOW));
+             settings_theme::GetBrush(panel ? COLOR_3DFACE : COLOR_WINDOW));
   if (divider) {
     const int y = (rectangle.top + rectangle.bottom) / 2;
     HPEN pen = ::CreatePen(PS_SOLID, 1, border_color);
@@ -1555,8 +1586,8 @@ LRESULT SwitcherSettingsDialog::OnDrawItem(UINT,
   rectangle.right -= 1;
   rectangle.bottom -= 1;
   HPEN pen = ::CreatePen(PS_SOLID, 1, border_color);
-  HBRUSH brush =
-      ::CreateSolidBrush(::GetSysColor(panel ? COLOR_WINDOW : COLOR_BTNFACE));
+  HBRUSH brush = ::CreateSolidBrush(
+      settings_theme::GetColor(panel ? COLOR_WINDOW : COLOR_BTNFACE));
   const HGDIOBJ old_pen = ::SelectObject(draw->hDC, pen);
   const HGDIOBJ old_brush = ::SelectObject(draw->hDC, brush);
   RECT rounding = {0, 0, panel ? 8 : 5, 0};
@@ -1574,8 +1605,8 @@ LRESULT SwitcherSettingsDialog::OnDrawItem(UINT,
     ::GetWindowTextW(draw->hwndItem, label, static_cast<int>(_countof(label)));
     ::SetBkMode(draw->hDC, TRANSPARENT);
     ::SetTextColor(draw->hDC, ::IsWindowEnabled(draw->hwndItem)
-                                  ? ::GetSysColor(COLOR_WINDOWTEXT)
-                                  : ::GetSysColor(COLOR_GRAYTEXT));
+                                  ? settings_theme::GetColor(COLOR_WINDOWTEXT)
+                                  : settings_theme::GetColor(COLOR_GRAYTEXT));
     HFONT font = reinterpret_cast<HFONT>(
         ::SendMessageW(draw->hwndItem, WM_GETFONT, 0, 0));
     const HGDIOBJ old_font = font ? ::SelectObject(draw->hDC, font) : nullptr;
@@ -1595,9 +1626,9 @@ LRESULT SwitcherSettingsDialog::OnCtlColorStatic(UINT,
   const int id = ::GetDlgCtrlID(reinterpret_cast<HWND>(control));
   if (id == IDC_SCHEMA_DESCRIPTION && description_brush_.m_hBrush) {
     ::SetTextColor(reinterpret_cast<HDC>(device_context),
-                   ::GetSysColor(COLOR_WINDOWTEXT));
+                   settings_theme::GetColor(COLOR_WINDOWTEXT));
     ::SetBkMode(reinterpret_cast<HDC>(device_context), TRANSPARENT);
-    return reinterpret_cast<LRESULT>(description_brush_.m_hBrush);
+    return reinterpret_cast<LRESULT>(settings_theme::GetBrush(COLOR_WINDOW));
   }
   const bool muted =
       id == IDC_SCHEMA_LAST_CHECK || id == IDC_SCHEMA_DETAIL_VERSION ||
@@ -1615,11 +1646,11 @@ LRESULT SwitcherSettingsDialog::OnCtlColorStatic(UINT,
   if (muted || card) {
     if (muted) {
       ::SetTextColor(reinterpret_cast<HDC>(device_context),
-                     ::GetSysColor(COLOR_GRAYTEXT));
+                     settings_theme::GetColor(COLOR_GRAYTEXT));
     }
     ::SetBkMode(reinterpret_cast<HDC>(device_context), TRANSPARENT);
     return reinterpret_cast<LRESULT>(
-        ::GetSysColorBrush(card ? COLOR_WINDOW : COLOR_3DFACE));
+        settings_theme::GetBrush(card ? COLOR_WINDOW : COLOR_3DFACE));
   }
   handled = FALSE;
   return 0;
@@ -1630,6 +1661,70 @@ LRESULT SwitcherSettingsDialog::OnCtlColorEdit(UINT message,
                                                LPARAM control,
                                                BOOL& handled) {
   return OnCtlColorStatic(message, device_context, control, handled);
+}
+
+LRESULT SwitcherSettingsDialog::OnSchemaCustomDraw(int,
+                                                   LPNMHDR notification,
+                                                   BOOL&) {
+  auto* draw = reinterpret_cast<NMLVCUSTOMDRAW*>(notification);
+  if (draw->nmcd.dwDrawStage == CDDS_PREPAINT)
+    return CDRF_NOTIFYITEMDRAW;
+  if (draw->nmcd.dwDrawStage != CDDS_ITEMPREPAINT)
+    return CDRF_DODEFAULT;
+  const HWND list = draw->nmcd.hdr.hwndFrom;
+  const int item = static_cast<int>(draw->nmcd.dwItemSpec);
+  const bool selected =
+      (ListView_GetItemState(list, item, LVIS_SELECTED) & LVIS_SELECTED) != 0;
+  const bool enabled = ::IsWindowEnabled(list) != FALSE;
+  const COLORREF surface = settings_theme::GetColor(COLOR_WINDOW);
+  const COLORREF accent = settings_theme::GetColor(COLOR_HIGHLIGHT);
+  const COLORREF fill =
+      selected ? settings_navigation::Mix(accent, surface, 38) : surface;
+  HBRUSH background = ::CreateSolidBrush(fill);
+  RECT row{};
+  ListView_GetItemRect(list, item, &row, LVIR_BOUNDS);
+  ::FillRect(draw->nmcd.hdc, &row, background);
+  ::DeleteObject(background);
+  RECT label{};
+  ListView_GetItemRect(list, item, &label, LVIR_LABEL);
+  const int size = settings_navigation::ScaledLogicalPixels(list, 14);
+  RECT box{row.left + 2, row.top + (row.bottom - row.top - size) / 2,
+           row.left + 2 + size,
+           row.top + (row.bottom - row.top - size) / 2 + size};
+  const bool checked = ListView_GetCheckState(list, item) != FALSE;
+  const COLORREF border =
+      checked ? accent : settings_theme::GetColor(COLOR_GRAYTEXT);
+  HBRUSH brush = ::CreateSolidBrush(checked ? accent : surface);
+  HPEN pen = ::CreatePen(PS_SOLID, 1, border);
+  auto old_brush = ::SelectObject(draw->nmcd.hdc, brush);
+  auto old_pen = ::SelectObject(draw->nmcd.hdc, pen);
+  ::RoundRect(draw->nmcd.hdc, box.left, box.top, box.right, box.bottom, 5, 5);
+  ::SelectObject(draw->nmcd.hdc, old_pen);
+  ::SelectObject(draw->nmcd.hdc, old_brush);
+  ::DeleteObject(brush);
+  ::DeleteObject(pen);
+  if (checked) {
+    pen = ::CreatePen(PS_SOLID, (std::max)(1, size / 10),
+                      settings_theme::GetColor(COLOR_HIGHLIGHTTEXT));
+    old_pen = ::SelectObject(draw->nmcd.hdc, pen);
+    ::MoveToEx(draw->nmcd.hdc, box.left + size / 4, box.top + size / 2,
+               nullptr);
+    ::LineTo(draw->nmcd.hdc, box.left + size * 2 / 5, box.top + size * 3 / 4);
+    ::LineTo(draw->nmcd.hdc, box.left + size * 4 / 5, box.top + size / 4);
+    ::SelectObject(draw->nmcd.hdc, old_pen);
+    ::DeleteObject(pen);
+  }
+  wchar_t text[256]{};
+  ListView_GetItemText(list, item, 0, text, _countof(text));
+  label.left = (std::max)(label.left, box.right + 4);
+  ::SetBkMode(draw->nmcd.hdc, TRANSPARENT);
+  ::SetTextColor(
+      draw->nmcd.hdc,
+      settings_theme::GetColor(enabled ? COLOR_WINDOWTEXT : COLOR_GRAYTEXT));
+  ::DrawTextW(
+      draw->nmcd.hdc, text, -1, &label,
+      DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+  return CDRF_SKIPDEFAULT;
 }
 
 LRESULT SwitcherSettingsDialog::OnButtonCustomDraw(int control_id,
@@ -1691,15 +1786,18 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
   schema_list_.SetExtendedListViewStyle(
       LVS_EX_FULLROWSELECT | LVS_EX_CHECKBOXES | LVS_EX_DOUBLEBUFFER,
       LVS_EX_FULLROWSELECT | LVS_EX_CHECKBOXES | LVS_EX_DOUBLEBUFFER);
-  schema_list_.SetBkColor(::GetSysColor(COLOR_WINDOW));
-  schema_list_.SetTextBkColor(::GetSysColor(COLOR_WINDOW));
+  schema_list_.SetBkColor(settings_theme::GetColor(COLOR_WINDOW));
+  schema_list_.SetTextBkColor(settings_theme::GetColor(COLOR_WINDOW));
 
   CString schema_name;
   schema_name.LoadStringW(IDS_STR_SCHEMA_NAME);
   schema_list_.AddColumn(schema_name, 0);
   CRect rect;
   schema_list_.GetClientRect(&rect);
-  schema_list_.SetColumnWidth(0, rect.Width() - 24);
+  // Put the native report-column boundary under the list's right frame.  The
+  // boundary otherwise continues through the empty area below the final row.
+  schema_list_.SetColumnWidth(0, rect.Width() + ::GetSystemMetrics(SM_CXEDGE));
+  ::ShowScrollBar(schema_list_, SB_HORZ, FALSE);
 
   description_.Attach(GetDlgItem(IDC_SCHEMA_DESCRIPTION));
   const auto blend = [](COLORREF base, COLORREF accent, int accent_percent) {
@@ -1713,7 +1811,8 @@ LRESULT SwitcherSettingsDialog::OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
             100);
   };
   description_brush_.CreateSolidBrush(
-      blend(::GetSysColor(COLOR_WINDOW), ::GetSysColor(COLOR_3DFACE), 35));
+      blend(settings_theme::GetColor(COLOR_WINDOW),
+            settings_theme::GetColor(COLOR_3DFACE), 35));
   model_progress_.Attach(GetDlgItem(IDC_MODEL_PROGRESS));
   model_progress_.SetRange32(0, 1000);
   input_mode_.Attach(GetDlgItem(IDC_INPUT_MODE));

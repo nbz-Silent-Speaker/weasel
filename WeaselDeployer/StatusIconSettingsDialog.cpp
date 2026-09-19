@@ -1068,7 +1068,7 @@ LRESULT StatusIconSettingsDialog::OnStaticColor(UINT,
   }
   const auto context = reinterpret_cast<HDC>(dc);
   ::SetBkMode(context, TRANSPARENT);
-  return reinterpret_cast<LRESULT>(::GetSysColorBrush(COLOR_WINDOW));
+  return reinterpret_cast<LRESULT>(settings_theme::GetBrush(COLOR_WINDOW));
 }
 
 LRESULT StatusIconSettingsDialog::OnButtonColor(UINT,
@@ -1084,8 +1084,8 @@ LRESULT StatusIconSettingsDialog::OnButtonColor(UINT,
     return 0;
   }
   const auto context = reinterpret_cast<HDC>(dc);
-  ::SetBkColor(context, ::GetSysColor(COLOR_WINDOW));
-  return reinterpret_cast<LRESULT>(::GetSysColorBrush(COLOR_WINDOW));
+  ::SetBkColor(context, settings_theme::GetColor(COLOR_WINDOW));
+  return reinterpret_cast<LRESULT>(settings_theme::GetBrush(COLOR_WINDOW));
 }
 
 void StatusIconSettingsDialog::DrawTaskbarPreview(const DRAWITEMSTRUCT& draw) {

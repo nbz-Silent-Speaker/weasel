@@ -11,6 +11,7 @@
 #include <cstring>
 #include <string>
 #include <vector>
+#include "SettingsTheme.h"
 
 namespace settings_navigation {
 
@@ -94,8 +95,9 @@ class HostedDialogImpl : public ATL::CDialogImpl<T> {
       style = &header->style;
       extended_style = &header->dwExtendedStyle;
     }
-    *style &= ~(static_cast<DWORD>(WS_VISIBLE) | WS_POPUP | WS_CAPTION |
-                WS_SYSMENU | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX);
+    *style &=
+        ~(static_cast<DWORD>(WS_VISIBLE) | WS_POPUP | WS_CAPTION | WS_SYSMENU |
+          WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | DS_MODALFRAME);
     *style |= WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS | DS_CONTROL;
     *extended_style &=
         ~(WS_EX_APPWINDOW | WS_EX_DLGMODALFRAME | WS_EX_WINDOWEDGE);
@@ -337,6 +339,21 @@ inline void ResizeContentFrame(HWND dialog) {
                  SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
+// Every settings page consists of the fixed content resource plus the shared
+// navigation sidebar.  Loading and fully initialized pages must use this same
+// outer size so replacing one with the other never clips or resizes the host.
+inline void ResizeForSidebarFrame(HWND dialog) {
+  ResizeContentFrame(dialog);
+  const int sidebar_width =
+      MapDialogUnits(dialog, 0, 0, kSidebarWidthDlu, 0).right;
+  RECT window{};
+  if (::GetWindowRect(dialog, &window)) {
+    ::SetWindowPos(
+        dialog, nullptr, 0, 0, window.right - window.left + sidebar_width,
+        window.bottom - window.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+  }
+}
+
 inline COLORREF Mix(COLORREF foreground, COLORREF background, int alpha) {
   const auto mix = [alpha](int first, int second) {
     return (first * alpha + second * (255 - alpha)) / 255;
@@ -347,7 +364,8 @@ inline COLORREF Mix(COLORREF foreground, COLORREF background, int alpha) {
 }
 
 inline COLORREF SidebarSurface() {
-  return Mix(::GetSysColor(COLOR_HIGHLIGHT), ::GetSysColor(COLOR_BTNFACE), 7);
+  return Mix(settings_theme::GetColor(COLOR_HIGHLIGHT),
+             settings_theme::GetColor(COLOR_BTNFACE), 7);
 }
 
 struct SidebarState {
@@ -362,6 +380,34 @@ inline LRESULT CALLBACK SidebarProc(HWND window,
                                     UINT_PTR,
                                     DWORD_PTR data) {
   auto* state = reinterpret_cast<SidebarState*>(data);
+  if (message == WM_NOTIFY && lparam) {
+    const auto* notification = reinterpret_cast<NMHDR*>(lparam);
+    wchar_t class_name[32]{};
+    ::GetClassNameW(notification->hwndFrom, class_name, _countof(class_name));
+    if (notification->code == NM_CUSTOMDRAW &&
+        _wcsicmp(class_name, L"SysLink") == 0) {
+      auto* draw = reinterpret_cast<NMCUSTOMDRAW*>(lparam);
+      if (draw->dwDrawStage == CDDS_PREPAINT)
+        return CDRF_NOTIFYITEMDRAW;
+      if (draw->dwDrawStage == CDDS_ITEMPREPAINT) {
+        ::SetTextColor(draw->hdc, settings_theme::GetColor(COLOR_HOTLIGHT));
+        ::SetBkColor(draw->hdc, settings_theme::GetColor(COLOR_WINDOW));
+        return CDRF_NEWFONT;
+      }
+    }
+  }
+  if (message == WM_COMMAND && LOWORD(wparam) == settings_theme::kNavigation) {
+    ::SendMessageW(::GetAncestor(window, GA_ROOT), settings_theme::kOpen, 0,
+                   lparam);
+    return 0;
+  }
+  if (message == WM_CTLCOLORDLG)
+    return reinterpret_cast<LRESULT>(settings_theme::GetBrush(COLOR_BTNFACE));
+  if (message >= WM_CTLCOLORMSGBOX && message <= WM_CTLCOLORSTATIC) {
+    const auto dc = reinterpret_cast<HDC>(wparam);
+    ::SetTextColor(dc, settings_theme::GetColor(COLOR_WINDOWTEXT));
+    ::SetBkColor(dc, settings_theme::GetColor(COLOR_WINDOW));
+  }
   if (message == WM_ERASEBKGND) {
     HDC dc = reinterpret_cast<HDC>(wparam);
     RECT bounds{};
@@ -370,7 +416,7 @@ inline LRESULT CALLBACK SidebarProc(HWND window,
     sidebar.right = (std::min)(sidebar.right, static_cast<LONG>(state->width));
     ::FillRect(dc, &sidebar, state->brush);
     bounds.left = sidebar.right;
-    ::FillRect(dc, &bounds, ::GetSysColorBrush(COLOR_BTNFACE));
+    ::FillRect(dc, &bounds, settings_theme::GetBrush(COLOR_BTNFACE));
     return 1;
   }
   if (message == WM_CTLCOLORSTATIC) {
@@ -385,21 +431,36 @@ inline LRESULT CALLBACK SidebarProc(HWND window,
       return reinterpret_cast<LRESULT>(state->brush);
     }
   }
-  if (message == WM_SYSCOLORCHANGE) {
+  if (message == WM_SYSCOLORCHANGE || message == settings_theme::kChanged) {
+    const bool accent_only = message == settings_theme::kChanged &&
+                             wparam == settings_theme::kAccentOnly;
     HBRUSH brush = ::CreateSolidBrush(SidebarSurface());
     if (brush) {
       ::DeleteObject(state->brush);
       state->brush = brush;
     }
     ::RedrawWindow(window, nullptr, nullptr,
-                   RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+                   settings_theme::RedrawFlags(
+                       accent_only ? settings_theme::UpdateKind::AccentOnly
+                                   : settings_theme::UpdateKind::Full));
   }
   if (message == WM_NCDESTROY) {
     ::RemoveWindowSubclass(window, SidebarProc, 4);
     ::DeleteObject(state->brush);
     delete state;
   }
-  return ::DefSubclassProc(window, message, wparam, lparam);
+  const LRESULT result = ::DefSubclassProc(window, message, wparam, lparam);
+  if (message >= WM_CTLCOLORMSGBOX && message <= WM_CTLCOLORSTATIC) {
+    for (int color : {COLOR_BTNFACE, COLOR_WINDOW}) {
+      if (result == reinterpret_cast<LRESULT>(::GetSysColorBrush(color))) {
+        const HDC dc = reinterpret_cast<HDC>(wparam);
+        ::SetTextColor(dc, settings_theme::GetColor(COLOR_WINDOWTEXT));
+        ::SetBkColor(dc, settings_theme::GetColor(color));
+        return reinterpret_cast<LRESULT>(settings_theme::GetBrush(color));
+      }
+    }
+  }
+  return result;
 }
 
 struct NavState {
@@ -423,12 +484,16 @@ inline LRESULT CALLBACK SidebarSeparatorProc(HWND window,
     RECT bounds{};
     ::GetClientRect(window, &bounds);
     const COLORREF surface = SidebarSurface();
-    const COLORREF divider = Mix(::GetSysColor(COLOR_3DSHADOW), surface, 42);
+    const COLORREF divider =
+        Mix(settings_theme::GetColor(COLOR_3DSHADOW), surface, 42);
     HBRUSH surface_brush = ::CreateSolidBrush(surface);
     HBRUSH divider_brush = ::CreateSolidBrush(divider);
     ::FillRect(dc, &bounds, surface_brush);
     const int center = (bounds.top + bounds.bottom) / 2;
-    RECT line{bounds.left, center, bounds.right, center + 1};
+    RECT line =
+        bounds.bottom > bounds.right
+            ? RECT{bounds.left, bounds.top, bounds.left + 1, bounds.bottom}
+            : RECT{bounds.left, center, bounds.right, center + 1};
     ::FillRect(dc, &line, divider_brush);
     ::DeleteObject(divider_brush);
     ::DeleteObject(surface_brush);
@@ -442,14 +507,17 @@ inline LRESULT CALLBACK SidebarSeparatorProc(HWND window,
 
 struct ToggleState {
   enum class Segment { None, Left, Middle, Right };
+  enum class Background { Window, ButtonFace, Sidebar };
 
   bool hover = false;
   bool neutral = false;
   Segment segment = Segment::None;
+  Background background = Background::Window;
 };
 
 struct CheckboxState {
   bool hover = false;
+  ToggleState::Background background = ToggleState::Background::Window;
 };
 
 struct SwitchState {
@@ -480,6 +548,21 @@ inline bool EnsureGdiPlus() {
 inline Gdiplus::Color GdiPlusColor(COLORREF color, BYTE alpha = 255) {
   return Gdiplus::Color(alpha, GetRValue(color), GetGValue(color),
                         GetBValue(color));
+}
+
+inline COLORREF ControlBackground(ToggleState::Background background) {
+  switch (background) {
+    case ToggleState::Background::ButtonFace:
+      return settings_theme::GetColor(COLOR_BTNFACE);
+    case ToggleState::Background::Sidebar:
+      return SidebarSurface();
+    default:
+      return settings_theme::GetColor(COLOR_WINDOW);
+  }
+}
+
+inline HBRUSH CreateControlBackgroundBrush(ToggleState::Background background) {
+  return ::CreateSolidBrush(ControlBackground(background));
 }
 
 inline void AddControlPath(Gdiplus::GraphicsPath& path,
@@ -546,7 +629,7 @@ inline void DrawFolderCard(HWND window,
                            const RECT& bounds,
                            bool hover) {
   const COLORREF surface = SidebarSurface();
-  const COLORREF accent = ::GetSysColor(COLOR_HIGHLIGHT);
+  const COLORREF accent = settings_theme::GetColor(COLOR_HIGHLIGHT);
   const bool focused = ::GetFocus() == window;
   const bool highlighted = hover || focused;
   const int dpi = ::GetDeviceCaps(dc, LOGPIXELSX);
@@ -651,7 +734,8 @@ inline void DrawFolderCard(HWND window,
   const int arrow_width = (std::max)(3, ::MulDiv(3, dpi, 96));
   const int arrow_height = (std::max)(5, ::MulDiv(5, dpi, 96));
   const COLORREF arrow_color =
-      highlighted ? accent : Mix(::GetSysColor(COLOR_BTNTEXT), surface, 116);
+      highlighted ? accent
+                  : Mix(settings_theme::GetColor(COLOR_BTNTEXT), surface, 116);
   Gdiplus::Pen arrow_pen(GdiPlusColor(arrow_color), stroke);
   arrow_pen.SetStartCap(Gdiplus::LineCapRound);
   arrow_pen.SetEndCap(Gdiplus::LineCapRound);
@@ -668,7 +752,7 @@ inline void DrawFolderCard(HWND window,
   const int text_left =
       icon_left + icon_width + (std::max)(7, ::MulDiv(7, dpi, 96));
   const int text_right = arrow_right - (std::max)(9, ::MulDiv(9, dpi, 96));
-  ::SetTextColor(dc, ::GetSysColor(COLOR_BTNTEXT));
+  ::SetTextColor(dc, settings_theme::GetColor(COLOR_BTNTEXT));
   const std::wstring title =
       LocalText(L"用户文件夹", L"使用者資料夾", L"User folder");
   SIZE title_size{};
@@ -689,7 +773,8 @@ inline void DrawFolderCard(HWND window,
   }
   if (secondary_font)
     ::SelectObject(dc, secondary_font);
-  ::SetTextColor(dc, Mix(::GetSysColor(COLOR_BTNTEXT), surface, 124));
+  ::SetTextColor(dc,
+                 Mix(settings_theme::GetColor(COLOR_BTNTEXT), surface, 124));
   wchar_t path[MAX_PATH]{};
   ::GetWindowTextW(window, path, MAX_PATH);
   const int text_gap = (std::max)(8, ::MulDiv(8, dpi, 96));
@@ -762,7 +847,7 @@ inline LRESULT CALLBACK NavProc(HWND window,
       ::EndPaint(window, &paint);
     };
     const COLORREF surface = SidebarSurface();
-    const COLORREF accent = ::GetSysColor(COLOR_HIGHLIGHT);
+    const COLORREF accent = settings_theme::GetColor(COLOR_HIGHLIGHT);
     const COLORREF fill =
         state->active ? Mix(accent, surface, 38)
                       : (state->hover ? Mix(accent, surface, 16) : surface);
@@ -805,7 +890,9 @@ inline LRESULT CALLBACK NavProc(HWND window,
       }
       ::DeleteObject(marker_brush);
     }
-    const bool unapplied = !state->link && HasUnappliedChanges(state->page);
+    const bool unapplied = !state->link &&
+                           ::GetDlgCtrlID(window) <= kStatusIcons &&
+                           HasUnappliedChanges(state->page);
     if (unapplied) {
       const int dpi = ::GetDeviceCaps(dc, LOGPIXELSX);
       const int dot_size = (std::max)(5, ::MulDiv(6, dpi, 96));
@@ -829,7 +916,8 @@ inline LRESULT CALLBACK NavProc(HWND window,
         reinterpret_cast<HFONT>(::SendMessage(window, WM_GETFONT, 0, 0));
     const HGDIOBJ old_font = font ? ::SelectObject(dc, font) : nullptr;
     ::SetBkMode(dc, TRANSPARENT);
-    ::SetTextColor(dc, state->link ? accent : ::GetSysColor(COLOR_BTNTEXT));
+    ::SetTextColor(
+        dc, state->link ? accent : settings_theme::GetColor(COLOR_BTNTEXT));
     if (!state->link)
       bounds.left += 18;
     if (unapplied)
@@ -877,6 +965,67 @@ inline void PaintBuffered(HWND window, const Painter& painter) {
   ::EndPaint(window, &paint);
 }
 
+inline LRESULT CALLBACK GroupBoxProc(HWND window,
+                                     UINT message,
+                                     WPARAM wparam,
+                                     LPARAM lparam,
+                                     UINT_PTR,
+                                     DWORD_PTR) {
+  if (message == WM_ERASEBKGND)
+    return 1;
+  if (message == settings_theme::kChanged) {
+    ::InvalidateRect(window, nullptr, FALSE);
+    return 0;
+  }
+  if (message == WM_PAINT) {
+    PaintBuffered(window, [&](HDC dc, const RECT& bounds) {
+      const COLORREF surface = settings_theme::GetColor(COLOR_BTNFACE);
+      HBRUSH surface_brush = ::CreateSolidBrush(surface);
+      ::FillRect(dc, &bounds, surface_brush);
+      ::DeleteObject(surface_brush);
+
+      HFONT font =
+          reinterpret_cast<HFONT>(::SendMessageW(window, WM_GETFONT, 0, 0));
+      const HGDIOBJ previous_font = font ? ::SelectObject(dc, font) : nullptr;
+      wchar_t label[128]{};
+      ::GetWindowTextW(window, label, static_cast<int>(_countof(label)));
+      SIZE text_size{};
+      ::GetTextExtentPoint32W(dc, label, static_cast<int>(wcslen(label)),
+                              &text_size);
+      const int dpi = ::GetDeviceCaps(dc, LOGPIXELSX);
+      const int line_y = (std::max)(4, static_cast<int>(text_size.cy / 2));
+      const COLORREF border =
+          Mix(settings_theme::GetColor(COLOR_3DSHADOW), surface, 82);
+      HPEN pen = ::CreatePen(PS_SOLID, 1, border);
+      HGDIOBJ previous_pen = ::SelectObject(dc, pen);
+      HGDIOBJ previous_brush = ::SelectObject(dc, ::GetStockObject(NULL_BRUSH));
+      ::RoundRect(dc, bounds.left, line_y, bounds.right - 1, bounds.bottom - 1,
+                  ::MulDiv(8, dpi, 96), ::MulDiv(8, dpi, 96));
+      ::SelectObject(dc, previous_brush);
+      ::SelectObject(dc, previous_pen);
+      ::DeleteObject(pen);
+
+      RECT title{bounds.left + ::MulDiv(10, dpi, 96), 0,
+                 bounds.left + ::MulDiv(16, dpi, 96) + text_size.cx,
+                 text_size.cy};
+      HBRUSH title_background = ::CreateSolidBrush(surface);
+      ::FillRect(dc, &title, title_background);
+      ::DeleteObject(title_background);
+      title.left += ::MulDiv(3, dpi, 96);
+      ::SetBkMode(dc, TRANSPARENT);
+      ::SetTextColor(dc, settings_theme::GetColor(COLOR_WINDOWTEXT));
+      ::DrawTextW(dc, label, -1, &title,
+                  DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOPREFIX);
+      if (previous_font)
+        ::SelectObject(dc, previous_font);
+    });
+    return 0;
+  }
+  if (message == WM_NCDESTROY)
+    ::RemoveWindowSubclass(window, GroupBoxProc, 9);
+  return ::DefSubclassProc(window, message, wparam, lparam);
+}
+
 inline LRESULT CALLBACK ToggleProc(HWND window,
                                    UINT message,
                                    WPARAM wparam,
@@ -905,20 +1054,24 @@ inline LRESULT CALLBACK ToggleProc(HWND window,
     return result;
   } else if (message == WM_PAINT) {
     PaintBuffered(window, [&](HDC dc, const RECT& bounds) {
-      ::FillRect(dc, &bounds, ::GetSysColorBrush(COLOR_WINDOW));
+      HBRUSH background = CreateControlBackgroundBrush(state->background);
+      ::FillRect(dc, &bounds, background);
+      ::DeleteObject(background);
       const bool enabled = ::IsWindowEnabled(window) != FALSE;
       const bool checked =
           ::SendMessageW(window, BM_GETCHECK, 0, 0) == BST_CHECKED;
-      const COLORREF surface = ::GetSysColor(COLOR_WINDOW);
-      const COLORREF accent = ::GetSysColor(COLOR_HIGHLIGHT);
-      const COLORREF neutral = Mix(::GetSysColor(COLOR_3DSHADOW), surface, 34);
-      const COLORREF fill = !enabled         ? ::GetSysColor(COLOR_BTNFACE)
-                            : checked        ? accent
+      const COLORREF surface = settings_theme::GetColor(COLOR_WINDOW);
+      const COLORREF accent = settings_theme::GetColor(COLOR_HIGHLIGHT);
+      const COLORREF neutral =
+          Mix(settings_theme::GetColor(COLOR_3DSHADOW), surface, 34);
+      const COLORREF fill = !enabled  ? settings_theme::GetColor(COLOR_BTNFACE)
+                            : checked ? accent
                             : state->hover   ? Mix(accent, surface, 20)
                             : state->neutral ? neutral
                                              : surface;
       const COLORREF border =
-          checked ? accent : Mix(::GetSysColor(COLOR_3DSHADOW), surface, 76);
+          checked ? accent
+                  : Mix(settings_theme::GetColor(COLOR_3DSHADOW), surface, 76);
       Gdiplus::Graphics canvas(dc);
       canvas.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
       canvas.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
@@ -945,9 +1098,10 @@ inline LRESULT CALLBACK ToggleProc(HWND window,
           reinterpret_cast<HFONT>(::SendMessageW(window, WM_GETFONT, 0, 0));
       const HGDIOBJ previous_font = font ? ::SelectObject(dc, font) : nullptr;
       ::SetBkMode(dc, TRANSPARENT);
-      ::SetTextColor(dc, !enabled  ? ::GetSysColor(COLOR_GRAYTEXT)
-                         : checked ? ::GetSysColor(COLOR_HIGHLIGHTTEXT)
-                                   : ::GetSysColor(COLOR_WINDOWTEXT));
+      ::SetTextColor(dc, !enabled ? settings_theme::GetColor(COLOR_GRAYTEXT)
+                         : checked
+                             ? settings_theme::GetColor(COLOR_HIGHLIGHTTEXT)
+                             : settings_theme::GetColor(COLOR_WINDOWTEXT));
       RECT text_bounds = bounds;
       ::DrawTextW(dc, label, -1, &text_bounds,
                   DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS |
@@ -999,9 +1153,11 @@ inline LRESULT CALLBACK CheckboxProc(HWND window,
     const bool enabled = ::IsWindowEnabled(window) != FALSE;
     const bool checked =
         ::SendMessageW(window, BM_GETCHECK, 0, 0) == BST_CHECKED;
-    const COLORREF surface = ::GetSysColor(COLOR_WINDOW);
-    const COLORREF accent = ::GetSysColor(COLOR_HIGHLIGHT);
-    ::FillRect(dc, &bounds, ::GetSysColorBrush(COLOR_WINDOW));
+    const COLORREF surface = settings_theme::GetColor(COLOR_WINDOW);
+    const COLORREF accent = settings_theme::GetColor(COLOR_HIGHLIGHT);
+    HBRUSH background = CreateControlBackgroundBrush(state->background);
+    ::FillRect(dc, &bounds, background);
+    ::DeleteObject(background);
 
     const int scale = ::GetDeviceCaps(dc, LOGPIXELSX);
     const int measured_size = ::MulDiv(14, scale, 96);
@@ -1010,12 +1166,13 @@ inline LRESULT CALLBACK CheckboxProc(HWND window,
         (std::min)(control_height - 2, (std::max)(measured_size, 12));
     const int box_top = (control_height - box_size) / 2;
     RECT box{bounds.left, box_top, bounds.left + box_size, box_top + box_size};
-    const COLORREF fill = !enabled       ? ::GetSysColor(COLOR_BTNFACE)
-                          : checked      ? accent
+    const COLORREF fill = !enabled  ? settings_theme::GetColor(COLOR_BTNFACE)
+                          : checked ? accent
                           : state->hover ? Mix(accent, surface, 18)
                                          : surface;
     const COLORREF border =
-        checked ? accent : Mix(::GetSysColor(COLOR_3DSHADOW), surface, 96);
+        checked ? accent
+                : Mix(settings_theme::GetColor(COLOR_3DSHADOW), surface, 96);
     HBRUSH brush = ::CreateSolidBrush(fill);
     HPEN pen = ::CreatePen(PS_SOLID, 1, border);
     const HGDIOBJ previous_brush = ::SelectObject(dc, brush);
@@ -1030,7 +1187,7 @@ inline LRESULT CALLBACK CheckboxProc(HWND window,
     if (checked) {
       HPEN check_pen =
           ::CreatePen(PS_SOLID, (std::max)(2, ::MulDiv(2, scale, 96)),
-                      ::GetSysColor(COLOR_HIGHLIGHTTEXT));
+                      settings_theme::GetColor(COLOR_HIGHLIGHTTEXT));
       const HGDIOBJ previous = ::SelectObject(dc, check_pen);
       ::MoveToEx(dc, box.left + box_size * 2 / 9, box.top + box_size / 2,
                  nullptr);
@@ -1046,8 +1203,8 @@ inline LRESULT CALLBACK CheckboxProc(HWND window,
         reinterpret_cast<HFONT>(::SendMessageW(window, WM_GETFONT, 0, 0));
     const HGDIOBJ previous_font = font ? ::SelectObject(dc, font) : nullptr;
     ::SetBkMode(dc, TRANSPARENT);
-    ::SetTextColor(dc, enabled ? ::GetSysColor(COLOR_WINDOWTEXT)
-                               : ::GetSysColor(COLOR_GRAYTEXT));
+    ::SetTextColor(dc, enabled ? settings_theme::GetColor(COLOR_WINDOWTEXT)
+                               : settings_theme::GetColor(COLOR_GRAYTEXT));
     RECT text_bounds = bounds;
     text_bounds.left = box.right + ::MulDiv(6, scale, 96);
     ::DrawTextW(
@@ -1092,7 +1249,7 @@ inline LRESULT CALLBACK SwitchProc(HWND window,
     return result;
   } else if (message == WM_PAINT) {
     PaintBuffered(window, [&](HDC dc, const RECT& bounds) {
-      ::FillRect(dc, &bounds, ::GetSysColorBrush(COLOR_WINDOW));
+      ::FillRect(dc, &bounds, settings_theme::GetBrush(COLOR_WINDOW));
       const bool enabled = ::IsWindowEnabled(window) != FALSE;
       const bool checked =
           ::SendMessageW(window, BM_GETCHECK, 0, 0) == BST_CHECKED;
@@ -1102,11 +1259,11 @@ inline LRESULT CALLBACK SwitchProc(HWND window,
       const int left = bounds.right - track_width;
       const int top = (bounds.bottom - bounds.top - track_height) / 2;
       RECT track{left, top, left + track_width, top + track_height};
-      const COLORREF surface = ::GetSysColor(COLOR_WINDOW);
-      const COLORREF accent = ::GetSysColor(COLOR_HIGHLIGHT);
-      const COLORREF off =
-          Mix(::GetSysColor(COLOR_3DSHADOW), surface, state->hover ? 104 : 86);
-      const COLORREF fill = !enabled  ? ::GetSysColor(COLOR_BTNFACE)
+      const COLORREF surface = settings_theme::GetColor(COLOR_WINDOW);
+      const COLORREF accent = settings_theme::GetColor(COLOR_HIGHLIGHT);
+      const COLORREF off = Mix(settings_theme::GetColor(COLOR_3DSHADOW),
+                               surface, state->hover ? 104 : 86);
+      const COLORREF fill = !enabled  ? settings_theme::GetColor(COLOR_BTNFACE)
                             : checked ? accent
                                       : off;
       Gdiplus::Graphics canvas(dc);
@@ -1154,20 +1311,21 @@ inline void DrawComboField(HWND window,
                            HDC dc,
                            const RECT& bounds,
                            const ComboState* state) {
-  const COLORREF surface = ::GetSysColor(COLOR_WINDOW);
+  const COLORREF surface = settings_theme::GetColor(COLOR_WINDOW);
   const bool enabled = ::IsWindowEnabled(window) != FALSE;
   const bool focused = ::GetFocus() == window ||
                        ::SendMessageW(window, CB_GETDROPPEDSTATE, 0, 0) != 0;
   const bool hover = state && state->hover;
-  const COLORREF fill = enabled ? surface : ::GetSysColor(COLOR_BTNFACE);
-  const COLORREF border = focused ? ::GetSysColor(COLOR_HIGHLIGHT)
-                          : hover
-                              ? Mix(::GetSysColor(COLOR_3DSHADOW), surface, 96)
-                              : Mix(::GetSysColor(COLOR_3DSHADOW), surface, 76);
+  const COLORREF fill =
+      enabled ? surface : settings_theme::GetColor(COLOR_BTNFACE);
+  const COLORREF border =
+      focused ? settings_theme::GetColor(COLOR_HIGHLIGHT)
+      : hover ? Mix(settings_theme::GetColor(COLOR_3DSHADOW), surface, 96)
+              : Mix(settings_theme::GetColor(COLOR_3DSHADOW), surface, 76);
   const COLORREF foreground =
-      ::GetSysColor(enabled ? COLOR_WINDOWTEXT : COLOR_GRAYTEXT);
+      settings_theme::GetColor(enabled ? COLOR_WINDOWTEXT : COLOR_GRAYTEXT);
   ::FillRect(dc, &bounds,
-             ::GetSysColorBrush(enabled ? COLOR_WINDOW : COLOR_BTNFACE));
+             settings_theme::GetBrush(enabled ? COLOR_WINDOW : COLOR_BTNFACE));
 
   const int scale = ::GetDeviceCaps(dc, LOGPIXELSX);
   // Keep the closed field outline at one physical pixel. Scaling this stroke
@@ -1239,10 +1397,10 @@ inline void DrawComboItem(const DRAWITEMSTRUCT& draw) {
   const bool field = (draw.itemState & ODS_COMBOBOXEDIT) != 0;
   const bool selected = (draw.itemState & ODS_SELECTED) != 0 && !field;
   const bool disabled = (draw.itemState & ODS_DISABLED) != 0;
-  const COLORREF surface = ::GetSysColor(COLOR_WINDOW);
+  const COLORREF surface = settings_theme::GetColor(COLOR_WINDOW);
   const COLORREF selected_fill =
-      Mix(::GetSysColor(COLOR_3DSHADOW), surface, 25);
-  ::FillRect(draw.hDC, &draw.rcItem, ::GetSysColorBrush(COLOR_WINDOW));
+      Mix(settings_theme::GetColor(COLOR_HIGHLIGHT), surface, 25);
+  ::FillRect(draw.hDC, &draw.rcItem, settings_theme::GetBrush(COLOR_WINDOW));
 
   RECT selection = draw.rcItem;
   const int scale = ::GetDeviceCaps(draw.hDC, LOGPIXELSX);
@@ -1270,7 +1428,8 @@ inline void DrawComboItem(const DRAWITEMSTRUCT& draw) {
                 selection.top + (selection.bottom - selection.top) / 4,
                 selection.left + horizontal_inset + marker_width,
                 selection.bottom - (selection.bottom - selection.top) / 4};
-    HBRUSH marker_brush = ::CreateSolidBrush(::GetSysColor(COLOR_HIGHLIGHT));
+    HBRUSH marker_brush =
+        ::CreateSolidBrush(settings_theme::GetColor(COLOR_HIGHLIGHT));
     HRGN marker_region =
         ::CreateRoundRectRgn(marker.left, marker.top, marker.right,
                              marker.bottom, marker_width, marker_width);
@@ -1300,8 +1459,8 @@ inline void DrawComboItem(const DRAWITEMSTRUCT& draw) {
                         : (std::max)(7, ::MulDiv(7, scale, 96));
   text.right -= (std::max)(7, ::MulDiv(7, scale, 96));
   ::SetBkMode(draw.hDC, TRANSPARENT);
-  ::SetTextColor(draw.hDC,
-                 ::GetSysColor(disabled ? COLOR_GRAYTEXT : COLOR_WINDOWTEXT));
+  ::SetTextColor(draw.hDC, settings_theme::GetColor(
+                               disabled ? COLOR_GRAYTEXT : COLOR_WINDOWTEXT));
   HFONT font =
       reinterpret_cast<HFONT>(::SendMessageW(draw.hwndItem, WM_GETFONT, 0, 0));
   const HGDIOBJ old_font = font ? ::SelectObject(draw.hDC, font) : nullptr;
@@ -1450,7 +1609,7 @@ inline LRESULT CALLBACK ComboProc(HWND window,
     const HGDIOBJ previous = bitmap ? ::SelectObject(buffer, bitmap) : nullptr;
     HDC paint_dc = bitmap ? buffer : target;
     if (paint_dc) {
-      ::FillRect(paint_dc, &bounds, ::GetSysColorBrush(COLOR_WINDOW));
+      ::FillRect(paint_dc, &bounds, settings_theme::GetBrush(COLOR_WINDOW));
       DrawComboField(window, paint_dc, bounds, state);
       if (bitmap)
         ::BitBlt(target, 0, 0, width, height, buffer, 0, 0, SRCCOPY);
@@ -1527,10 +1686,26 @@ inline void RoundDlu(HWND dialog, WORD id, int radius_dlu) {
   Round(control, measured_radius > 4 ? measured_radius : 4);
 }
 
-inline void StyleActionButton(HWND dialog, WORD id) {
+inline void StyleActionButton(
+    HWND dialog,
+    WORD id,
+    ToggleState::Background background = ToggleState::Background::Window) {
   HWND control = ::GetDlgItem(dialog, id);
-  if (control)
+  if (control) {
     Round(control, ControlCornerDiameter(control));
+    EnsureGdiPlus();
+    DWORD_PTR data = 0;
+    if (!::GetWindowSubclass(control, ToggleProc, 2, &data)) {
+      auto* state = new ToggleState;
+      if (!::SetWindowSubclass(control, ToggleProc, 2,
+                               reinterpret_cast<DWORD_PTR>(state)))
+        delete state;
+      else
+        data = reinterpret_cast<DWORD_PTR>(state);
+    }
+    if (data)
+      reinterpret_cast<ToggleState*>(data)->background = background;
+  }
 }
 
 inline void StyleInput(HWND dialog, WORD id) {
@@ -1574,7 +1749,10 @@ inline void StyleSegmentedToggle(HWND dialog,
   }
 }
 
-inline void StyleCheckbox(HWND dialog, WORD id) {
+inline void StyleCheckbox(
+    HWND dialog,
+    WORD id,
+    ToggleState::Background background = ToggleState::Background::Window) {
   HWND control = ::GetDlgItem(dialog, id);
   if (!control)
     return;
@@ -1584,7 +1762,18 @@ inline void StyleCheckbox(HWND dialog, WORD id) {
     if (!::SetWindowSubclass(control, CheckboxProc, 3,
                              reinterpret_cast<DWORD_PTR>(state)))
       delete state;
+    else
+      existing = reinterpret_cast<DWORD_PTR>(state);
   }
+  if (existing)
+    reinterpret_cast<CheckboxState*>(existing)->background = background;
+}
+
+inline void StyleGroupBox(HWND dialog, WORD id) {
+  HWND control = ::GetDlgItem(dialog, id);
+  DWORD_PTR existing = 0;
+  if (control && !::GetWindowSubclass(control, GroupBoxProc, 9, &existing))
+    ::SetWindowSubclass(control, GroupBoxProc, 9, 0);
 }
 
 inline void StyleSwitch(HWND dialog, WORD id) {
@@ -1645,11 +1834,12 @@ inline void PrepareCard(HWND dialog, WORD id) {
 
 inline void DrawCard(const DRAWITEMSTRUCT& draw) {
   RECT bounds = draw.rcItem;
-  ::FillRect(draw.hDC, &bounds, ::GetSysColorBrush(COLOR_BTNFACE));
+  ::FillRect(draw.hDC, &bounds, settings_theme::GetBrush(COLOR_BTNFACE));
   bounds.right -= 1;
   bounds.bottom -= 1;
-  const COLORREF surface = ::GetSysColor(COLOR_WINDOW);
-  const COLORREF border = Mix(::GetSysColor(COLOR_3DSHADOW), surface, 76);
+  const COLORREF surface = settings_theme::GetColor(COLOR_WINDOW);
+  const COLORREF border =
+      Mix(settings_theme::GetColor(COLOR_3DSHADOW), surface, 76);
   HBRUSH brush = ::CreateSolidBrush(surface);
   HPEN pen = ::CreatePen(PS_SOLID, 1, border);
   const HGDIOBJ previous_brush = ::SelectObject(draw.hDC, brush);
@@ -1665,7 +1855,7 @@ inline void DrawCard(const DRAWITEMSTRUCT& draw) {
 
 inline void Install(HWND dialog, Page active, const InstallOptions& options) {
   DisableWindowTransitions(dialog);
-  ResizeContentFrame(dialog);
+  ResizeForSidebarFrame(dialog);
   ::SetWindowTextW(
       dialog,
       LocalText(L"小狼毫设置", L"小狼毫設定", L"Weasel settings").c_str());
@@ -1702,11 +1892,6 @@ inline void Install(HWND dialog, Page active, const InstallOptions& options) {
         return TRUE;
       },
       reinterpret_cast<LPARAM>(&shift));
-  RECT window{};
-  ::GetWindowRect(dialog, &window);
-  ::SetWindowPos(
-      dialog, nullptr, 0, 0, window.right - window.left + sidebar_width,
-      window.bottom - window.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
   RECT client{};
   ::GetClientRect(dialog, &client);
   const auto vertical = [&](int dlu) -> int {
@@ -1749,8 +1934,9 @@ inline void Install(HWND dialog, Page active, const InstallOptions& options) {
       delete state;
     top += item_height + item_gap;
   }
-  Create(dialog, L"STATIC", L"", SS_ETCHEDVERT, 0, sidebar_width - 1, margin, 1,
-         client.bottom - margin * 2);
+  HWND sidebar_divider = Create(dialog, L"STATIC", L"", 0, 0, sidebar_width - 1,
+                                margin, 1, client.bottom - margin * 2);
+  ::SetWindowSubclass(sidebar_divider, SidebarSeparatorProc, 8, 0);
 
   const int button_height = vertical(kButtonHeightDlu);
   const int action_button_width =
@@ -1775,6 +1961,18 @@ inline void Install(HWND dialog, Page active, const InstallOptions& options) {
   };
   create_sidebar_separator(action_separator_y);
   create_sidebar_separator(folder_separator_y);
+  const int appearance_y = action_separator_y - vertical(6) - item_height;
+  create_sidebar_separator(appearance_y - vertical(6) - separator_height);
+  HWND appearance = Create(
+      dialog, L"BUTTON",
+      LocalText(L"设置界面颜色", L"設定介面色彩", L"Settings appearance"),
+      BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP, settings_theme::kNavigation, margin,
+      appearance_y, content_width, item_height);
+  auto* appearance_state = new NavState{false, false, false, Page::Input};
+  if (!appearance ||
+      !::SetWindowSubclass(appearance, NavProc, 1,
+                           reinterpret_cast<DWORD_PTR>(appearance_state)))
+    delete appearance_state;
   HWND folder =
       Create(dialog, L"BUTTON", options.user_folder,
              BS_PUSHBUTTON | BS_FLAT | WS_TABSTOP, kUserFolder, folder_link_x,
@@ -1790,7 +1988,7 @@ inline void Install(HWND dialog, Page active, const InstallOptions& options) {
                    action_button_width, button_height,
                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
     ::SetWindowTextW(apply, LocalText(L"应用", L"套用", L"Apply").c_str());
-    StyleActionButton(dialog, options.apply);
+    StyleActionButton(dialog, options.apply, ToggleState::Background::Sidebar);
   }
   HWND close = ::GetDlgItem(dialog, options.close);
   if (!close)
@@ -1802,7 +2000,7 @@ inline void Install(HWND dialog, Page active, const InstallOptions& options) {
                    action_button_width, button_height,
                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
   ::SetWindowTextW(close, LocalText(L"关闭", L"關閉", L"Close").c_str());
-  StyleActionButton(dialog, options.close);
+  StyleActionButton(dialog, options.close, ToggleState::Background::Sidebar);
   for (WORD id : options.hide)
     ::ShowWindow(::GetDlgItem(dialog, id), SW_HIDE);
 }

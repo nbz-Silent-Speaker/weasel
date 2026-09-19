@@ -7,6 +7,7 @@
 #include "UIStyleSettings.h"
 #include "UIStyleSettingsDialog.h"
 #include "SettingsPerformance.h"
+#include "SettingsAppearancePopup.h"
 #include "DictManagementDialog.h"
 #include <WeaselConstants.h>
 #include <WeaselIPC.h>
@@ -32,12 +33,15 @@ static void CreateFileIfNotExist(std::string filename) {
     o.close();
   }
 }
-Configurator::Configurator() {
-  CreateFileIfNotExist("default.custom.yaml");
-  CreateFileIfNotExist("weasel.custom.yaml");
-}
+Configurator::Configurator() = default;
 
 void Configurator::Initialize() {
+  const auto setup_started = settings_performance::Now();
+  // Touching a user folder on a sleeping/removable drive can block for much
+  // longer than creating the settings frame.  Keep it in Initialize() so the
+  // settings path can paint its loading frame before accessing that drive.
+  CreateFileIfNotExist("default.custom.yaml");
+  CreateFileIfNotExist("weasel.custom.yaml");
   RIME_STRUCT(RimeTraits, weasel_traits);
   std::string shared_dir = wtou8(WeaselSharedDataPath().wstring());
   std::string user_dir = wtou8(WeaselUserDataPath().wstring());
@@ -54,8 +58,11 @@ void Configurator::Initialize() {
   RimeApi* rime_api = rime_get_api();
   assert(rime_api);
   rime_api->setup(&weasel_traits);
+  settings_performance::Record("rime.setup", setup_started);
   LOG(INFO) << "WeaselDeployer reporting.";
+  const auto deployer_started = settings_performance::Now();
   rime_api->deployer_initialize(NULL);
+  settings_performance::Record("rime.deployer_initialize", deployer_started);
 }
 
 static bool configure_first_run_schema(RimeLeversApi* api,
@@ -193,6 +200,23 @@ LRESULT CALLBACK SettingsHostProc(HWND window,
                                   UINT message,
                                   WPARAM wparam,
                                   LPARAM lparam) {
+  if (message == settings_theme::kOpen) {
+    settings_theme::Popup().Open(window, reinterpret_cast<HWND>(lparam));
+    return 0;
+  }
+  if (message == WM_ERASEBKGND) {
+    RECT bounds{};
+    ::GetClientRect(window, &bounds);
+    ::FillRect(reinterpret_cast<HDC>(wparam), &bounds,
+               settings_theme::GetBrush(COLOR_BTNFACE));
+    return 1;
+  }
+  if (message == WM_SETTINGCHANGE ||
+      message == WM_DWMCOLORIZATIONCOLORCHANGED ||
+      message == WM_SYSCOLORCHANGE || message == WM_THEMECHANGED) {
+    settings_theme::Update(window);
+    settings_theme::Popup().SystemChanged();
+  }
   if (message == WM_CLOSE) {
     const HWND active =
         reinterpret_cast<HWND>(::GetPropW(window, kSettingsHostActivePage));
@@ -244,7 +268,10 @@ class SettingsHostWindow {
       type.lpfnWndProc = SettingsHostProc;
       type.hInstance = instance;
       type.hCursor = ::LoadCursorW(nullptr, IDC_ARROW);
-      type.hbrBackground = ::GetSysColorBrush(COLOR_BTNFACE);
+      // The configured light/dark mode may intentionally differ from the
+      // Windows mode.  A system class brush would expose a large light block
+      // whenever the host is erased before its page children repaint.
+      type.hbrBackground = nullptr;
       type.lpszClassName = kSettingsHostClass;
       if (!::RegisterClassExW(&type) &&
           ::GetLastError() != ERROR_CLASS_ALREADY_EXISTS) {
@@ -252,9 +279,11 @@ class SettingsHostWindow {
       }
     }
 
-    constexpr DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME |
+    constexpr DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU |
                             WS_MINIMIZEBOX | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
-    constexpr DWORD extended_style = WS_EX_WINDOWEDGE | WS_EX_CONTROLPARENT;
+    // WS_EX_WINDOWEDGE draws a legacy light strip below a dark Windows 11
+    // title bar.  The settings layout uses a fixed DPI-scaled logical size.
+    constexpr DWORD extended_style = WS_EX_CONTROLPARENT;
     const RECT initial = CenteredWindowBounds(monitor, 1, 1);
     window_ =
         ::CreateWindowExW(extended_style, kSettingsHostClass,
@@ -323,6 +352,78 @@ class SettingsHostWindow {
   HWND window_ = nullptr;
 };
 
+class SettingsLoadingDialog
+    : public settings_navigation::HostedDialogImpl<SettingsLoadingDialog> {
+ public:
+  enum { IDD = IDD_SWITCHER_SETTING };
+
+  BEGIN_MSG_MAP(SettingsLoadingDialog)
+  MESSAGE_HANDLER(WM_INITDIALOG, OnInitDialog)
+  MESSAGE_HANDLER(WM_ERASEBKGND, OnEraseBackground)
+  MESSAGE_HANDLER(WM_PAINT, OnPaint)
+  MESSAGE_HANDLER(settings_theme::kChanged, OnThemeChanged)
+  END_MSG_MAP()
+
+ private:
+  LRESULT OnInitDialog(UINT, WPARAM, LPARAM, BOOL&) {
+    // Reuse the input page resource only for its exact 540 x 286 DLU frame and
+    // Segoe UI font.  Its data-bound controls stay hidden until Rime is ready.
+    ::EnumChildWindows(
+        m_hWnd,
+        [](HWND child, LPARAM parent) {
+          if (::GetParent(child) == reinterpret_cast<HWND>(parent))
+            ::ShowWindow(child, SW_HIDE);
+          return TRUE;
+        },
+        reinterpret_cast<LPARAM>(m_hWnd));
+    settings_navigation::ResizeForSidebarFrame(m_hWnd);
+    return settings_navigation::HostedPageInitResult();
+  }
+
+  LRESULT OnEraseBackground(UINT, WPARAM, LPARAM, BOOL&) { return 1; }
+
+  LRESULT OnThemeChanged(UINT, WPARAM, LPARAM, BOOL&) {
+    ::InvalidateRect(m_hWnd, nullptr, FALSE);
+    return 0;
+  }
+
+  LRESULT OnPaint(UINT, WPARAM, LPARAM, BOOL&) {
+    settings_navigation::PaintBuffered(m_hWnd, [this](HDC dc,
+                                                      const RECT& bounds) {
+      RECT sidebar = bounds;
+      sidebar.right =
+          settings_navigation::MapDialogUnits(
+              m_hWnd, 0, 0, settings_navigation::kSidebarWidthDlu, 0)
+              .right;
+      HBRUSH sidebar_brush =
+          ::CreateSolidBrush(settings_navigation::SidebarSurface());
+      ::FillRect(dc, &sidebar, sidebar_brush);
+      ::DeleteObject(sidebar_brush);
+
+      RECT content = bounds;
+      content.left = sidebar.right;
+      ::FillRect(dc, &content, settings_theme::GetBrush(COLOR_BTNFACE));
+      const int inset = settings_navigation::MapDialogUnits(
+                            m_hWnd, settings_navigation::kPageInsetDlu, 0, 0, 0)
+                            .right;
+      content.left += inset;
+      content.right -= inset;
+      HFONT font =
+          reinterpret_cast<HFONT>(::SendMessageW(m_hWnd, WM_GETFONT, 0, 0));
+      const HGDIOBJ old_font = font ? ::SelectObject(dc, font) : nullptr;
+      ::SetBkMode(dc, TRANSPARENT);
+      ::SetTextColor(dc, settings_theme::GetColor(COLOR_GRAYTEXT));
+      const auto text = settings_navigation::LocalText(
+          L"正在加载设置…", L"正在載入設定…", L"Loading settings…");
+      ::DrawTextW(dc, text.c_str(), -1, &content,
+                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+      if (old_font)
+        ::SelectObject(dc, old_font);
+    });
+    return 0;
+  }
+};
+
 class SettingsPageInstance {
  public:
   SettingsPageInstance() = default;
@@ -336,6 +437,7 @@ class SettingsPageInstance {
     if (page == settings_navigation::Page::Input) {
       const ULONGLONG started = ::GetTickCount64();
       LOG(INFO) << "Creating Input settings page.";
+      const auto input_started = settings_performance::Now();
       RimeModule* levers = rime_get_api()->find_module("levers");
       if (!levers) {
         LOG(ERROR) << "Settings preview could not load the Rime levers module.";
@@ -346,17 +448,14 @@ class SettingsPageInstance {
         LOG(ERROR) << "Settings preview could not load the Rime levers API.";
         return false;
       }
-      LOG(INFO) << "Input settings levers API ready after "
-                << (::GetTickCount64() - started) << " ms.";
       switcher_ = input_api_->switcher_settings_init();
-      LOG(INFO) << "Input switcher object ready after "
-                << (::GetTickCount64() - started) << " ms.";
       auto* settings = reinterpret_cast<RimeCustomSettings*>(switcher_);
       if (!switcher_ || !input_api_->load_settings(settings)) {
         LOG(ERROR) << "Settings preview could not load switcher settings.";
         Reset();
         return false;
       }
+      settings_performance::Record("input.settings", input_started);
       LOG(INFO) << "Input switcher settings loaded after "
                 << (::GetTickCount64() - started) << " ms.";
       input_dialog_ = std::make_unique<SwitcherSettingsDialog>(switcher_);
@@ -406,6 +505,7 @@ class SettingsPageInstance {
       return false;
     }
     settings_navigation::AttachHost(window_);
+    settings_theme::Update(owner);
     return true;
   }
 
@@ -510,6 +610,7 @@ class SettingsPageInstance {
 }  // namespace
 
 int Configurator::ConfigureSettings(settings_navigation::Page initial_page) {
+  settings_theme::Refresh();
   const auto started = settings_performance::Now();
   HWND owner = ::GetActiveWindow();
   const HMONITOR target_monitor = SelectSettingsMonitor(owner);
@@ -522,6 +623,34 @@ int Configurator::ConfigureSettings(settings_navigation::Page initial_page) {
     LOG(ERROR) << "Unable to create the stable settings window frame.";
     return 1;
   }
+
+  SettingsLoadingDialog loading;
+  HWND loading_window = loading.CreateHosted(host.window());
+  if (!loading_window || !host.SizeForPage(loading_window, target_monitor) ||
+      !::SetWindowPos(
+          loading_window, HWND_TOP, 0, 0, 0, 0,
+          SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW)) {
+    LOG(ERROR) << "Unable to create the settings loading frame.";
+    return 1;
+  }
+  host.SetActivePage(loading_window);
+  settings_theme::Update(host.window());
+  if (!host.ShowCentered(target_monitor)) {
+    LOG(ERROR) << "Unable to show the centered settings loading frame.";
+    return 1;
+  }
+  ::UpdateWindow(host.window());
+  ::SetForegroundWindow(host.window());
+  settings_performance::Record("host.frame-visible", started);
+
+  // librime owns process-global state and must be initialized and queried on
+  // this UI thread.  The lightweight frame is already visible, so a sleeping
+  // user-data drive cannot make the tray command appear unresponsive.
+  Initialize();
+
+  // Preserve the already painted loading surface while the real page creates
+  // and applies native themes to its controls.
+  ::SendMessageW(host.window(), WM_SETREDRAW, FALSE, 0);
   auto& initial = pages[settings_navigation::PageIndex(initial_page)];
   initial = std::make_unique<SettingsPageInstance>();
   if (!initial->Create(initial_page, host.window())) {
@@ -534,7 +663,6 @@ int Configurator::ConfigureSettings(settings_navigation::Page initial_page) {
     LOG(ERROR) << "Unable to size the settings window frame.";
     return 1;
   }
-  host.SetActivePage(active->window());
 
   // Only prepare the requested page. Unvisited pages must never delay the
   // first visible frame of the settings window.
@@ -543,13 +671,16 @@ int Configurator::ConfigureSettings(settings_navigation::Page initial_page) {
   }
   settings_performance::Record("host.prepared", started);
 
+  // Replace the loading surface as one atomic host repaint.  The outer frame
+  // has already been visible and centered throughout initialization.
+  ::ShowWindow(loading_window, SW_HIDE);
   ::ShowWindow(active->window(), SW_SHOW);
-  if (!host.ShowCentered(target_monitor)) {
-    LOG(ERROR) << "Unable to center the settings window before showing it.";
-    return 1;
-  }
-  ::UpdateWindow(host.window());
-  ::SetForegroundWindow(host.window());
+  host.SetActivePage(active->window());
+  loading.DestroyWindow();
+  ::SendMessageW(host.window(), WM_SETREDRAW, TRUE, 0);
+  ::RedrawWindow(
+      host.window(), nullptr, nullptr,
+      RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN | RDW_UPDATENOW);
   ::SetFocus(::GetDlgItem(
       active->window(),
       static_cast<WORD>(settings_navigation::kInput +
@@ -608,6 +739,9 @@ int Configurator::ConfigureSettings(settings_navigation::Page initial_page) {
       refresh_shared_state();
       continue;
     }
+
+    if (settings_theme::Popup().Translate(message))
+      continue;
 
     if (!message.hwnd &&
         message.message == settings_navigation::kHostApplyMessage) {

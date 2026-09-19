@@ -54,6 +54,18 @@
     <ClInclude Include="AppearancePreview.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="SettingsAppearancePopup.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="SettingsColor.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="SettingsColorPicker.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="SettingsTheme.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="..\include\WeaselAppearanceDraft.h">
       <Filter>Header Files</Filter>
     </ClInclude>

@@ -3,6 +3,8 @@
 #include "stdafx.h"
 #include <WeaselUtility.h>
 #include <WeaselColorScheme.h>
+#include <array>
+#include <filesystem>
 #include <fstream>
 #include "WeaselDeployer.h"
 #include "Configurator.h"
@@ -16,6 +18,62 @@
 CAppModule _Module;
 
 static int Run(LPTSTR lpCmdLine);
+
+namespace {
+constexpr std::uintmax_t kSettingsWarmFileLimit = 2 * 1024 * 1024;
+constexpr size_t kSettingsWarmFileCount = 256;
+
+bool IsSettingsMetadata(const std::filesystem::path& path) {
+  const std::wstring name = path.filename().wstring();
+  if (name == L"default.yaml" || name == L"default.custom.yaml" ||
+      name == L"weasel.yaml" || name == L"weasel.custom.yaml") {
+    return true;
+  }
+  constexpr wchar_t suffix[] = L".schema.yaml";
+  return name.size() >= _countof(suffix) - 1 &&
+         name.compare(name.size() - (_countof(suffix) - 1),
+                      _countof(suffix) - 1, suffix) == 0;
+}
+
+void WarmSettingsDirectory(const std::filesystem::path& directory,
+                           size_t* warmed_files) {
+  if (!warmed_files || *warmed_files >= kSettingsWarmFileCount)
+    return;
+  std::error_code error;
+  for (std::filesystem::directory_iterator iterator(directory, error), end;
+       !error && iterator != end && *warmed_files < kSettingsWarmFileCount;
+       iterator.increment(error)) {
+    const auto& entry = *iterator;
+    if (!entry.is_regular_file(error) || error ||
+        !IsSettingsMetadata(entry.path())) {
+      error.clear();
+      continue;
+    }
+    const auto size = entry.file_size(error);
+    if (error || size > kSettingsWarmFileLimit) {
+      error.clear();
+      continue;
+    }
+    std::ifstream input(entry.path(), std::ios::binary);
+    std::array<char, 64 * 1024> buffer{};
+    while (input)
+      input.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+    ++*warmed_files;
+  }
+}
+
+void WarmSettingsMetadata() {
+  const ULONGLONG started = ::GetTickCount64();
+  size_t warmed_files = 0;
+  const auto shared = WeaselSharedDataPath();
+  const auto user = WeaselUserDataPath();
+  WarmSettingsDirectory(shared, &warmed_files);
+  WarmSettingsDirectory(user, &warmed_files);
+  WarmSettingsDirectory(user / L"build", &warmed_files);
+  LOG(INFO) << "Warmed " << warmed_files << " settings metadata files in "
+            << (::GetTickCount64() - started) << " ms.";
+}
+}  // namespace
 
 int APIENTRY _tWinMain(HINSTANCE hInstance,
                        HINSTANCE hPrevInstance,
@@ -71,11 +129,20 @@ int APIENTRY _tWinMain(HINSTANCE hInstance,
   CreateDirectory(WeaselUserDataPath().c_str(), NULL);
 
   int ret = 0;
-  HANDLE hMutex = CreateMutex(NULL, TRUE, L"WeaselDeployerExclusiveMutex");
+  // The automatic package check is a network operation started by the tray
+  // service during sign-in.  It must not own the deployer UI lock: on a cold
+  // boot that made the first /input process exit before creating a window.
+  const bool package_check =
+      lpCmdLine && !wcscmp(L"/package-update-check", lpCmdLine);
+  HANDLE hMutex = CreateMutex(NULL, TRUE,
+                              package_check ? L"WeaselPackageUpdateCheckMutex"
+                                            : L"WeaselDeployerExclusiveMutex");
   if (!hMutex) {
     ret = 1;
   } else if (GetLastError() == ERROR_ALREADY_EXISTS) {
-    ret = 1;
+    // A duplicate scheduled check has no work to do.  Interactive deployer
+    // commands retain the existing single-instance error semantics.
+    ret = package_check ? 0 : 1;
   } else {
     ret = Run(lpCmdLine);
   }
@@ -91,7 +158,6 @@ int APIENTRY _tWinMain(HINSTANCE hInstance,
 
 static int Run(LPTSTR lpCmdLine) {
   Configurator configurator;
-  configurator.Initialize();
 
   if (!wcscmp(L"/model-download-complete", lpCmdLine)) {
     WanxiangModelManager model_manager;
@@ -111,6 +177,10 @@ static int Run(LPTSTR lpCmdLine) {
   }
 
   if (!wcscmp(L"/package-update-check", lpCmdLine)) {
+    // This process is launched hidden after the tray is ready.  Reading the
+    // small settings metadata here primes the OS file cache for the first
+    // interactive settings launch without calling librime off its UI thread.
+    WarmSettingsMetadata();
     const auto frequency =
         WanxiangUpdateManager::LoadFrequency("wanxiang_lite");
     if (!WanxiangUpdateManager::IsAutomaticCheckDue(frequency))
@@ -155,6 +225,9 @@ static int Run(LPTSTR lpCmdLine) {
     return 0;
   }
 
+  // Settings must create their frame before Rime reads the user's schemas.
+  // ConfigureSettings performs that initialization after the first visible
+  // frame, so do not initialize the deployer on this path.
   if (!wcscmp(L"/settings", lpCmdLine))
     return configurator.ConfigureColorScheme(
         weasel::ColorSchemeTarget::Default);
@@ -164,6 +237,11 @@ static int Run(LPTSTR lpCmdLine) {
     return configurator.ConfigureFonts();
   if (!wcscmp(L"/status-icons", lpCmdLine))
     return configurator.ConfigureStatusIcons();
+  if (!lpCmdLine[0])
+    return configurator.Run(false);
+
+  configurator.Initialize();
+
   if (!wcscmp(L"/acrylic-color", lpCmdLine))
     return configurator.ConfigureColorScheme(
         weasel::ColorSchemeTarget::Acrylic);

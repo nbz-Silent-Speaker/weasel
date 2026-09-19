@@ -5,6 +5,25 @@ $navigationPath = Join-Path $root 'WeaselDeployer/SettingsNavigation.h'
 $navigation = Get-Content -LiteralPath $navigationPath -Raw
 $resourcePath = Join-Path $root 'WeaselDeployer/WeaselDeployer.rc'
 $resource = Get-Content -LiteralPath $resourcePath -Raw
+$configuratorPath = Join-Path $root 'WeaselDeployer/Configurator.cpp'
+$configurator = Get-Content -LiteralPath $configuratorPath -Raw
+$themePath = Join-Path $root 'WeaselDeployer/SettingsTheme.h'
+$theme = Get-Content -LiteralPath $themePath -Raw
+$deployerPath = Join-Path $root 'WeaselDeployer/WeaselDeployer.cpp'
+$deployer = Get-Content -LiteralPath $deployerPath -Raw
+if ($resource -match
+    'IDC_SCHEMA_LIST,"SysListView32"[^\r\n]*WS_VSCROLL') {
+  throw 'The schema list must not force a scrollbar when every item is visible.'
+}
+$switcherSource = Get-Content -LiteralPath (
+  Join-Path $root 'WeaselDeployer/SwitcherSettingsDialog.cpp') -Raw
+if ($switcherSource -notmatch
+      'schema_list_\.SetColumnWidth\([\s\S]{0,80}?rect\.Width\(\)\s*\+\s*::GetSystemMetrics\(SM_CXEDGE\)' -or
+    $switcherSource -notmatch 'ShowScrollBar\(schema_list_, SB_HORZ, FALSE\)' -or
+    $switcherSource -match 'rect\.Width\(\)\s*-\s*24' -or
+    $switcherSource -match 'CDRF_NOTIFYPOSTPAINT') {
+  throw 'The schema-list column boundary must stay under the right frame.'
+}
 
 $requiredConstants = [ordered]@{
   kContentWidthDlu = 540
@@ -109,6 +128,41 @@ if ($navigation -notmatch 'LocalText\(L"小狼毫设置"') {
 if ($navigation -notmatch 'DisableWindowTransitions\(dialog\);') {
   throw 'Shared settings frame allows top-level transition flashes.'
 }
+if ($configurator -notmatch 'type\.hbrBackground\s*=\s*nullptr' -or
+    $configurator -notmatch
+      'WM_ERASEBKGND[\s\S]{0,220}?settings_theme::GetBrush\(COLOR_BTNFACE\)') {
+  throw 'The settings host must erase with the configured theme surface.'
+}
+
+$frameVisible = $configurator.IndexOf('Record("host.frame-visible"')
+$initializeAfterFrame = $configurator.IndexOf('Initialize();', $frameVisible)
+if ($frameVisible -lt 0 -or $initializeAfterFrame -lt $frameVisible -or
+    $configurator -notmatch 'Configurator::Configurator\(\)\s*=\s*default') {
+  throw 'Cold user-folder and Rime work must not block the first settings frame.'
+}
+if ($theme -notmatch 'Colors\(\)\.dark\s*\?\s*RGB\(63, 63, 63\)\s*:\s*RGB\(210, 210, 210\)' -or
+    $configurator -match 'WS_EX_WINDOWEDGE\s*\|\s*WS_EX_CONTROLPARENT' -or
+    $configurator -match 'WS_THICKFRAME') {
+  throw 'The settings host must use a mode-aware, fixed DPI-aware frame.'
+}
+if ($deployer -notmatch 'WeaselPackageUpdateCheckMutex' -or
+    $deployer -notmatch 'package_check\s*\?\s*L"WeaselPackageUpdateCheckMutex"') {
+  throw 'The scheduled package check must not own the interactive deployer lock.'
+}
+$warmMetadata = $deployer.IndexOf('WarmSettingsMetadata();')
+$automaticCheck = $deployer.IndexOf('WanxiangUpdateManager::IsAutomaticCheckDue',
+                                     $warmMetadata)
+if ($warmMetadata -lt 0 -or $automaticCheck -lt $warmMetadata -or
+    $deployer -notmatch 'kSettingsWarmFileLimit' -or
+    $deployer -notmatch '\.schema\.yaml') {
+  throw 'The hidden startup check must safely warm settings metadata before checking the network schedule.'
+}
+$settingsDispatch = $deployer.IndexOf('if (!wcscmp(L"/input", lpCmdLine))')
+$eagerInitialize = $deployer.IndexOf('configurator.Initialize();', $settingsDispatch)
+if ($settingsDispatch -lt 0 -or $eagerInitialize -lt 0 -or
+    $settingsDispatch -gt $eagerInitialize) {
+  throw 'Interactive settings dispatch must precede synchronous deployer initialization.'
+}
 $configuratorPath = Join-Path $root 'WeaselDeployer/Configurator.cpp'
 $configurator = Get-Content -LiteralPath $configuratorPath -Raw
 if ($configurator -notmatch 'class\s+SettingsPageInstance' -or
@@ -126,6 +180,14 @@ if ($configurator -notmatch
   throw 'Settings host must be centered on the launch monitor before its first visible frame.'
 }
 $switcherDialog = Get-Content -LiteralPath (Join-Path $root 'WeaselDeployer/SwitcherSettingsDialog.cpp') -Raw
+if ($switcherDialog -notmatch
+      'class\s+PackageUpdateDialog[\s\S]{0,800}?WM_ERASEBKGND' -or
+    $switcherDialog -notmatch
+      'class\s+PackageUpdateDialog[\s\S]{0,12000}?settings_theme::Update\(m_hWnd\)' -or
+    $switcherDialog -notmatch 'StyleGroupBox\(m_hWnd, id\)' -or
+    $switcherDialog -notmatch 'ToggleState::Background::ButtonFace') {
+  throw 'The package update dialog no longer follows the settings theme.'
+}
 if ($switcherDialog -match 'BringWindowToTop\s*\(') {
   throw 'The input settings page must remain hidden until it is embedded in the centered host.'
 }
@@ -136,21 +198,55 @@ if ($configurator -notmatch 'HostedPageCreationScope\s+hosted_page_creation' -or
     $navigation -notmatch 'WS_CHILD\s*\|\s*WS_CLIPCHILDREN') {
   throw 'Settings pages must be created as hidden host children without a top-level reparenting transition.'
 }
-$createHost = $configurator.IndexOf('if (!host.Create(owner, target_monitor))')
-$createPage = $configurator.IndexOf('if (!initial->Create(initial_page, host.window()))')
-$sizeHost = $configurator.IndexOf('host.SizeForPage(active->window(), target_monitor)')
-$preparePage = $configurator.IndexOf('ShowWindow(active->window(), SW_SHOW)')
-$showHost = $configurator.IndexOf('host.ShowCentered(target_monitor)')
-$focusPage = $configurator.IndexOf('SetFocus(::GetDlgItem(')
-if ($createHost -lt 0 -or $createPage -lt $createHost -or
-    $sizeHost -lt $createPage -or $preparePage -lt $sizeHost -or
-    $showHost -lt $preparePage -or $focusPage -lt $showHost) {
-  throw 'Initial settings visibility order must be host, child, layout, child preparation, atomic host show, then focus.'
+if ($navigation -notmatch
+      'WS_MAXIMIZEBOX\s*\|\s*DS_MODALFRAME[\s\S]{0,120}?WS_CHILD' -or
+    $navigation -notmatch
+      'WS_EX_DLGMODALFRAME\s*\|\s*WS_EX_WINDOWEDGE') {
+  throw 'Hosted pages must strip the dialog modal frame before Windows derives child extended styles.'
 }
-$freezeHost = $configurator.IndexOf('SendMessageW(host.window(), WM_SETREDRAW, FALSE')
+$createHost = $configurator.IndexOf('if (!host.Create(owner, target_monitor))')
+$createLoading = $configurator.IndexOf('loading.CreateHosted(host.window())')
+$sizeLoading = $configurator.IndexOf('host.SizeForPage(loading_window, target_monitor)')
+$showHost = $configurator.IndexOf('host.ShowCentered(target_monitor)')
+$frameVisible = $configurator.IndexOf('Record("host.frame-visible"')
+$initializeRime = $configurator.IndexOf('Initialize();', $frameVisible)
+$createPage = $configurator.IndexOf(
+  'initial->Create(initial_page, host.window())')
+$fitPage = $configurator.IndexOf('active->FitIn(host.window())')
+$sizePage = $configurator.IndexOf(
+  'host.SizeForPage(active->window(), target_monitor)')
+$preparePage = $configurator.IndexOf('active->PrepareForDisplay()')
+$showPage = $configurator.IndexOf('ShowWindow(active->window(), SW_SHOW)')
+$focusPage = $configurator.IndexOf('SetFocus(::GetDlgItem(')
+if ($createHost -lt 0 -or
+    $createLoading -lt $createHost -or
+    $sizeLoading -lt $createLoading -or $showHost -lt $sizeLoading -or
+    $frameVisible -lt $showHost -or $initializeRime -lt $frameVisible -or
+    $createPage -lt $initializeRime -or $sizePage -lt $createPage -or
+    $fitPage -lt $sizePage -or
+    $preparePage -lt $fitPage -or $showPage -lt $preparePage -or
+    $focusPage -lt $showPage) {
+  throw 'Initial settings visibility order must paint the fixed frame, initialize Rime on the UI thread, then atomically replace the loading page.'
+}
+if ($navigation -notmatch 'inline void ResizeForSidebarFrame\(HWND dialog\)' -or
+    $configurator -notmatch
+      'SettingsLoadingDialog[\s\S]{0,1800}?ResizeForSidebarFrame\(m_hWnd\)' -or
+    $navigation -notmatch
+      'Install\(HWND dialog[\s\S]{0,300}?ResizeForSidebarFrame\(dialog\)') {
+  throw 'Loading and initialized settings pages must share the same sidebar-inclusive outer size.'
+}
+if ($configurator -match 'std::async' -or
+    $configurator -match 'InputSettingsState') {
+  throw 'librime initialization and settings access must remain on the settings UI thread.'
+}
+$navigationStart = $configurator.IndexOf(
+  'if (message.message == settings_navigation::kHostNavigateMessage)')
+$freezeHost = $configurator.IndexOf(
+  'SendMessageW(host.window(), WM_SETREDRAW, FALSE', $navigationStart)
 $hideCurrent = $configurator.IndexOf('ShowWindow(active->window(), SW_HIDE)')
 $showReplacement = $configurator.IndexOf('SWP_SHOWWINDOW', $hideCurrent)
-$thawHost = $configurator.IndexOf('SendMessageW(host.window(), WM_SETREDRAW, TRUE')
+$thawHost = $configurator.IndexOf(
+  'SendMessageW(host.window(), WM_SETREDRAW, TRUE', $navigationStart)
 if ($freezeHost -lt 0 -or $hideCurrent -lt $freezeHost -or
     $showReplacement -lt $hideCurrent -or $thawHost -lt $showReplacement) {
   throw 'Settings pages must swap in a frozen host using hide-then-show order.'

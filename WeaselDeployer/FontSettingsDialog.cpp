@@ -193,7 +193,7 @@ void DrawPreviewRoleCue(HDC dc, RECT bounds, BYTE alpha) {
   const int inset_x = (std::max)(2, ::MulDiv(3, dpi, 96));
   const int inset_y = (std::max)(1, ::MulDiv(2, dpi, 96));
   ::InflateRect(&bounds, inset_x, inset_y);
-  const COLORREF accent = ::GetSysColor(COLOR_HIGHLIGHT);
+  const COLORREF accent = settings_theme::GetColor(COLOR_HIGHLIGHT);
   Gdiplus::Graphics canvas(dc);
   canvas.SetSmoothingMode(Gdiplus::SmoothingModeAntiAlias);
   canvas.SetPixelOffsetMode(Gdiplus::PixelOffsetModeHalf);
@@ -387,12 +387,12 @@ void LayoutFontPage(HWND dialog) {
 
 void DrawFontListFrame(const DRAWITEMSTRUCT& draw) {
   RECT bounds = draw.rcItem;
-  ::FillRect(draw.hDC, &bounds, ::GetSysColorBrush(COLOR_WINDOW));
+  ::FillRect(draw.hDC, &bounds, settings_theme::GetBrush(COLOR_WINDOW));
   bounds.right -= 1;
   bounds.bottom -= 1;
-  const COLORREF surface = ::GetSysColor(COLOR_WINDOW);
-  const COLORREF border =
-      settings_navigation::Mix(::GetSysColor(COLOR_3DSHADOW), surface, 76);
+  const COLORREF surface = settings_theme::GetColor(COLOR_WINDOW);
+  const COLORREF border = settings_navigation::Mix(
+      settings_theme::GetColor(COLOR_3DSHADOW), surface, 76);
   HBRUSH brush = ::CreateSolidBrush(surface);
   HPEN pen = ::CreatePen(PS_SOLID, 1, border);
   const HGDIOBJ previous_brush = ::SelectObject(draw.hDC, brush);
@@ -421,7 +421,7 @@ void DrawFontListFrame(const DRAWITEMSTRUCT& draw) {
       settings_navigation::ScaledLogicalPixels(draw.hwndItem, 4);
   text_bounds.bottom = separator_y;
   ::SetBkMode(draw.hDC, TRANSPARENT);
-  ::SetTextColor(draw.hDC, ::GetSysColor(COLOR_WINDOWTEXT));
+  ::SetTextColor(draw.hDC, settings_theme::GetColor(COLOR_WINDOWTEXT));
   ::DrawTextW(
       draw.hDC, value, -1, &text_bounds,
       DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS);
@@ -430,10 +430,11 @@ void DrawFontListFrame(const DRAWITEMSTRUCT& draw) {
 void DrawFontListItem(const DRAWITEMSTRUCT& draw) {
   RECT bounds = draw.rcItem;
   const bool selected = (draw.itemState & ODS_SELECTED) != 0;
-  const COLORREF background =
-      selected ? ::GetSysColor(COLOR_HIGHLIGHT) : ::GetSysColor(COLOR_WINDOW);
-  const COLORREF text = selected ? ::GetSysColor(COLOR_HIGHLIGHTTEXT)
-                                 : ::GetSysColor(COLOR_WINDOWTEXT);
+  const COLORREF background = selected
+                                  ? settings_theme::GetColor(COLOR_HIGHLIGHT)
+                                  : settings_theme::GetColor(COLOR_WINDOW);
+  const COLORREF text = selected ? settings_theme::GetColor(COLOR_HIGHLIGHTTEXT)
+                                 : settings_theme::GetColor(COLOR_WINDOWTEXT);
   HBRUSH brush = ::CreateSolidBrush(background);
   ::FillRect(draw.hDC, &bounds, brush);
   ::DeleteObject(brush);
@@ -960,7 +961,8 @@ void FontSettingsDialog::DrawPreview(const DRAWITEMSTRUCT& draw) {
   // window region.  Build the rounded canvas into the buffer itself so the
   // result stays rounded regardless of whether a button or the preview window
   // initiated this paint.
-  HBRUSH card_surface = CreateSolidBrush(GetSysColor(COLOR_WINDOW));
+  HBRUSH card_surface =
+      CreateSolidBrush(settings_theme::GetColor(COLOR_WINDOW));
   FillRect(dc, &bounds, card_surface);
   DeleteObject(card_surface);
   const int outer_diameter = (std::max)(
@@ -1322,8 +1324,8 @@ LRESULT FontSettingsDialog::OnStaticColor(UINT,
   const auto context = reinterpret_cast<HDC>(dc);
   ::SetBkMode(context, TRANSPARENT);
   if (id == IDC_FONT_PREVIEW_HINT)
-    ::SetTextColor(context, ::GetSysColor(COLOR_GRAYTEXT));
-  return reinterpret_cast<LRESULT>(::GetSysColorBrush(COLOR_WINDOW));
+    ::SetTextColor(context, settings_theme::GetColor(COLOR_GRAYTEXT));
+  return reinterpret_cast<LRESULT>(settings_theme::GetBrush(COLOR_WINDOW));
 }
 
 LRESULT FontSettingsDialog::OnButtonColor(UINT,
@@ -1337,8 +1339,8 @@ LRESULT FontSettingsDialog::OnButtonColor(UINT,
     return 0;
   }
   const auto context = reinterpret_cast<HDC>(dc);
-  ::SetBkColor(context, ::GetSysColor(COLOR_WINDOW));
-  return reinterpret_cast<LRESULT>(::GetSysColorBrush(COLOR_WINDOW));
+  ::SetBkColor(context, settings_theme::GetColor(COLOR_WINDOW));
+  return reinterpret_cast<LRESULT>(settings_theme::GetBrush(COLOR_WINDOW));
 }
 
 LRESULT FontSettingsDialog::OnRestore(WORD, WORD, HWND, BOOL&) {

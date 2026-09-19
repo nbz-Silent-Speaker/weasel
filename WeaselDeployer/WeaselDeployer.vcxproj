@@ -202,6 +202,10 @@
     <ClInclude Include="UIStyleSettings.h" />
     <ClInclude Include="UIStyleSettingsDialog.h" />
     <ClInclude Include="AppearancePreview.h" />
+    <ClInclude Include="SettingsAppearancePopup.h" />
+    <ClInclude Include="SettingsColor.h" />
+    <ClInclude Include="SettingsColorPicker.h" />
+    <ClInclude Include="SettingsTheme.h" />
     <ClInclude Include="..\include\WeaselAppearanceDraft.h" />
     <ClInclude Include="..\include\WeaselPaletteCatalog.h" />
     <ClInclude Include="WeaselDeployer.h" />

@@ -462,9 +462,6 @@ int install(const std::wstring& profile, bool silent) {
   if (retval)
     return 1;
 
-  MSG_NOT_SILENT_BY_IDS(silent, IDS_STR_INSTALL_SUCCESS_INFO,
-                        IDS_STR_INSTALL_SUCCESS_CAP,
-                        MB_ICONINFORMATION | MB_OK);
   return 0;
 }
 
