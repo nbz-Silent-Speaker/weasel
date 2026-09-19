@@ -1,10 +1,10 @@
 ﻿【小狼毫】輸入法
 ================
 
-本仓库基于[原版小狼毫 Weasel](https://github.com/rime/weasel)和[中州韵 Rime 输入法引擎](https://github.com/rime/librime)开发，**不是 Rime 官方发布版**。图形化设置与万象拼音 Lite 等增强功能目前在 [开发分支 `codex/wanxiang-lite-integration`](https://github.com/nbz-Silent-Speaker/weasel/tree/codex/wanxiang-lite-integration)；下列功能介绍以该分支为准，尚未全部合入默认分支或发布为安装包。原版小狼毫的介绍、使用方法和致谢保留在下文。
+本仓库基于[原版小狼毫 Weasel](https://github.com/rime/weasel)和[中州韵 Rime 输入法引擎](https://github.com/rime/librime)开发，**不是 Rime 官方发布版**。图形化设置与万象拼音 Lite 等增强功能目前在 [开发分支 `codex/wanxiang-lite-integration`](https://github.com/nbzQing/weasel/tree/codex/wanxiang-lite-integration)；下列功能介绍以该分支为准，尚未全部合入默认分支或发布为安装包。原版小狼毫的介绍、使用方法和致谢保留在下文。
 
-[![下载本版](https://img.shields.io/github/v/release/nbz-Silent-Speaker/weasel?label=%E4%B8%8B%E8%BD%BD%E6%9C%AC%E7%89%88)](https://github.com/nbz-Silent-Speaker/weasel/releases)
-[![本版构建状态](https://github.com/nbz-Silent-Speaker/weasel/actions/workflows/ci.yml/badge.svg)](https://github.com/nbz-Silent-Speaker/weasel/actions/workflows/ci.yml)
+[![下载本版](https://img.shields.io/github/v/release/nbzQing/weasel?label=%E4%B8%8B%E8%BD%BD%E6%9C%AC%E7%89%88)](https://github.com/nbzQing/weasel/releases)
+[![本版构建状态](https://github.com/nbzQing/weasel/actions/workflows/ci.yml/badge.svg)](https://github.com/nbzQing/weasel/actions/workflows/ci.yml)
 
 ## 增强版开发分支的功能
 
@@ -19,13 +19,13 @@
 
 ## 下载与使用
 
-1. 从[本仓库发布页](https://github.com/nbz-Silent-Speaker/weasel/releases)下载安装包，先阅读对应版本的功能与架构说明。开发分支的最新代码不一定已包含在发布附件中；语法模型始终单独下载，不随安装包提供。
+1. 从[本仓库发布页](https://github.com/nbzQing/weasel/releases)下载安装包，先阅读对应版本的功能与架构说明。开发分支的最新代码不一定已包含在发布附件中；语法模型始终单独下载，不随安装包提供。
 2. 初次安装时，在「安装选项」中选择输入语言。使用包含万象拼音 Lite 的增强版安装包时，新用户首次部署默认启用该方案；已有用户的方案选择和自定义配置会保留。
 3. 在 Windows 输入法列表中选择小狼毫。增强版可从任务栏小狼毫图标的右键菜单打开「输入法设定」；修改输入法设置后点击「应用」。
 
 用户词典和配置文件默认位于 `%AppData%\Rime`；如果更改过用户目录，以设置窗口「用户文件夹」显示的路径为准。直接编辑配置文件后，仍须重新部署。方案选单快捷键以当前方案配置为准，通常可使用 <kbd>Ctrl+`</kbd> 或 <kbd>F4</kbd>。
 
-本分支新增功能的问题与建议，请到[本仓库 Issues](https://github.com/nbz-Silent-Speaker/weasel/issues)反馈；原版小狼毫和 Rime 的资料与反馈入口见下文。
+本分支新增功能的问题与建议，请到[本仓库 Issues](https://github.com/nbzQing/weasel/issues)反馈；原版小狼毫和 Rime 的资料与反馈入口见下文。
 
 ## 原版小狼毫介绍与致谢
 
