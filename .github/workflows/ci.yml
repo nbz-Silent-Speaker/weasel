@@ -57,6 +57,11 @@ jobs:
       - name: Fetch all tags
         run: git fetch --tags
 
+      - name: Verify shared version numbering
+        if: matrix.variant == 'msbuild'
+        shell: pwsh
+        run: .\tools\tests\CheckVersioning.ps1
+
       - name: Configure build environment
         shell: bash
         run: |
