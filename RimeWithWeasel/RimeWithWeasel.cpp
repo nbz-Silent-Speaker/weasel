@@ -4,6 +4,8 @@
 #include <StringAlgorithm.hpp>
 #include <WeaselConstants.h>
 #include <WeaselUtility.h>
+#include <WeaselUserSettings.h>
+#include <WeaselColorScheme.h>
 
 #include <filesystem>
 #include <map>
@@ -122,7 +124,9 @@ void RimeWithWeaselHandler::Initialize() {
     if (m_ui) {
       _UpdateUIStyle(&config, m_ui, true);
       _UpdateShowNotifications(&config, true);
-      m_current_dark_mode = IsUserDarkMode();
+      const auto user_settings = UserSettings::Load();
+      m_current_dark_mode = ResolveAppearanceDarkMode(
+          user_settings.appearance_theme_mode, IsUserDarkMode() != FALSE);
       if (m_current_dark_mode) {
         const int BUF_SIZE = 255;
         char buffer[BUF_SIZE + 1] = {0};
@@ -132,7 +136,10 @@ void RimeWithWeaselHandler::Initialize() {
           _UpdateUIStyleColor(&config, m_ui->style(), color_name);
         }
       }
+      m_current_acrylic = user_settings.acrylic;
+      _LoadPaletteSources(&config);
       m_base_style = m_ui->style();
+      _ApplyModeColorScheme(m_ui->style());
     }
     Bool global_ascii = false;
     if (rime_api->config_get_bool(&config, "global_ascii", &global_ascii))
@@ -151,6 +158,7 @@ void RimeWithWeaselHandler::Finalize() {
   m_disabled = true;
   m_session_status_map.clear();
   LOG(INFO) << "Finalizing la rime.";
+  m_palette_catalog.Clear();
   rime_api->finalize();
 }
 
@@ -228,6 +236,8 @@ DWORD RimeWithWeaselHandler::RemoveSession(WeaselSessionId ipc_id) {
 }
 
 void RimeWithWeaselHandler::UpdateColorTheme(BOOL darkMode) {
+  if (m_disabled || !m_ui)
+    return;
   RimeConfig config = {NULL};
   if (rime_api->config_open("weasel", &config)) {
     if (m_ui) {
@@ -242,9 +252,13 @@ void RimeWithWeaselHandler::UpdateColorTheme(BOOL darkMode) {
           _UpdateUIStyleColor(&config, m_ui->style(), color_name);
         }
       }
+      m_current_acrylic = UserSettings::Load().acrylic;
+      _LoadPaletteSources(&config);
       m_base_style = m_ui->style();
     }
     rime_api->config_close(&config);
+  } else {
+    return;
   }
 
   for (auto& pair : m_session_status_map) {
@@ -258,7 +272,58 @@ void RimeWithWeaselHandler::UpdateColorTheme(BOOL darkMode) {
       rime_api->free_status(&status);
     }
   }
-  m_ui->style() = get_session_status(m_active_session).style;
+  const auto active = m_session_status_map.find(m_active_session);
+  if (active != m_session_status_map.end()) {
+    m_ui->style() = active->second.style;
+  } else {
+    m_ui->style() = m_base_style;
+    _ApplyModeColorScheme(m_ui->style());
+  }
+  m_ui->Refresh();
+}
+
+void RimeWithWeaselHandler::RefreshUserSettings() {
+  if (m_disabled)
+    return;
+  const auto settings = UserSettings::Load();
+  const bool dark_mode = ResolveAppearanceDarkMode(
+      settings.appearance_theme_mode, IsUserDarkMode() != FALSE);
+  if (settings.acrylic != m_current_acrylic ||
+      dark_mode != (m_current_dark_mode != FALSE))
+    UpdateColorTheme(dark_mode);
+}
+
+void RimeWithWeaselHandler::_LoadPaletteSources(RimeConfig* config) {
+  m_palette_catalog.LoadFiles(rime_api, WeaselSharedDataPath(),
+                              WeaselUserDataPath());
+  // Normal palettes remain the global base; schema-specific choices keep
+  // their original precedence. Acrylic is applied after schema styling.
+  const auto normal =
+      m_palette_catalog.ExplicitSelection(config, m_current_dark_mode ? 3 : 2);
+  if (auto* colors = m_palette_catalog.Config(normal))
+    _UpdateUIStyleColor(colors, m_ui->style(), PaletteId(normal));
+  m_mode_color_scheme =
+      ModeColorScheme(rime_api, config, m_current_acrylic, m_current_dark_mode);
+  m_mode_palette_source = m_current_acrylic
+                              ? m_palette_catalog.ExplicitSelection(
+                                    config, m_current_dark_mode ? 1 : 0)
+                              : std::string();
+  if (!m_mode_palette_source.empty())
+    m_mode_color_scheme = PaletteId(m_mode_palette_source);
+}
+
+void RimeWithWeaselHandler::_ApplyModeColorScheme(UIStyle& style) {
+  if (auto* source = m_palette_catalog.Config(m_mode_palette_source)) {
+    _UpdateUIStyleColor(source, style, PaletteId(m_mode_palette_source));
+    return;
+  }
+  if (m_mode_color_scheme.empty())
+    return;
+  RimeConfig config = {NULL};
+  if (rime_api->config_open("weasel", &config)) {
+    _UpdateUIStyleColor(&config, style, m_mode_color_scheme);
+    rime_api->config_close(&config);
+  }
 }
 
 BOOL RimeWithWeaselHandler::ProcessKeyEvent(KeyEvent keyEvent,
@@ -560,13 +625,16 @@ void RimeWithWeaselHandler::_LoadSchemaSpecificSettings(
     const std::string& schema_id) {
   if (!m_ui)
     return;
+  SessionStatus& session_status = get_session_status(ipc_id);
+  session_status.style = m_base_style;
   RimeConfig config;
-  if (!rime_api->schema_open(schema_id.c_str(), &config))
+  if (!rime_api->schema_open(schema_id.c_str(), &config)) {
+    _ApplyModeColorScheme(session_status.style);
     return;
+  }
   _UpdateShowNotifications(&config);
   m_ui->style() = m_base_style;
   _UpdateUIStyle(&config, m_ui, false);
-  SessionStatus& session_status = get_session_status(ipc_id);
   session_status.style = m_ui->style();
   UIStyle& style = session_status.style;
   // load schema color style config
@@ -591,6 +659,7 @@ void RimeWithWeaselHandler::_LoadSchemaSpecificSettings(
       m_current_dark_mode ? "style/color_scheme_dark" : "style/color_scheme";
   if (rime_api->config_get_string(&config, key, buffer, BUF_SIZE))
     update_color_scheme();
+  _ApplyModeColorScheme(style);
   // load schema icon start
   {
     const auto load_icon = [](RimeConfig& config, const char* key1,
@@ -613,6 +682,7 @@ void RimeWithWeaselHandler::_LoadSchemaSpecificSettings(
     style.current_zhung_icon =
         load_icon(config, "schema/icon", "schema/zhung_icon");
     style.current_ascii_icon = load_icon(config, "schema/ascii_icon", NULL);
+    style.current_caps_icon = load_icon(config, "schema/caps_icon", NULL);
     style.current_full_icon = load_icon(config, "schema/full_icon", NULL);
     style.current_half_icon = load_icon(config, "schema/half_icon", NULL);
   }

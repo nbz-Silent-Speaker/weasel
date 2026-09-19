@@ -3,6 +3,7 @@
 #include <WeaselIPC.h>
 #include "SystemTraySDK.h"
 
+#include <atomic>
 #include <condition_variable>
 #include <mutex>
 
@@ -18,7 +19,8 @@ struct WeaselTrayIconState {
       : valid(false),
         display_tray_icon(false),
         disabled(false),
-        ascii_mode(false) {}
+        ascii_mode(false),
+        caps_lock(false) {}
 
   static WeaselTrayIconState From(const weasel::UIStyle& style,
                                   const weasel::Status& status) {
@@ -27,16 +29,14 @@ struct WeaselTrayIconState {
     state.display_tray_icon = style.display_tray_icon;
     state.disabled = status.disabled;
     state.ascii_mode = status.ascii_mode;
-    state.current_zhung_icon = style.current_zhung_icon;
-    state.current_ascii_icon = style.current_ascii_icon;
+    state.schema_id = status.schema_id;
     return state;
   }
 
   bool operator==(const WeaselTrayIconState& rhs) const {
     return valid == rhs.valid && display_tray_icon == rhs.display_tray_icon &&
            disabled == rhs.disabled && ascii_mode == rhs.ascii_mode &&
-           current_zhung_icon == rhs.current_zhung_icon &&
-           current_ascii_icon == rhs.current_ascii_icon;
+           caps_lock == rhs.caps_lock && schema_id == rhs.schema_id;
   }
 
   bool operator!=(const WeaselTrayIconState& rhs) const {
@@ -47,8 +47,8 @@ struct WeaselTrayIconState {
   bool display_tray_icon;
   bool disabled;
   bool ascii_mode;
-  std::wstring current_zhung_icon;
-  std::wstring current_ascii_icon;
+  bool caps_lock;
+  std::wstring schema_id;
 };
 
 class WeaselTrayIcon : public CSystemTray {
@@ -57,10 +57,13 @@ class WeaselTrayIcon : public CSystemTray {
     INITIAL,
     ZHUNG,
     ASCII,
+    ZHUNG_CAPS,
+    ASCII_CAPS,
     DISABLED,
   };
 
   WeaselTrayIcon(weasel::UI& ui);
+  ~WeaselTrayIcon();
 
   BOOL Create(HWND hTargetWnd);
 
@@ -71,18 +74,22 @@ class WeaselTrayIcon : public CSystemTray {
 
   // Runs on the server message thread (no g_api_mutex held).
   void ApplyRefresh();
+  void ReloadSettings();
+  void SetCapsLockState(bool enabled);
 
  protected:
   virtual void CustomizeMenu(HMENU hMenu);
 
-  void Refresh(const WeaselTrayIconState& state);
+  void Refresh(const WeaselTrayIconState& state, bool force = false);
 
   weasel::UIStyle& m_style;
   weasel::Status& m_status;
   WeaselTrayMode m_mode;
-  std::wstring m_schema_zhung_icon;
-  std::wstring m_schema_ascii_icon;
+  std::wstring m_schema_id;
   bool m_disabled;
+  std::atomic<bool> m_caps_lock;
+  WeaselTrayIconState m_last_state;
+  ULONG_PTR m_graphics_token = 0;
 
   // Guarded by m_state_mutex.
   bool m_refresh_enabled = true;

@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://weasel.im/schemas/managed-package-receipt-v1.json",
+  "title": "Weasel managed package receipt",
+  "description": "Local transaction record for curated downloads, user URLs, and local ZIP imports. This file is never treated as a trusted remote catalog.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format_version",
+    "package_id",
+    "kind",
+    "version",
+    "source",
+    "trust",
+    "installed_at",
+    "install_root",
+    "update",
+    "files"
+  ],
+  "properties": {
+    "format_version": { "const": 1 },
+    "package_id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]*$" },
+    "kind": { "enum": ["input_scheme", "language_model"] },
+    "version": { "type": "string", "minLength": 1 },
+    "source": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "catalog_id", "entry_id", "url"],
+          "properties": {
+            "type": { "const": "curated_catalog" },
+            "catalog_id": { "type": "string", "minLength": 1 },
+            "entry_id": { "type": "string", "minLength": 1 },
+            "url": { "type": "string", "format": "uri", "pattern": "^https://" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "url"],
+          "properties": {
+            "type": { "const": "direct_archive" },
+            "url": { "type": "string", "format": "uri", "pattern": "^https://" },
+            "user_supplied_sha256": {
+              "type": ["string", "null"],
+              "pattern": "^[0-9a-f]{64}$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "feed_url", "publisher_key_id", "pinned_key_sha256", "highest_release_sequence"],
+          "properties": {
+            "type": { "const": "signed_feed" },
+            "feed_url": { "type": "string", "format": "uri", "pattern": "^https://" },
+            "publisher_key_id": { "type": "string", "minLength": 1 },
+            "pinned_key_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+            "highest_release_sequence": { "type": "integer", "minimum": 1 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "original_filename"],
+          "properties": {
+            "type": { "const": "local_import" },
+            "original_filename": { "type": "string", "minLength": 1 },
+            "source_path_discarded": { "const": true },
+            "declared_update_feed": { "type": "string", "format": "uri", "pattern": "^https://" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "discovered_schema_ids"],
+          "properties": {
+            "type": { "const": "existing_unmanaged" },
+            "discovered_schema_ids": {
+              "type": "array",
+              "minItems": 1,
+              "items": { "type": "string", "minLength": 1 },
+              "uniqueItems": true
+            }
+          }
+        }
+      ]
+    },
+    "trust": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "archive_sha256"],
+      "properties": {
+        "state": { "enum": ["catalog_verified", "user_hash_verified", "unverified_confirmed"] },
+        "archive_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "contains_lua": { "type": "boolean" },
+        "confirmed_at": { "type": "string", "format": "date-time" }
+      }
+    },
+    "installed_at": { "type": "string", "format": "date-time" },
+    "install_root": { "enum": ["weasel_shared_data", "rime_user_root"] },
+    "update": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["policy", "channel"],
+      "properties": {
+        "policy": { "enum": ["automatic", "notify", "manual", "disabled", "pinned"] },
+        "channel": { "enum": ["stable", "preview"] },
+        "pinned_version": { "type": "string", "minLength": 1 },
+        "last_checked_at": { "type": "string", "format": "date-time" },
+        "skipped_release_sequence": { "type": "integer", "minimum": 1 },
+        "pause_reason": {
+          "enum": ["user_choice", "user_modified_files", "incompatible", "publisher_changed", "shared_dependency_conflict"]
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "policy": { "const": "pinned" } } },
+          "then": { "required": ["pinned_version"] }
+        }
+      ]
+    },
+    "selected_schema_ids": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    },
+    "files": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["relative_path", "expected_sha256", "committed_sha256", "ownership", "disposition"],
+        "properties": {
+          "relative_path": { "type": "string", "minLength": 1 },
+          "expected_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "committed_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+          "previous_sha256": {
+            "type": ["string", "null"],
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "ownership": { "enum": ["exclusive", "shared_identical", "shadowing_builtin"] },
+          "disposition": { "enum": ["created", "replaced_managed", "reused_identical", "shadowed_builtin"] }
+        }
+      }
+    },
+    "deployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state"],
+      "properties": {
+        "state": { "enum": ["pending", "succeeded", "rolled_back"] },
+        "completed_at": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

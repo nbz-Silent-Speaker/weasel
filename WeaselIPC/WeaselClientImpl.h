@@ -17,7 +17,14 @@ class ClientImpl {
   void StartMaintenance();
   void EndMaintenance();
   bool Echo();
+  // Query the existing input session's pipe peer without sending or
+  // reconnecting.
+  bool QueryConnectedServer(DWORD& processId,
+                            DWORD& sessionId,
+                            DWORD& stage,
+                            DWORD& error) const;
   bool ProcessKeyEvent(KeyEvent const& keyEvent);
+  void UpdateCapsLockState(bool enabled);
   bool CommitComposition();
   bool ClearComposition();
   bool SelectCandidateOnCurrentPage(size_t index);

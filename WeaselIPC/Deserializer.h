@@ -1,17 +1,22 @@
 #pragma once
 #include <ResponseParser.h>
 #include <functional>
+#include <utility>
 
 namespace weasel {
 
 template <typename T>
-void TryDeserialize(boost::archive::text_wiarchive& ia, T& t) {
+bool TryDeserialize(boost::archive::text_wiarchive& ia, T& t) {
+  T decoded = t;
   try {
-    ia >> t;
+    ia >> decoded;
+    t = std::move(decoded);
+    return true;
   } catch (const boost::archive::archive_exception& e) {
     const std::string msg =
-        std::string("boost::archive::archive_exception: ") + e.what();
-    MessageBoxA(NULL, msg.c_str(), "IPC exception", MB_OK | MB_ICONERROR);
+        std::string("IPC deserialization failed: ") + e.what() + "\n";
+    ::OutputDebugStringA(msg.c_str());
+    return false;
   }
 }
 class Deserializer {

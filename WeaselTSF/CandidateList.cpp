@@ -4,16 +4,128 @@
 #include "CandidateList.h"
 #include <KeyEvent.h>
 #include <math.h>
+#include <appmodel.h>
 
 using namespace std;
 using namespace weasel;
 
-CCandidateList::CCandidateList(com_ptr<WeaselTSF> pTextService)
-    : _ui(make_unique<UI>()), _tsf(pTextService), _pbShow(TRUE) {
-  _cRef = 1;
+namespace {
+constexpr wchar_t kOwnerFollowClass[] = L"WeaselSettingsOwnerFollowV1";
+constexpr UINT_PTR kOwnerFollowTimer = 0x5746;
+constexpr UINT kOwnerFollowIntervalMs = 33;
+// Phase2 R1: metadata only. Never override BeginUIElement's show decision.
+// SearchHost is not fully covered by EnumWindows on Windows 8+; an explicit
+// message-only probe lets the observer distinguish host-drawn UI from a TIP
+// window that was missed by top-level enumeration.
+constexpr wchar_t kAcrylicUiProbeClass[] = L"WeaselAcrylicUiProbe";
+
+bool AcrylicSearchUiProbeEnabled() {
+  static const bool enabled = []() {
+    wchar_t path[32768] = {};
+    const DWORD length = ::GetModuleFileNameW(nullptr, path, _countof(path));
+    if (!length || length >= _countof(path))
+      return false;
+    const std::wstring image(path, length);
+    const auto slash = image.find_last_of(L"\\/");
+    if (slash == std::wstring::npos ||
+        ::lstrcmpiW(image.c_str() + slash + 1, L"SearchHost.exe") != 0)
+      return false;
+    wchar_t family[256] = {};
+    UINT32 count = _countof(family);
+    return ::GetPackageFamilyName(::GetCurrentProcess(), &count, family) ==
+               ERROR_SUCCESS &&
+           ::lstrcmpW(family, L"MicrosoftWindows.Client.CBS_cw5n1h2txyewy") ==
+               0;
+  }();
+  return enabled;
 }
 
-CCandidateList::~CCandidateList() {}
+LRESULT CALLBACK AcrylicUiProbeProc(HWND hwnd,
+                                    UINT message,
+                                    WPARAM wp,
+                                    LPARAM lp) {
+  return ::DefWindowProcW(hwnd, message, wp, lp);
+}
+
+void UpdateAcrylicUiProbe(const void* instance,
+                          DWORD stage,
+                          HRESULT hr,
+                          BOOL show) {
+  if (!AcrylicSearchUiProbeEnabled())
+    return;
+  struct Probe {
+    HWND window = nullptr;
+    const void* instance = nullptr;  // Not published outside this thread.
+  };
+  static thread_local Probe probe;
+  if (stage == 1)
+    probe.instance = instance;
+  if (probe.instance != instance)
+    return;
+  if (!::IsWindow(probe.window)) {
+    HMODULE module = nullptr;
+    static int anchor = 0;
+    if (!::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                  GET_MODULE_HANDLE_EX_FLAG_PIN,
+                              reinterpret_cast<LPCWSTR>(&anchor), &module))
+      return;
+    WNDCLASSEXW wc = {};
+    wc.cbSize = sizeof(wc);
+    wc.hInstance = module;
+    wc.lpfnWndProc = AcrylicUiProbeProc;
+    wc.lpszClassName = kAcrylicUiProbeClass;
+    if (!::RegisterClassExW(&wc)) {
+      WNDCLASSEXW existing = {};
+      existing.cbSize = sizeof(existing);
+      if (::GetLastError() != ERROR_CLASS_ALREADY_EXISTS ||
+          !::GetClassInfoExW(module, kAcrylicUiProbeClass, &existing) ||
+          existing.lpfnWndProc != AcrylicUiProbeProc)
+        return;
+    }
+    // Windows destroys this thread-owned HWND on thread exit. Keeping one
+    // per UI thread avoids changing COM object or candidate lifetimes.
+    probe.window = ::CreateWindowExW(0, kAcrylicUiProbeClass, L"", 0, 0, 0, 0,
+                                     0, HWND_MESSAGE, nullptr, module, nullptr);
+  }
+  if (!probe.window)
+    return;
+  ::SetPropW(probe.window, L"WeaselAcrylicUiProbeVersion",
+             reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(1)));
+  ::SetPropW(probe.window, L"WeaselAcrylicUiProbeStage",
+             reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(stage)));
+  ::SetPropW(
+      probe.window, L"WeaselAcrylicUiProbeHresult",
+      reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(static_cast<DWORD>(hr))));
+  const DWORD policy = (stage == 1 || FAILED(hr)) ? 0 : (show ? 1 : 2);
+  ::SetPropW(probe.window, L"WeaselAcrylicUiShowPolicy",
+             reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(policy)));
+  ::SetPropW(
+      probe.window, L"WeaselAcrylicUiProbePulse",
+      reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(::GetTickCount())));
+  if (stage == 3)
+    probe.instance = nullptr;
+}
+
+}  // namespace
+
+CCandidateList::CCandidateList(com_ptr<WeaselTSF> pTextService)
+    : _settingsFollowEnabled(_IsSettingsHost()),
+      _ui(make_unique<UI>()),
+      _tsf(pTextService),
+      _pbShow(TRUE) {
+  _cRef = 1;
+  _ui->SetAcrylicServerQuery(
+      [this](DWORD& processId, DWORD& sessionId, DWORD& stage, DWORD& error) {
+        return _tsf->QueryAcrylicServer(processId, sessionId, stage, error);
+      });
+}
+
+CCandidateList::~CCandidateList() {
+  // _tsf is destroyed before _ui; do not retain a callback to this object.
+  _ui->SetAcrylicServerQuery({});
+  UpdateAcrylicUiProbe(this, 3, S_OK, _pbShow);
+  _StopOwnerFollow(true);
+}
 
 STDMETHODIMP CCandidateList::QueryInterface(REFIID riid, void** ppvObj) {
   if (ppvObj == nullptr) {
@@ -74,10 +186,13 @@ STDMETHODIMP CCandidateList::GetGUID(GUID* pguid) {
 }
 
 STDMETHODIMP CCandidateList::Show(BOOL showCandidateWindow) {
-  if (showCandidateWindow)
+  if (showCandidateWindow) {
     _ui->Show();
-  else
+    _StartOwnerFollow();
+  } else {
+    _StopOwnerFollow(false);
     _ui->Hide();
+  }
   return S_OK;
 }
 
@@ -222,17 +337,38 @@ void CCandidateList::UpdateStyle(const UIStyle& sty) {
 }
 
 void CCandidateList::UpdateInputPosition(RECT const& rc) {
-  _ui->UpdateInputPosition(rc);
+  if (!_settingsFollowEnabled) {
+    _ui->UpdateInputPosition(rc);
+    return;
+  }
+  ++_followSourceUpdates;
+  candidate_motion::OwnerGeometry owner;
+  RECT effective = rc;
+  bool repeatedSource = false;
+  if (_ReadOwnerGeometry(owner) &&
+      _ownerAnchor.Capture(rc, owner, effective, repeatedSource)) {
+    _effectiveAnchor = effective;
+    _haveEffectiveAnchor = true;
+    if (repeatedSource)
+      ++_followRepeatedSources;
+  } else {
+    _ownerAnchor.Reset();
+    _haveEffectiveAnchor = false;
+  }
+  _ui->UpdateInputPosition(effective);
+  _PublishOwnerFollowDiagnostics();
 }
 
 void CCandidateList::Destroy() {
-  // EndUI();
+  // A host can terminate the TSF composition before focus is lost. End the
+  // UI lifecycle even when there is no composition left for Abort to end.
+  EndUI();
   Show(FALSE);
   _DisposeUIWindow();
 }
 
 void CCandidateList::DestroyAll() {
-  // EndUI();
+  EndUI();
   Show(FALSE);
   _DisposeUIWindowAll();
 }
@@ -285,6 +421,7 @@ HRESULT CCandidateList::_UpdateUIElement() {
 void CCandidateList::StartUI() {
   if (_uiStarted)
     return;
+  UpdateAcrylicUiProbe(this, 1, S_OK, _pbShow);
 
   com_ptr<ITfThreadMgr> pThreadMgr = _tsf->_GetThreadMgr();
   if (!pThreadMgr) {
@@ -305,7 +442,9 @@ void CCandidateList::StartUI() {
                               bool* const next, bool* const scroll_next) {
       _tsf->HandleUICallback(sel, hov, next, scroll_next);
     });
-  if (FAILED(pUIElementMgr->BeginUIElement(this, &_pbShow, &uiid)))
+  const HRESULT beginHr = pUIElementMgr->BeginUIElement(this, &_pbShow, &uiid);
+  UpdateAcrylicUiProbe(this, 2, beginHr, _pbShow);
+  if (FAILED(beginHr))
     return;
   _uiStarted = true;
   // pUIElementMgr->UpdateUIElement(uiid);
@@ -323,12 +462,13 @@ void CCandidateList::EndUI() {
   if (pThreadMgr) {
     com_ptr<ITfUIElementMgr> emgr;
     auto hr = pThreadMgr->QueryInterface(&emgr);
-    if (FAILED(hr))
-      return;
-    if (emgr != NULL)
+    // Losing access to the host manager must not leave a destroyed window
+    // marked as started, preventing the next StartUI from recreating it.
+    if (SUCCEEDED(hr) && emgr != NULL)
       emgr->EndUIElement(uiid);
   }
   _uiStarted = false;
+  UpdateAcrylicUiProbe(this, 3, S_OK, _pbShow);
   _DisposeUIWindow();
 }
 
@@ -337,6 +477,7 @@ com_ptr<ITfContext> CCandidateList::GetContextDocument() {
 }
 
 void CCandidateList::_DisposeUIWindow() {
+  _StopOwnerFollow(true);
   if (_ui == nullptr) {
     return;
   }
@@ -345,6 +486,7 @@ void CCandidateList::_DisposeUIWindow() {
 }
 
 void CCandidateList::_DisposeUIWindowAll() {
+  _StopOwnerFollow(true);
   if (_ui == nullptr) {
     return;
   }
@@ -354,11 +496,246 @@ void CCandidateList::_DisposeUIWindowAll() {
 }
 
 void CCandidateList::_MakeUIWindow() {
+  _StopOwnerFollow(true);
   HWND p = _GetActiveWnd();
+  _followView = p;
   _ui->Create(p);
 }
 
+bool CCandidateList::_IsSettingsHost() const {
+  // R3: keep the existing Settings anchor policy and also enable it for the
+  // installed Microsoft Store. The legacy member/function names are retained
+  // to avoid changing the candidate object's ABI. No new positioning algorithm.
+  wchar_t path[32768] = {};
+  wchar_t windows[32768] = {};
+  const DWORD length = ::GetModuleFileNameW(nullptr, path, _countof(path));
+  const UINT count = ::GetWindowsDirectoryW(windows, _countof(windows));
+  if (!length || length >= _countof(path) || !count ||
+      count >= _countof(windows))
+    return false;
+  const std::wstring expected = std::wstring(windows, count) +
+                                L"\\ImmersiveControlPanel\\SystemSettings.exe";
+  if (::CompareStringOrdinal(path, static_cast<int>(length), expected.c_str(),
+                             static_cast<int>(expected.size()),
+                             TRUE) == CSTR_EQUAL)
+    return true;
+
+  wchar_t family[256] = {};
+  UINT32 capacity = _countof(family);
+  if (::GetPackageFamilyName(::GetCurrentProcess(), &capacity, family) !=
+          ERROR_SUCCESS ||
+      ::lstrcmpW(family, L"Microsoft.WindowsStore_8wekyb3d8bbwe") != 0)
+    return false;
+  wchar_t package[256] = {};
+  capacity = _countof(package);
+  if (::GetPackageFullName(::GetCurrentProcess(), &capacity, package) !=
+      ERROR_SUCCESS)
+    return false;
+  wchar_t directory[32768] = {};
+  capacity = _countof(directory);
+  if (::GetPackagePathByFullName(package, &capacity, directory) !=
+      ERROR_SUCCESS)
+    return false;
+  const std::wstring store = std::wstring(directory) + L"\\WinStore.App.exe";
+  return ::CompareStringOrdinal(path, static_cast<int>(length), store.c_str(),
+                                static_cast<int>(store.size()),
+                                TRUE) == CSTR_EQUAL;
+}
+
+bool CCandidateList::_ReadOwnerGeometry(
+    candidate_motion::OwnerGeometry& geometry) const {
+  if (!_followView || !::IsWindow(_followView) ||
+      !::IsWindowVisible(_followView))
+    return false;
+  const HWND root = ::GetAncestor(_followView, GA_ROOT);
+  if (!root || !::IsWindowVisible(root) || ::IsIconic(root))
+    return false;
+  RECT client = {};
+  POINT origin = {};
+  if (!::GetClientRect(_followView, &client) ||
+      !::ClientToScreen(_followView, &origin))
+    return false;
+  using GetDpiFn = UINT(WINAPI*)(HWND);
+  const auto getDpi = reinterpret_cast<GetDpiFn>(
+      ::GetProcAddress(::GetModuleHandleW(L"user32.dll"), "GetDpiForWindow"));
+  const UINT dpi = getDpi ? getDpi(_followView) : 0;
+  if (!dpi || client.right <= client.left || client.bottom <= client.top)
+    return false;
+  geometry.root = root;
+  geometry.origin = origin;
+  geometry.width = client.right - client.left;
+  geometry.height = client.bottom - client.top;
+  geometry.dpi = dpi;
+  return true;
+}
+
+void CCandidateList::_PublishOwnerFollowDiagnostics() {
+  if (!_followWindow)
+    return;
+  const auto publish = [this](const wchar_t* name, ULONG value) {
+    ::SetPropW(_followWindow, name,
+               reinterpret_cast<HANDLE>(static_cast<UINT_PTR>(value)));
+  };
+  publish(L"WeaselOwnerFollowPolicy", _settingsFollowEnabled ? 1 : 0);
+  publish(L"WeaselOwnerFollowScope",
+          _settingsFollowEnabled ? 2 : 0);  // Settings + installed Store (R3).
+  publish(L"WeaselOwnerSourceUpdates", _followSourceUpdates);
+  publish(L"WeaselOwnerTranslations", _followTranslations);
+  publish(L"WeaselOwnerRepeatedSources", _followRepeatedSources);
+  publish(L"WeaselOwnerLayoutInvalidations", _followLayoutInvalidations);
+  publish(L"WeaselOwnerReadFailures", _followReadFailures);
+  _tsf->_R19PublishPlacementProbeDiagnostics(_followWindow);
+}
+
+LRESULT CALLBACK CCandidateList::_OwnerFollowWndProc(HWND hwnd,
+                                                     UINT message,
+                                                     WPARAM wParam,
+                                                     LPARAM lParam) {
+  if (message == WM_NCCREATE) {
+    const auto create = reinterpret_cast<const CREATESTRUCTW*>(lParam);
+    ::SetWindowLongPtrW(hwnd, GWLP_USERDATA,
+                        reinterpret_cast<LONG_PTR>(create->lpCreateParams));
+    return TRUE;
+  }
+  auto self = reinterpret_cast<CCandidateList*>(
+      ::GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+  if (message == WM_NCDESTROY) {
+    ::KillTimer(hwnd, kOwnerFollowTimer);
+    ::SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+    if (self && self->_followWindow == hwnd) {
+      self->_followWindow = nullptr;
+      self->_followTimerActive = false;
+    }
+  } else if (message == WM_TIMER && wParam == kOwnerFollowTimer) {
+    // KillTimer need not remove an already queued WM_TIMER. A dead/stopped
+    // window must not resurrect the UI or retain a callback into freed memory.
+    if (!self || self->_followWindow != hwnd || !self->_followTimerActive ||
+        self->_followTickBusy)
+      return 0;
+    self->AddRef();
+    self->_followTickBusy = true;
+    try {
+      self->_TickOwnerFollow();
+    } catch (...) {
+      ++self->_followReadFailures;
+      self->_StopOwnerFollow(false);
+    }
+    self->_followTickBusy = false;
+    self->Release();
+    return 0;
+  }
+  return ::DefWindowProcW(hwnd, message, wParam, lParam);
+}
+
+void CCandidateList::_StartOwnerFollow() {
+  if (!_uiStarted || !_pbShow || !_ui || !_ui->IsShown() ||
+      !_ui->status().composing || _followTimerActive)
+    return;
+  if (!_followWindow) {
+    WNDCLASSEXW wc = {};
+    wc.cbSize = sizeof(wc);
+    wc.hInstance = g_hInst;
+    wc.lpfnWndProc = &_OwnerFollowWndProc;
+    wc.lpszClassName = kOwnerFollowClass;
+    if (!::RegisterClassExW(&wc)) {
+      WNDCLASSEXW existing = {};
+      existing.cbSize = sizeof(existing);
+      if (::GetLastError() != ERROR_CLASS_ALREADY_EXISTS ||
+          !::GetClassInfoExW(g_hInst, kOwnerFollowClass, &existing) ||
+          existing.lpfnWndProc != &_OwnerFollowWndProc)
+        return;
+    }
+    _followWindow = ::CreateWindowExW(0, kOwnerFollowClass, L"", 0, 0, 0, 0, 0,
+                                      HWND_MESSAGE, nullptr, g_hInst, this);
+    if (!_followWindow) {
+      ::UnregisterClassW(kOwnerFollowClass, g_hInst);
+      return;
+    }
+  }
+  _followTimerActive = ::SetTimer(_followWindow, kOwnerFollowTimer,
+                                  kOwnerFollowIntervalMs, nullptr) != 0;
+  _PublishOwnerFollowDiagnostics();
+  // Preserve the existing Settings/Store owner-anchor bootstrap. R19's
+  // diagnostic timer probes GetTextExt separately and never moves the
+  // candidate.
+  if (_settingsFollowEnabled && _followTimerActive && !_haveEffectiveAnchor &&
+      _pContextDocument)
+    _tsf->_UpdateCompositionWindow(_pContextDocument);
+}
+
+void CCandidateList::_StopOwnerFollow(bool destroyWindow) {
+  _followTimerActive = false;
+  if (_followWindow)
+    ::KillTimer(_followWindow, kOwnerFollowTimer);
+  if (!destroyWindow)
+    return;
+  _ownerAnchor.Reset();
+  _haveEffectiveAnchor = false;
+  _followView = nullptr;
+  if (_followWindow) {
+    ::DestroyWindow(_followWindow);  // WM_NCDESTROY clears the stored pointer.
+    // Other candidate instances can share the class. Unregister only succeeds
+    // once the last instance has gone; no foreign class or window is changed.
+    ::UnregisterClassW(kOwnerFollowClass, g_hInst);
+  }
+}
+
+void CCandidateList::_TickOwnerFollow() {
+  if (!_uiStarted || !_pbShow || !_ui || !_ui->IsShown() ||
+      !_ui->status().composing || !_pContextDocument)
+    return;
+
+  // Keep the R19/R20 read-only revalidation probe. Ordinary hosts also use
+  // its most recently completed START/END pair for R21 placement follow, while
+  // Settings/Store retain their existing owner-follow protocol unchanged.
+  _tsf->_R19PlacementProbeTick(_pContextDocument);
+  if (!_settingsFollowEnabled)
+    _tsf->_R21PlacementFollowTick(_pContextDocument);
+  _PublishOwnerFollowDiagnostics();
+  if (!_settingsFollowEnabled)
+    return;
+
+  candidate_motion::OwnerGeometry owner;
+  if (!_ReadOwnerGeometry(owner)) {
+    ++_followReadFailures;
+    return;
+  }
+  const HWND foreground = ::GetForegroundWindow();
+  if (!foreground || (::GetAncestor(foreground, GA_ROOT) != owner.root &&
+                      ::GetAncestor(foreground, GA_ROOTOWNER) != owner.root))
+    return;
+
+  RECT effective = {};
+  const auto result = _ownerAnchor.Project(owner, effective);
+  if (result == candidate_motion::Projection::kNeedsLayout) {
+    // Translation is invalid after resize, view/root change or DPI change.
+    // Ask TSF for a new read-only layout, once, rather than guessing scaling or
+    // moving the candidate to (0,0). No synchronous wait or edit is introduced.
+    _ownerAnchor.Reset();
+    _haveEffectiveAnchor = false;
+    ++_followLayoutInvalidations;
+    _PublishOwnerFollowDiagnostics();
+    _tsf->_UpdateCompositionWindow(_pContextDocument);
+    return;
+  }
+  if (result != candidate_motion::Projection::kTranslated ||
+      (_haveEffectiveAnchor &&
+       candidate_motion::OwnerAnchor::SameRect(effective, _effectiveAnchor)))
+    return;
+
+  _effectiveAnchor = effective;
+  _haveEffectiveAnchor = true;
+  ++_followTranslations;
+  // Move the real candidate through its normal UI path. This retains edge
+  // avoidance and shadow offsets. No renderer moves a foreign candidate HWND.
+  _ui->UpdateInputPosition(effective);
+  _PublishOwnerFollowDiagnostics();
+}
+
 void WeaselTSF::_UpdateUI(const Context& ctx, const Status& status) {
+  // Candidate-context changes are input activity, not viewport motion. Mark
+  // them before an accessibility caret can run ahead of the host's TSF layout.
+  _r21LastTextActivityTick = ::GetTickCount();
   _cand->UpdateUI(ctx, status);
 }
 

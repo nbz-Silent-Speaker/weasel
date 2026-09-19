@@ -4,6 +4,134 @@
 #include "ResponseParser.h"
 #include "CandidateList.h"
 
+#include <oleacc.h>
+
+namespace {
+
+constexpr DWORD kR21MotionGateMs = 75;
+
+bool R21SameRect(const RECT& a, const RECT& b) {
+  return a.left == b.left && a.top == b.top && a.right == b.right &&
+         a.bottom == b.bottom;
+}
+
+bool R21SuccessfulRect(bool hasRect, HRESULT hr) {
+  return hasRect && SUCCEEDED(hr);
+}
+
+bool R21TranslatedTogether(const RECT& oldStart,
+                           const RECT& newStart,
+                           const RECT& oldEnd,
+                           const RECT& newEnd) {
+  const LONGLONG dx = static_cast<LONGLONG>(newStart.left) - oldStart.left;
+  const LONGLONG dy = static_cast<LONGLONG>(newStart.top) - oldStart.top;
+  const auto translated = [dx, dy](const RECT& oldRect, const RECT& newRect) {
+    // Physical TSF edges round independently: the captured move alternates
+    // 30/31-pixel heights and 94/95-pixel START-to-END distances. A one-pixel
+    // edge discrepancy is rounding, not proof that the viewport is refreshed.
+    const auto rounded = [](LONGLONG delta, LONGLONG expected) {
+      return delta >= expected - 1 && delta <= expected + 1;
+    };
+    return rounded(static_cast<LONGLONG>(newRect.left) - oldRect.left, dx) &&
+           rounded(static_cast<LONGLONG>(newRect.right) - oldRect.right, dx) &&
+           rounded(static_cast<LONGLONG>(newRect.top) - oldRect.top, dy) &&
+           rounded(static_cast<LONGLONG>(newRect.bottom) - oldRect.bottom, dy);
+  };
+  return translated(oldStart, newStart) && translated(oldEnd, newEnd);
+}
+
+bool R21ReadMsaaCaret(HWND expectedView,
+                      RECT& caretRect,
+                      HWND& focus,
+                      HWND& root) {
+  focus = nullptr;
+  root = nullptr;
+  caretRect = {};
+
+  GUITHREADINFO info = {};
+  info.cbSize = sizeof(info);
+  if (!::GetGUIThreadInfo(0, &info) || !info.hwndFocus)
+    return false;
+
+  DWORD focusProcessId = 0;
+  ::GetWindowThreadProcessId(info.hwndFocus, &focusProcessId);
+  if (!focusProcessId || focusProcessId != ::GetCurrentProcessId())
+    return false;
+
+  const HWND focusRoot = ::GetAncestor(info.hwndFocus, GA_ROOT);
+  const HWND foreground = ::GetForegroundWindow();
+  const HWND foregroundRoot =
+      foreground ? ::GetAncestor(foreground, GA_ROOT) : nullptr;
+  if (!focusRoot || focusRoot != foregroundRoot)
+    return false;
+
+  if (expectedView) {
+    const HWND viewRoot = ::GetAncestor(expectedView, GA_ROOT);
+    if (viewRoot && viewRoot != focusRoot)
+      return false;
+  }
+
+  using AccessibleObjectFromWindowFn =
+      HRESULT(WINAPI*)(HWND, DWORD, REFIID, void**);
+  static const auto accessibleObjectFromWindow = [] {
+    HMODULE module = ::GetModuleHandleW(L"oleacc.dll");
+    if (!module)
+      module = ::LoadLibraryW(L"oleacc.dll");
+    return module ? reinterpret_cast<AccessibleObjectFromWindowFn>(
+                        ::GetProcAddress(module, "AccessibleObjectFromWindow"))
+                  : nullptr;
+  }();
+  if (!accessibleObjectFromWindow)
+    return false;
+
+  IAccessible* rawAccessible = nullptr;
+  const HRESULT objectHr = accessibleObjectFromWindow(
+      info.hwndFocus, static_cast<DWORD>(OBJID_CARET), __uuidof(IAccessible),
+      reinterpret_cast<void**>(&rawAccessible));
+  if (FAILED(objectHr) || !rawAccessible)
+    return false;
+
+  com_ptr<IAccessible> accessible;
+  accessible.Attach(rawAccessible);
+
+  LONG left = 0;
+  LONG top = 0;
+  LONG width = 0;
+  LONG height = 0;
+  VARIANT child = {};
+  child.vt = VT_I4;
+  child.lVal = CHILDID_SELF;
+  const HRESULT locationHr =
+      accessible->accLocation(&left, &top, &width, &height, child);
+  if (FAILED(locationHr) || width <= 0 || height <= 0)
+    return false;
+
+  RECT rootRect = {};
+  if (!::GetWindowRect(focusRoot, &rootRect))
+    return false;
+
+  RECT current = {left, top, left + width, top + height};
+  RECT intersection = {};
+  if (!::IntersectRect(&intersection, &current, &rootRect))
+    return false;
+
+  caretRect = current;
+  focus = info.hwndFocus;
+  root = focusRoot;
+  return true;
+}
+
+RECT R21TranslateRect(const RECT& source, LONG dx, LONG dy) {
+  RECT result = source;
+  result.left += dx;
+  result.right += dx;
+  result.top += dy;
+  result.bottom += dy;
+  return result;
+}
+
+}  // namespace
+
 /* Start Composition */
 class CStartCompositionEditSession : public CEditSession {
  public:
@@ -61,6 +189,7 @@ STDMETHODIMP CStartCompositionEditSession::DoEditSession(TfEditCookie ec) {
 
 void WeaselTSF::_StartComposition(com_ptr<ITfContext> pContext,
                                   BOOL fCUASWorkaroundEnabled) {
+  _R19ResetPlacementProbeDiagnostics();
   com_ptr<CStartCompositionEditSession> pStartCompositionEditSession;
   pStartCompositionEditSession.Attach(
       new CStartCompositionEditSession(this, pContext, fCUASWorkaroundEnabled));
@@ -99,11 +228,16 @@ STDMETHODIMP CEndCompositionEditSession::DoEditSession(TfEditCookie ec) {
   if (!_pTextService || !_pContext)
     return S_OK;
 
-  _pTextService->_ClearCompositionDisplayAttributes(ec, _pContext);
-
   com_ptr<ITfRange> pCompositionRange;
-  if (_clear && _pComposition->GetRange(&pCompositionRange) == S_OK)
-    pCompositionRange->SetText(ec, 0, L"", 0);
+  // This session owns the composition being ended. The service may already
+  // have no current composition, or may be composing new text by now.
+  if (_pComposition->GetRange(&pCompositionRange) == S_OK &&
+      pCompositionRange != nullptr) {
+    _pTextService->_ClearCompositionDisplayAttributes(ec, _pContext,
+                                                      pCompositionRange);
+    if (_clear)
+      pCompositionRange->SetText(ec, 0, L"", 0);
+  }
 
   // Drop ownership before EndComposition(). Some applications notify
   // OnCompositionTerminated synchronously while the old composition ends.
@@ -120,15 +254,24 @@ void WeaselTSF::_EndComposition(com_ptr<ITfContext> pContext,
                                 BOOL clear,
                                 BOOL endUI) {
   CEndCompositionEditSession* pEditSession;
-  HRESULT hr;
+  HRESULT hr = E_FAIL;
   com_ptr<ITfComposition> pComposition = _pComposition;
 
   if (endUI)
     _cand->EndUI();
+  if (!pContext || !pComposition)
+    return;
   if ((pEditSession = new CEndCompositionEditSession(
            this, pContext, pComposition, clear)) != NULL) {
-    pContext->RequestEditSession(_tfClientId, pEditSession,
-                                 TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
+    const HRESULT requestHr = pContext->RequestEditSession(
+        _tfClientId, pEditSession, TF_ES_ASYNCDONTCARE | TF_ES_READWRITE, &hr);
+    // Once TSF accepts cleanup, stop blocking fresh input on the old object.
+    // A synchronous session already finalized it; a deferred session owns
+    // its own object and cleans only the captured range, even if a newer
+    // composition has since started. A rejected request retains ownership.
+    if (SUCCEEDED(requestHr) && SUCCEEDED(hr) &&
+        _IsCurrentComposition(pComposition))
+      _FinalizeComposition();
     pEditSession->Release();
   }
 }
@@ -209,8 +352,575 @@ STDMETHODIMP CGetTextExtentEditSession::DoEditSession(TfEditCookie ec) {
   return S_OK;
 }
 
+/* R19 diagnostic-only GetTextExt probe. It never updates candidate position. */
+class CR19PlacementProbeEditSession : public CEditSession {
+ public:
+  CR19PlacementProbeEditSession(com_ptr<WeaselTSF> pTextService,
+                                com_ptr<ITfContext> pContext,
+                                com_ptr<ITfContextView> pContextView,
+                                com_ptr<ITfComposition> pComposition,
+                                DWORD generation)
+      : CEditSession(pTextService, pContext),
+        _pContextView(pContextView),
+        _pComposition(pComposition),
+        _generation(generation) {}
+
+  STDMETHODIMP DoEditSession(TfEditCookie ec);
+
+ private:
+  com_ptr<ITfContextView> _pContextView;
+  com_ptr<ITfComposition> _pComposition;
+  DWORD _generation;
+};
+
+STDMETHODIMP CR19PlacementProbeEditSession::DoEditSession(TfEditCookie ec) {
+  TF_SELECTION selection = {};
+  ULONG fetched = 0;
+  HRESULT hr = _pContext->GetSelection(ec, TF_DEFAULT_SELECTION, 1, &selection,
+                                       &fetched);
+  if (FAILED(hr) || fetched != 1 || !selection.range) {
+    const HRESULT selectionHr = FAILED(hr) ? hr : E_FAIL;
+    _pTextService->_R20CompleteRangeSourceProbe(
+        _generation, selectionHr, nullptr, FALSE, E_UNEXPECTED, nullptr, FALSE,
+        E_UNEXPECTED, nullptr, FALSE);
+    _pTextService->_R19CompletePlacementProbe(_generation, selectionHr, nullptr,
+                                              FALSE);
+    return S_OK;
+  }
+
+  com_ptr<ITfRange> selectionRange;
+  selectionRange.Attach(selection.range);
+
+  RECT selectionRc = {};
+  BOOL selectionClipped = FALSE;
+  const HRESULT selectionHr = _pContextView->GetTextExt(
+      ec, selectionRange, &selectionRc, &selectionClipped);
+
+  com_ptr<ITfRange> compositionStartRange;
+  RECT compositionStartRc = {};
+  BOOL compositionStartClipped = FALSE;
+  HRESULT compositionStartHr = E_UNEXPECTED;
+  const bool haveCompositionStartRange =
+      _pComposition != nullptr &&
+      _pComposition->GetRange(&compositionStartRange) == S_OK;
+  if (haveCompositionStartRange) {
+    compositionStartRange->Collapse(ec, TF_ANCHOR_START);
+    compositionStartHr = _pContextView->GetTextExt(ec, compositionStartRange,
+                                                   &compositionStartRc,
+                                                   &compositionStartClipped);
+  }
+
+  com_ptr<ITfRange> compositionEndRange;
+  RECT compositionEndRc = {};
+  BOOL compositionEndClipped = FALSE;
+  HRESULT compositionEndHr = E_UNEXPECTED;
+  const bool haveCompositionEndRange =
+      _pComposition != nullptr &&
+      _pComposition->GetRange(&compositionEndRange) == S_OK;
+  if (haveCompositionEndRange) {
+    compositionEndRange->Collapse(ec, TF_ANCHOR_END);
+    compositionEndHr = _pContextView->GetTextExt(
+        ec, compositionEndRange, &compositionEndRc, &compositionEndClipped);
+  }
+
+  _pTextService->_R20CompleteRangeSourceProbe(
+      _generation, selectionHr, SUCCEEDED(selectionHr) ? &selectionRc : nullptr,
+      selectionClipped, compositionStartHr,
+      SUCCEEDED(compositionStartHr) ? &compositionStartRc : nullptr,
+      compositionStartClipped, compositionEndHr,
+      SUCCEEDED(compositionEndHr) ? &compositionEndRc : nullptr,
+      compositionEndClipped);
+
+  // Preserve R19 source-selection semantics: while composing, use composition
+  // START; only fall back to selection when GetRange fails.
+  const HRESULT r19Hr =
+      haveCompositionStartRange ? compositionStartHr : selectionHr;
+  const RECT* r19Rc =
+      haveCompositionStartRange
+          ? (SUCCEEDED(compositionStartHr) ? &compositionStartRc : nullptr)
+          : (SUCCEEDED(selectionHr) ? &selectionRc : nullptr);
+  const BOOL r19Clipped =
+      haveCompositionStartRange ? compositionStartClipped : selectionClipped;
+  _pTextService->_R19CompletePlacementProbe(_generation, r19Hr, r19Rc,
+                                            r19Clipped);
+  return S_OK;
+}
+
+void WeaselTSF::_R19ResetPlacementProbeDiagnostics() {
+  ++_r19ProbeGeneration;
+  if (!_r19ProbeGeneration)
+    ++_r19ProbeGeneration;
+  _r19ProbePending = false;
+  _r19ProbeRequests = 0;
+  _r19ProbeSubmitted = 0;
+  _r19ProbeCoalesced = 0;
+  _r19ProbeCompleted = 0;
+  _r19ProbeFailures = 0;
+  _r19ProbeRectChanges = 0;
+  _r19LayoutCallbacks = 0;
+  _r19LayoutChanges = 0;
+  _r19NormalPositionRequests = 0;
+  _r19ProbeLastSubmitHr = S_OK;
+  _r19ProbeLastSessionHr = S_OK;
+  _r19ProbeLastTextExtHr = S_OK;
+  _r19ProbeHasRect = false;
+  _r19ProbeLastRect = {};
+  _r19ProbeLastClipped = FALSE;
+  _r19ProbeViewHwnd = nullptr;
+
+  _r20SamplesCompleted = 0;
+  _r20SelectionFailures = 0;
+  _r20CompositionStartFailures = 0;
+  _r20CompositionEndFailures = 0;
+  _r20SelectionRectChanges = 0;
+  _r20CompositionStartRectChanges = 0;
+  _r20CompositionEndRectChanges = 0;
+  _r20SelectionLastTextExtHr = S_OK;
+  _r20CompositionStartLastTextExtHr = S_OK;
+  _r20CompositionEndLastTextExtHr = S_OK;
+  _r20SelectionHasRect = false;
+  _r20CompositionStartHasRect = false;
+  _r20CompositionEndHasRect = false;
+  _r20SelectionLastRect = {};
+  _r20CompositionStartLastRect = {};
+  _r20CompositionEndLastRect = {};
+  _r20SelectionLastClipped = FALSE;
+  _r20CompositionStartLastClipped = FALSE;
+  _r20CompositionEndLastClipped = FALSE;
+
+  _R21ResetPlacementFollow();
+}
+
+void WeaselTSF::_R19PlacementProbeTick(com_ptr<ITfContext> pContext) {
+  ++_r19ProbeRequests;
+  if (_r19ProbePending) {
+    ++_r19ProbeCoalesced;
+    return;
+  }
+  if (!pContext || !_IsComposing()) {
+    ++_r19ProbeFailures;
+    _r19ProbeLastSubmitHr = E_UNEXPECTED;
+    return;
+  }
+
+  com_ptr<ITfContextView> pContextView;
+  const HRESULT viewHr = pContext->GetActiveView(&pContextView);
+  if (FAILED(viewHr) || !pContextView) {
+    ++_r19ProbeFailures;
+    _r19ProbeLastSubmitHr = FAILED(viewHr) ? viewHr : E_FAIL;
+    return;
+  }
+  HWND viewHwnd = nullptr;
+  pContextView->GetWnd(&viewHwnd);
+  _r19ProbeViewHwnd = viewHwnd;
+
+  com_ptr<CR19PlacementProbeEditSession> pEditSession;
+  pEditSession.Attach(new CR19PlacementProbeEditSession(
+      this, pContext, pContextView, _pComposition, _r19ProbeGeneration));
+
+  _r19ProbePending = true;
+  ++_r19ProbeSubmitted;
+  HRESULT sessionHr = E_FAIL;
+  const HRESULT requestHr = pContext->RequestEditSession(
+      _tfClientId, pEditSession, TF_ES_ASYNCDONTCARE | TF_ES_READ, &sessionHr);
+  _r19ProbeLastSubmitHr = requestHr;
+  _r19ProbeLastSessionHr = sessionHr;
+  if (FAILED(requestHr) || (FAILED(sessionHr) && _r19ProbePending)) {
+    _r19ProbePending = false;
+    ++_r19ProbeFailures;
+  }
+}
+
+void WeaselTSF::_R19CompletePlacementProbe(DWORD generation,
+                                           HRESULT textExtHr,
+                                           const RECT* rect,
+                                           BOOL clipped) {
+  if (generation != _r19ProbeGeneration)
+    return;
+  _r19ProbePending = false;
+  ++_r19ProbeCompleted;
+  _r19ProbeLastTextExtHr = textExtHr;
+  _r19ProbeLastClipped = clipped;
+  if (FAILED(textExtHr) || !rect) {
+    ++_r19ProbeFailures;
+    _r19ProbeHasRect = false;
+    return;
+  }
+  if (_r19ProbeHasRect && (rect->left != _r19ProbeLastRect.left ||
+                           rect->top != _r19ProbeLastRect.top ||
+                           rect->right != _r19ProbeLastRect.right ||
+                           rect->bottom != _r19ProbeLastRect.bottom))
+    ++_r19ProbeRectChanges;
+  _r19ProbeLastRect = *rect;
+  _r19ProbeHasRect = true;
+}
+
+void WeaselTSF::_R20CompleteRangeSourceProbe(DWORD generation,
+                                             HRESULT selectionHr,
+                                             const RECT* selectionRect,
+                                             BOOL selectionClipped,
+                                             HRESULT compositionStartHr,
+                                             const RECT* compositionStartRect,
+                                             BOOL compositionStartClipped,
+                                             HRESULT compositionEndHr,
+                                             const RECT* compositionEndRect,
+                                             BOOL compositionEndClipped) {
+  if (generation != _r19ProbeGeneration)
+    return;
+
+  ++_r20SamplesCompleted;
+
+  const auto updateSource = [](HRESULT hr, const RECT* rect, BOOL clipped,
+                               HRESULT& lastHr, bool& hasRect, RECT& lastRect,
+                               BOOL& lastClipped, DWORD& failures,
+                               DWORD& rectChanges) {
+    lastHr = hr;
+    lastClipped = clipped;
+    if (FAILED(hr) || !rect) {
+      ++failures;
+      hasRect = false;
+      return;
+    }
+    if (hasRect &&
+        (rect->left != lastRect.left || rect->top != lastRect.top ||
+         rect->right != lastRect.right || rect->bottom != lastRect.bottom))
+      ++rectChanges;
+    lastRect = *rect;
+    hasRect = true;
+  };
+
+  updateSource(selectionHr, selectionRect, selectionClipped,
+               _r20SelectionLastTextExtHr, _r20SelectionHasRect,
+               _r20SelectionLastRect, _r20SelectionLastClipped,
+               _r20SelectionFailures, _r20SelectionRectChanges);
+  updateSource(compositionStartHr, compositionStartRect,
+               compositionStartClipped, _r20CompositionStartLastTextExtHr,
+               _r20CompositionStartHasRect, _r20CompositionStartLastRect,
+               _r20CompositionStartLastClipped, _r20CompositionStartFailures,
+               _r20CompositionStartRectChanges);
+  updateSource(compositionEndHr, compositionEndRect, compositionEndClipped,
+               _r20CompositionEndLastTextExtHr, _r20CompositionEndHasRect,
+               _r20CompositionEndLastRect, _r20CompositionEndLastClipped,
+               _r20CompositionEndFailures, _r20CompositionEndRectChanges);
+}
+
+void WeaselTSF::_R21ResetPlacementFollow() {
+  _r21LastR20Sample = 0;
+  _r21HaveAuthoritativeStart = false;
+  _r21AuthoritativeStart = {};
+  _r21HaveTsfPair = false;
+  _r21PairStart = {};
+  _r21PairEnd = {};
+  _r21HaveMsaaBaseline = false;
+  _r21BaselineMsaa = {};
+  _r21BaselineFocus = nullptr;
+  _r21BaselineRoot = nullptr;
+  _r21BaselineCorrectionX = 0;
+  _r21BaselineCorrectionY = 0;
+  _r21CorrectionX = 0;
+  _r21CorrectionY = 0;
+  _r21CorrectionActive = false;
+  _r21MotionProvisional = false;
+  _r21MotionProvisionalTick = 0;
+  _r21MotionActive = false;
+  _r21LastTextActivityTick = ::GetTickCount();
+  _r21HaveNormalPosition = false;
+  _r21LastNormalPosition = {};
+  _r21HaveOutputPosition = false;
+  _r21LastOutputPosition = {};
+  _r21AuthoritativeRequeries = 0;
+  _r21Rebases = 0;
+  _r21MotionGates = 0;
+  _r21MotionActivations = 0;
+  _r21CorrectionUpdates = 0;
+  _r21MsaaUnavailable = 0;
+  _r21GuardResets = 0;
+}
+
+void WeaselTSF::_R21PlacementFollowTick(com_ptr<ITfContext> pContext) {
+  if (!_IsComposing())
+    return;
+
+  const DWORD now = ::GetTickCount();
+  const bool newSample = _r20SamplesCompleted != _r21LastR20Sample;
+  if (newSample)
+    _r21LastR20Sample = _r20SamplesCompleted;
+
+  const bool startUsable = R21SuccessfulRect(_r20CompositionStartHasRect,
+                                             _r20CompositionStartLastTextExtHr);
+  const bool endUsable = R21SuccessfulRect(_r20CompositionEndHasRect,
+                                           _r20CompositionEndLastTextExtHr);
+
+  const bool hadPair = _r21HaveTsfPair;
+  const bool pairStartChanged =
+      hadPair && !R21SameRect(_r21PairStart, _r20CompositionStartLastRect);
+  const bool pairEndChanged =
+      hadPair && !R21SameRect(_r21PairEnd, _r20CompositionEndLastRect);
+  const bool pairChanged = !hadPair || pairStartChanged || pairEndChanged;
+  RECT msaa = {};
+  HWND focus = nullptr;
+  HWND root = nullptr;
+  const bool haveMsaa = R21ReadMsaaCaret(_r19ProbeViewHwnd, msaa, focus, root);
+  // A translated TSF pair need not include the earlier viewport scroll. Keep
+  // its motion witness; _SetCompositionPosition rebases it when the normal
+  // source arrives, regardless of the two edit-session callbacks' order.
+  const bool translatedPair =
+      startUsable && endUsable && pairStartChanged && _r21HaveMsaaBaseline &&
+      haveMsaa && focus == _r21BaselineFocus && root == _r21BaselineRoot &&
+      (now - _r21LastTextActivityTick) >= kR21MotionGateMs &&
+      R21TranslatedTogether(_r21PairStart, _r20CompositionStartLastRect,
+                            _r21PairEnd, _r20CompositionEndLastRect);
+
+  if (newSample && startUsable) {
+    if (!_r21HaveAuthoritativeStart) {
+      _r21AuthoritativeStart = _r20CompositionStartLastRect;
+      _r21HaveAuthoritativeStart = true;
+    } else if (!R21SameRect(_r21AuthoritativeStart,
+                            _r20CompositionStartLastRect)) {
+      _r21AuthoritativeStart = _r20CompositionStartLastRect;
+      if (!translatedPair) {
+        _r21CorrectionX = 0;
+        _r21CorrectionY = 0;
+        _r21CorrectionActive = false;
+        _r21MotionProvisional = false;
+        _r21MotionActive = false;
+        _r21HaveMsaaBaseline = false;
+      }
+      ++_r21AuthoritativeRequeries;
+      if (pContext)
+        _UpdateCompositionWindow(pContext);
+    }
+  }
+
+  // A transient END/START layout failure is common while the host catches up
+  // with typing. Freeze any existing correction rather than interpreting the
+  // accessibility caret as viewport motion.
+  if (!startUsable || !endUsable)
+    return;
+
+  if (!haveMsaa) {
+    ++_r21MsaaUnavailable;
+    _r21MotionProvisional = false;
+    _r21MotionActive = false;
+    return;
+  }
+
+  if (pairChanged) {
+    _r21PairStart = _r20CompositionStartLastRect;
+    _r21PairEnd = _r20CompositionEndLastRect;
+    _r21HaveTsfPair = true;
+  }
+
+  if (pairChanged && !translatedPair) {
+    // END-only changes are typing/caret motion, so rebase the witness. For a
+    // rigid translation continue below instead: rebasing here would swallow
+    // the window motion before it can update the existing scroll correction.
+    _r21BaselineMsaa = msaa;
+    _r21BaselineFocus = focus;
+    _r21BaselineRoot = root;
+    _r21BaselineCorrectionX = _r21CorrectionX;
+    _r21BaselineCorrectionY = _r21CorrectionY;
+    _r21HaveMsaaBaseline = true;
+    _r21MotionProvisional = false;
+    _r21MotionActive = false;
+    ++_r21Rebases;
+    return;
+  }
+
+  if (!_r21HaveMsaaBaseline) {
+    _r21BaselineMsaa = msaa;
+    _r21BaselineFocus = focus;
+    _r21BaselineRoot = root;
+    _r21BaselineCorrectionX = _r21CorrectionX;
+    _r21BaselineCorrectionY = _r21CorrectionY;
+    _r21HaveMsaaBaseline = true;
+    ++_r21Rebases;
+    return;
+  }
+
+  if (focus != _r21BaselineFocus || root != _r21BaselineRoot) {
+    _r21BaselineMsaa = msaa;
+    _r21BaselineFocus = focus;
+    _r21BaselineRoot = root;
+    _r21BaselineCorrectionX = 0;
+    _r21BaselineCorrectionY = 0;
+    _r21CorrectionX = 0;
+    _r21CorrectionY = 0;
+    _r21CorrectionActive = false;
+    _r21MotionProvisional = false;
+    _r21MotionActive = false;
+    ++_r21Rebases;
+    ++_r21GuardResets;
+    if (pContext)
+      _UpdateCompositionWindow(pContext);
+    return;
+  }
+
+  const LONG motionX = msaa.left - _r21BaselineMsaa.left;
+  const LONG motionY = msaa.top - _r21BaselineMsaa.top;
+  if (motionX == 0 && motionY == 0) {
+    _r21MotionProvisional = false;
+    _r21MotionActive = false;
+    if (_r21CorrectionX == _r21BaselineCorrectionX &&
+        _r21CorrectionY == _r21BaselineCorrectionY)
+      return;
+
+    _r21CorrectionX = _r21BaselineCorrectionX;
+    _r21CorrectionY = _r21BaselineCorrectionY;
+    _r21CorrectionActive = _r21CorrectionX != 0 || _r21CorrectionY != 0;
+    ++_r21CorrectionUpdates;
+    const RECT source = _r21HaveNormalPosition ? _r21LastNormalPosition
+                                               : _r20CompositionStartLastRect;
+    _SetCompositionPosition(source);
+    return;
+  }
+
+  // Input can move the MSAA caret tens of milliseconds before the host's TSF
+  // END extent changes. During that window keep the current correction frozen.
+  if ((now - _r21LastTextActivityTick) < kR21MotionGateMs) {
+    _r21MotionProvisional = false;
+    _r21MotionActive = false;
+    return;
+  }
+
+  if (!_r21MotionActive) {
+    if (!_r21MotionProvisional) {
+      _r21MotionProvisional = true;
+      _r21MotionProvisionalTick = now;
+      ++_r21MotionGates;
+      return;
+    }
+    if ((now - _r21MotionProvisionalTick) < kR21MotionGateMs)
+      return;
+    _r21MotionProvisional = false;
+    _r21MotionActive = true;
+    ++_r21MotionActivations;
+  }
+
+  const LONG nextCorrectionX = _r21BaselineCorrectionX + motionX;
+  const LONG nextCorrectionY = _r21BaselineCorrectionY + motionY;
+  if (nextCorrectionX == _r21CorrectionX && nextCorrectionY == _r21CorrectionY)
+    return;
+
+  _r21CorrectionX = nextCorrectionX;
+  _r21CorrectionY = nextCorrectionY;
+  _r21CorrectionActive = _r21CorrectionX != 0 || _r21CorrectionY != 0;
+  ++_r21CorrectionUpdates;
+
+  const RECT source = _r21HaveNormalPosition ? _r21LastNormalPosition
+                                             : _r20CompositionStartLastRect;
+  _SetCompositionPosition(source);
+}
+
+void WeaselTSF::_R19PublishPlacementProbeDiagnostics(HWND hwnd) const {
+  if (!hwnd)
+    return;
+  const auto publish = [hwnd](const wchar_t* name, ULONG_PTR value) {
+    ::SetPropW(hwnd, name, reinterpret_cast<HANDLE>(value));
+  };
+  const auto publishSigned = [hwnd](const wchar_t* name, LONG value) {
+    ::SetPropW(hwnd, name,
+               reinterpret_cast<HANDLE>(static_cast<LONG_PTR>(value)));
+  };
+  publish(L"WeaselR19ProbeVersion", 1);
+  publish(L"WeaselR19ProbePulse", ::GetTickCount());
+  publish(L"WeaselR19ProbeGeneration", _r19ProbeGeneration);
+  publish(L"WeaselR19ProbePending", _r19ProbePending ? 1 : 0);
+  publish(L"WeaselR19ProbeRequests", _r19ProbeRequests);
+  publish(L"WeaselR19ProbeSubmitted", _r19ProbeSubmitted);
+  publish(L"WeaselR19ProbeCoalesced", _r19ProbeCoalesced);
+  publish(L"WeaselR19ProbeCompleted", _r19ProbeCompleted);
+  publish(L"WeaselR19ProbeFailures", _r19ProbeFailures);
+  publish(L"WeaselR19ProbeRectChanges", _r19ProbeRectChanges);
+  publish(L"WeaselR19LayoutCallbacks", _r19LayoutCallbacks);
+  publish(L"WeaselR19LayoutChanges", _r19LayoutChanges);
+  publish(L"WeaselR19NormalPositionRequests", _r19NormalPositionRequests);
+  publish(L"WeaselR19ProbeLastSubmitHr",
+          static_cast<DWORD>(_r19ProbeLastSubmitHr));
+  publish(L"WeaselR19ProbeLastSessionHr",
+          static_cast<DWORD>(_r19ProbeLastSessionHr));
+  publish(L"WeaselR19ProbeLastTextExtHr",
+          static_cast<DWORD>(_r19ProbeLastTextExtHr));
+  publish(L"WeaselR19ProbeHasRect", _r19ProbeHasRect ? 1 : 0);
+  publishSigned(L"WeaselR19ProbeLeft", _r19ProbeLastRect.left);
+  publishSigned(L"WeaselR19ProbeTop", _r19ProbeLastRect.top);
+  publishSigned(L"WeaselR19ProbeRight", _r19ProbeLastRect.right);
+  publishSigned(L"WeaselR19ProbeBottom", _r19ProbeLastRect.bottom);
+  publish(L"WeaselR19ProbeClipped", _r19ProbeLastClipped ? 1 : 0);
+  publish(L"WeaselR19ProbeViewHwnd",
+          reinterpret_cast<ULONG_PTR>(_r19ProbeViewHwnd));
+
+  publish(L"WeaselR20ProbeVersion", 1);
+  publish(L"WeaselR20SamplesCompleted", _r20SamplesCompleted);
+  publish(L"WeaselR20SelectionFailures", _r20SelectionFailures);
+  publish(L"WeaselR20CompositionStartFailures", _r20CompositionStartFailures);
+  publish(L"WeaselR20CompositionEndFailures", _r20CompositionEndFailures);
+  publish(L"WeaselR20SelectionRectChanges", _r20SelectionRectChanges);
+  publish(L"WeaselR20CompositionStartRectChanges",
+          _r20CompositionStartRectChanges);
+  publish(L"WeaselR20CompositionEndRectChanges", _r20CompositionEndRectChanges);
+
+  publish(L"WeaselR20SelectionLastTextExtHr",
+          static_cast<DWORD>(_r20SelectionLastTextExtHr));
+  publish(L"WeaselR20CompositionStartLastTextExtHr",
+          static_cast<DWORD>(_r20CompositionStartLastTextExtHr));
+  publish(L"WeaselR20CompositionEndLastTextExtHr",
+          static_cast<DWORD>(_r20CompositionEndLastTextExtHr));
+
+  publish(L"WeaselR20SelectionHasRect", _r20SelectionHasRect ? 1 : 0);
+  publishSigned(L"WeaselR20SelectionLeft", _r20SelectionLastRect.left);
+  publishSigned(L"WeaselR20SelectionTop", _r20SelectionLastRect.top);
+  publishSigned(L"WeaselR20SelectionRight", _r20SelectionLastRect.right);
+  publishSigned(L"WeaselR20SelectionBottom", _r20SelectionLastRect.bottom);
+  publish(L"WeaselR20SelectionClipped", _r20SelectionLastClipped ? 1 : 0);
+
+  publish(L"WeaselR20CompositionStartHasRect",
+          _r20CompositionStartHasRect ? 1 : 0);
+  publishSigned(L"WeaselR20CompositionStartLeft",
+                _r20CompositionStartLastRect.left);
+  publishSigned(L"WeaselR20CompositionStartTop",
+                _r20CompositionStartLastRect.top);
+  publishSigned(L"WeaselR20CompositionStartRight",
+                _r20CompositionStartLastRect.right);
+  publishSigned(L"WeaselR20CompositionStartBottom",
+                _r20CompositionStartLastRect.bottom);
+  publish(L"WeaselR20CompositionStartClipped",
+          _r20CompositionStartLastClipped ? 1 : 0);
+
+  publish(L"WeaselR20CompositionEndHasRect", _r20CompositionEndHasRect ? 1 : 0);
+  publishSigned(L"WeaselR20CompositionEndLeft",
+                _r20CompositionEndLastRect.left);
+  publishSigned(L"WeaselR20CompositionEndTop", _r20CompositionEndLastRect.top);
+  publishSigned(L"WeaselR20CompositionEndRight",
+                _r20CompositionEndLastRect.right);
+  publishSigned(L"WeaselR20CompositionEndBottom",
+                _r20CompositionEndLastRect.bottom);
+  publish(L"WeaselR20CompositionEndClipped",
+          _r20CompositionEndLastClipped ? 1 : 0);
+
+  publish(L"WeaselR21FollowVersion", 1);
+  publish(L"WeaselR21AuthoritativeRequeries", _r21AuthoritativeRequeries);
+  publish(L"WeaselR21Rebases", _r21Rebases);
+  publish(L"WeaselR21MotionGates", _r21MotionGates);
+  publish(L"WeaselR21MotionActivations", _r21MotionActivations);
+  publish(L"WeaselR21CorrectionUpdates", _r21CorrectionUpdates);
+  publish(L"WeaselR21MsaaUnavailable", _r21MsaaUnavailable);
+  publish(L"WeaselR21GuardResets", _r21GuardResets);
+  publish(L"WeaselR21CorrectionActive", _r21CorrectionActive ? 1 : 0);
+  publish(L"WeaselR21MotionProvisional", _r21MotionProvisional ? 1 : 0);
+  publish(L"WeaselR21MotionActive", _r21MotionActive ? 1 : 0);
+  publishSigned(L"WeaselR21CorrectionX", _r21CorrectionX);
+  publishSigned(L"WeaselR21CorrectionY", _r21CorrectionY);
+  publish(L"WeaselR21HaveOutput", _r21HaveOutputPosition ? 1 : 0);
+  publishSigned(L"WeaselR21OutputLeft", _r21LastOutputPosition.left);
+  publishSigned(L"WeaselR21OutputTop", _r21LastOutputPosition.top);
+  publishSigned(L"WeaselR21OutputRight", _r21LastOutputPosition.right);
+  publishSigned(L"WeaselR21OutputBottom", _r21LastOutputPosition.bottom);
+}
+
 /* Composition Window Handling */
 BOOL WeaselTSF::_UpdateCompositionWindow(com_ptr<ITfContext> pContext) {
+  ++_r19NormalPositionRequests;
   com_ptr<ITfContextView> pContextView;
   if (pContext->GetActiveView(&pContextView) != S_OK)
     return FALSE;
@@ -240,8 +950,56 @@ void WeaselTSF::_SetCompositionPosition(const RECT& rc) {
   RECT _rc;
   _rc.left = _rc.right = rc.left;
   _rc.top = _rc.bottom = rc.bottom;
-  m_client.UpdateInputPosition(rc);
-  _cand->UpdateInputPosition(rc);
+
+  const bool normalChanged =
+      _r21HaveNormalPosition && !R21SameRect(_r21LastNormalPosition, rc);
+  if ((_r21HaveMsaaBaseline || _r21CorrectionActive) && normalChanged) {
+    RECT msaa = {};
+    HWND focus = nullptr;
+    HWND root = nullptr;
+    const bool translatedSource =
+        _r21HaveMsaaBaseline &&
+        (::GetTickCount() - _r21LastTextActivityTick) >= kR21MotionGateMs &&
+        R21TranslatedTogether(_r21LastNormalPosition, rc,
+                              _r21LastNormalPosition, rc) &&
+        R21ReadMsaaCaret(_r19ProbeViewHwnd, msaa, focus, root) &&
+        focus == _r21BaselineFocus && root == _r21BaselineRoot;
+    if (translatedSource) {
+      // Express the same witness relative to the new TSF source. Subtract
+      // source motion, then add observed caret motion exactly once. This also
+      // removes the correction if TSF catches up with the viewport itself.
+      // Rebase even when the current correction is zero (plain window move).
+      _r21BaselineCorrectionX -= rc.left - _r21LastNormalPosition.left;
+      _r21BaselineCorrectionY -= rc.top - _r21LastNormalPosition.top;
+      _r21CorrectionX =
+          _r21BaselineCorrectionX + msaa.left - _r21BaselineMsaa.left;
+      _r21CorrectionY =
+          _r21BaselineCorrectionY + msaa.top - _r21BaselineMsaa.top;
+      _r21CorrectionActive = _r21CorrectionX != 0 || _r21CorrectionY != 0;
+    } else {
+      // Changed geometry, recent typing, or a missing/foreign witness cannot
+      // justify keeping a viewport correction. Use the normal TSF anchor.
+      _r21CorrectionX = 0;
+      _r21CorrectionY = 0;
+      _r21CorrectionActive = false;
+      _r21MotionProvisional = false;
+      _r21MotionActive = false;
+      _r21HaveMsaaBaseline = false;
+      ++_r21GuardResets;
+    }
+  }
+
+  _r21LastNormalPosition = rc;
+  _r21HaveNormalPosition = true;
+  const RECT output =
+      _r21CorrectionActive
+          ? R21TranslateRect(rc, _r21CorrectionX, _r21CorrectionY)
+          : rc;
+  _r21LastOutputPosition = output;
+  _r21HaveOutputPosition = true;
+
+  m_client.UpdateInputPosition(output);
+  _cand->UpdateInputPosition(output);
 }
 
 /* Inline Preedit */
@@ -382,6 +1140,10 @@ BOOL WeaselTSF::_InsertText(com_ptr<ITfContext> pContext,
 void WeaselTSF::_UpdateComposition(com_ptr<ITfContext> pContext) {
   HRESULT hr;
 
+  // Prevent input-driven MSAA movement from being classified as viewport
+  // motion while the host's TSF END extent is still catching up.
+  _r21LastTextActivityTick = ::GetTickCount();
+
   _pEditSessionContext = pContext;
 
   _pEditSessionContext->RequestEditSession(
@@ -424,6 +1186,10 @@ void WeaselTSF::_AbortComposition(bool clear) {
 
 void WeaselTSF::_FinalizeComposition() {
   _pComposition = nullptr;
+  ++_r19ProbeGeneration;
+  if (!_r19ProbeGeneration)
+    ++_r19ProbeGeneration;
+  _r19ProbePending = false;
 }
 
 void WeaselTSF::_SetComposition(com_ptr<ITfComposition> pComposition) {

@@ -2,23 +2,23 @@
 
 #include "WeaselTSF.h"
 
-void WeaselTSF::_ClearCompositionDisplayAttributes(TfEditCookie ec,
-                                                   _In_ ITfContext* pContext) {
-  ITfRange* pRangeComposition = nullptr;
+void WeaselTSF::_ClearCompositionDisplayAttributes(
+    TfEditCookie ec,
+    _In_ ITfContext* pContext,
+    _In_ ITfRange* pRangeComposition) {
   ITfProperty* pDisplayAttributeProperty = nullptr;
 
-  if (FAILED(_pComposition->GetRange(&pRangeComposition))) {
+  if (!pContext || !pRangeComposition) {
     return;
   }
 
   if (SUCCEEDED(pContext->GetProperty(GUID_PROP_ATTRIBUTE,
-                                      &pDisplayAttributeProperty))) {
+                                      &pDisplayAttributeProperty)) &&
+      pDisplayAttributeProperty != nullptr) {
     pDisplayAttributeProperty->Clear(ec, pRangeComposition);
 
     pDisplayAttributeProperty->Release();
   }
-
-  pRangeComposition->Release();
 }
 
 BOOL WeaselTSF::_SetCompositionDisplayAttributes(TfEditCookie ec,

@@ -21,6 +21,19 @@ Unicode true
 !define WEASEL_ROOT $INSTDIR\weasel-${WEASEL_VERSION}
 !define REG_UNINST_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\Weasel"
 
+; Optional runtime DLLs can remain loaded in packaged hosts after WeaselServer
+; exits. Extract them under a temporary name and let Windows replace the locked
+; destination on reboot when an immediate replacement is not possible.
+!macro InstallOptionalLockedFile Source Destination
+  !if /FileExists "${Source}"
+    Delete "${Destination}.new"
+    File "/oname=${Destination}.new" "${Source}"
+    SetFileAttributes "${Destination}" NORMAL
+    Delete /REBOOTOK "${Destination}"
+    Rename /REBOOTOK "${Destination}.new" "${Destination}"
+  !endif
+!macroend
+
 ; The name of the installer
 Name "小狼毫 ${WEASEL_VERSION}"
 
@@ -176,6 +189,10 @@ call_uninstaller:
   ; recover back to 32bit view
   SetRegView 32
   ; Remove files and uninstaller
+  RMDir /r "$R1\data\dicts"
+  RMDir /r "$R1\data\lua"
+  RMDir /r "$R1\data\packages"
+  RMDir /r "$R1\data\licenses"
   Delete  "$R1\data\opencc\*.*"
   Delete  "$R1\data\preview\*.*"
   Delete  "$R1\data\*.*"
@@ -257,6 +274,13 @@ program_files:
       File "WeaselServer.exe"
       File "rime.dll"
       File "WinSparkle.dll"
+      !insertmacro InstallOptionalLockedFile "WeaselAcrylicAppSdk.dll" "$INSTDIR\WeaselAcrylicAppSdk.dll"
+      !insertmacro InstallOptionalLockedFile "Microsoft.WindowsAppRuntime.Bootstrap.dll" "$INSTDIR\Microsoft.WindowsAppRuntime.Bootstrap.dll"
+      ; x86 TSF clients run inside 32-bit apps even on Windows 11 x64.
+      SetOutPath "$INSTDIR\acrylic\x86"
+      !insertmacro InstallOptionalLockedFile "acrylic\x86\WeaselAcrylicAppSdk.dll" "$INSTDIR\acrylic\x86\WeaselAcrylicAppSdk.dll"
+      !insertmacro InstallOptionalLockedFile "acrylic\x86\Microsoft.WindowsAppRuntime.Bootstrap.dll" "$INSTDIR\acrylic\x86\Microsoft.WindowsAppRuntime.Bootstrap.dll"
+      SetOutPath "$INSTDIR"
     ${Else}
       File "Win32\WeaselDeployer.exe"
       File "Win32\WeaselServer.exe"
@@ -279,11 +303,28 @@ program_files:
   ${Endif}
 
   File "WeaselSetup.exe"
+  ; built-in alternatives for the status icon picker
+  SetOutPath $INSTDIR\icons\status
+  File "..\resource\status-icons\*.ico"
   ; shared data files
   SetOutPath $INSTDIR\data
-  File "data\*.yaml"
+  ; User overrides are created in the user's profile, never shipped/overwritten.
+  File /x *.custom.yaml /x weasel.yaml "data\*.yaml"
+  File /oname=weasel.yaml "..\data\weasel.yaml"
   File /nonfatal "data\*.txt"
-  File /nonfatal "data\*.gram"
+  ; bundled Wanxiang Lite dependencies and package metadata
+  SetOutPath $INSTDIR\data\dicts
+  File /r "data\dicts\*.*"
+  SetOutPath $INSTDIR\data\lua
+  File /r "data\lua\*.*"
+  SetOutPath $INSTDIR\data\packages
+  File "data\packages\*.json"
+  SetOutPath $INSTDIR\data\licenses
+  File "data\licenses\*.*"
+  ; Read-only Wanxiang input-mode templates. They are copied to the user
+  ; directory only when the user selects a mode; user custom files stay intact.
+  SetOutPath $INSTDIR\data\custom
+  File "data\custom\*.custom.yaml"
   ; opencc data files
   SetOutPath $INSTDIR\data\opencc
   File "data\opencc\*.json"
@@ -305,7 +346,14 @@ program_files:
   IfErrors +2 0
   StrCpy $R2 "/t"
 
-  ExecWait '"$INSTDIR\WeaselSetup.exe" $R2'
+  ClearErrors
+  ExecWait '"$INSTDIR\WeaselSetup.exe" $R2' $R3
+  IfErrors setup_aborted
+  StrCmp $R3 "0" setup_confirmed setup_aborted
+  setup_aborted:
+  SetErrorLevel 1
+  Abort
+  setup_confirmed:
 
   ; Write the uninstall keys for Windows
   WriteRegStr HKLM "${REG_UNINST_KEY}" "DisplayName" "$(DISPLAYNAME)"
@@ -396,10 +444,18 @@ Section "Uninstall"
 
   ; Remove files and uninstaller
   SetOutPath $TEMP
+  RMDir /r "$INSTDIR\data\dicts"
+  RMDir /r "$INSTDIR\data\lua"
+  RMDir /r "$INSTDIR\data\packages"
+  RMDir /r "$INSTDIR\data\licenses"
   Delete  "$INSTDIR\data\opencc\*.*"
   Delete  "$INSTDIR\data\preview\*.*"
   Delete  "$INSTDIR\data\*.*"
   Delete  "$INSTDIR\*.*"
+  Delete  "$INSTDIR\acrylic\x86\WeaselAcrylicAppSdk.dll"
+  Delete  "$INSTDIR\acrylic\x86\Microsoft.WindowsAppRuntime.Bootstrap.dll"
+  RMDir  "$INSTDIR\acrylic\x86"
+  RMDir  "$INSTDIR\acrylic"
   RMDir  "$INSTDIR\data\opencc"
   RMDir  "$INSTDIR\data\preview"
   RMDir  "$INSTDIR\data"

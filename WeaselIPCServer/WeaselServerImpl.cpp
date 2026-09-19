@@ -3,6 +3,7 @@
 #include <mutex>
 #include <Windows.h>
 #include <resource.h>
+#include <WeaselUserSettings.h>
 #include <WeaselUtility.h>
 
 namespace weasel {
@@ -28,9 +29,17 @@ using namespace weasel;
 
 extern CAppModule _Module;
 
+namespace {
+BOOL EffectiveDarkMode() {
+  const auto settings = UserSettings::Load();
+  return ResolveAppearanceDarkMode(settings.appearance_theme_mode,
+                                   IsUserDarkMode() != FALSE);
+}
+}  // namespace
+
 ServerImpl::ServerImpl()
     : m_pRequestHandler(NULL),
-      m_darkMode(IsUserDarkMode()),
+      m_darkMode(EffectiveDarkMode()),
       channel(std::make_unique<PipeServer>(GetPipeName(), sa.get_attr())) {
   m_hUser32Module = GetModuleHandle(_T("user32.dll"));
 }
@@ -57,10 +66,30 @@ LRESULT ServerImpl::OnColorChange(UINT uMsg,
                                   WPARAM wParam,
                                   LPARAM lParam,
                                   BOOL& bHandled) {
-  if (IsUserDarkMode() != m_darkMode) {
-    m_darkMode = IsUserDarkMode();
-    m_pRequestHandler->UpdateColorTheme(m_darkMode);
+  const BOOL dark_mode = EffectiveDarkMode();
+  if (dark_mode != m_darkMode) {
+    m_darkMode = dark_mode;
+    // Palette/session updates are serialized with input on the pipe worker.
+    m_colorThemeChanged.store(true);
   }
+  return 0;
+}
+
+LRESULT ServerImpl::OnRegisteredMessage(UINT uMsg,
+                                        WPARAM wParam,
+                                        LPARAM lParam,
+                                        BOOL& bHandled) {
+  if (uMsg == UserSettingsChangedMessage()) {
+    const BOOL dark_mode = EffectiveDarkMode();
+    if (dark_mode != m_darkMode) {
+      m_darkMode = dark_mode;
+      m_colorThemeChanged.store(true);
+    }
+    if (m_settingsChangedCallback)
+      m_settingsChangedCallback();
+    return 0;
+  }
+  bHandled = FALSE;
   return 0;
 }
 
@@ -231,11 +260,18 @@ DWORD ServerImpl::OnKeyEvent(WEASEL_IPC_COMMAND uMsg,
   if (!m_pRequestHandler /* || !m_pSharedMemory*/)
     return 0;
 
+  const KeyEvent key_event(wParam);
   auto eat = [this](std::wstring& msg) -> bool {
     *channel << msg;
     return true;
   };
-  return m_pRequestHandler->ProcessKeyEvent(KeyEvent(wParam), lParam, eat);
+  return m_pRequestHandler->ProcessKeyEvent(key_event, lParam, eat);
+}
+
+DWORD ServerImpl::OnCapsLockState(WEASEL_IPC_COMMAND, DWORD wParam, DWORD) {
+  if (m_capsLockStateCallback)
+    m_capsLockStateCallback(wParam != 0);
+  return 1;
 }
 
 DWORD ServerImpl::OnShutdownServer(WEASEL_IPC_COMMAND uMsg,
@@ -389,6 +425,13 @@ DWORD ServerImpl::OnChangePage(WEASEL_IPC_COMMAND uMsg,
 
 template <typename _Resp>
 void ServerImpl::HandlePipeMessage(PipeMessage pipe_msg, _Resp resp) {
+  // Already serialized by g_api_mutex. Refresh before processing input so the
+  // same response can carry the new palette to an existing frontend session.
+  if (m_pRequestHandler) {
+    if (m_colorThemeChanged.exchange(false))
+      m_pRequestHandler->UpdateColorTheme(m_darkMode);
+    m_pRequestHandler->RefreshUserSettings();
+  }
   DWORD result;
 
   MAP_PIPE_MSG_HANDLE(pipe_msg.Msg, pipe_msg.wParam, pipe_msg.lParam)
@@ -396,6 +439,7 @@ void ServerImpl::HandlePipeMessage(PipeMessage pipe_msg, _Resp resp) {
   PIPE_MSG_HANDLE(WEASEL_IPC_START_SESSION, OnStartSession)
   PIPE_MSG_HANDLE(WEASEL_IPC_END_SESSION, OnEndSession)
   PIPE_MSG_HANDLE(WEASEL_IPC_PROCESS_KEY_EVENT, OnKeyEvent)
+  PIPE_MSG_HANDLE(WEASEL_IPC_UPDATE_CAPS_LOCK, OnCapsLockState)
   PIPE_MSG_HANDLE(WEASEL_IPC_SHUTDOWN_SERVER, OnShutdownServer)
   PIPE_MSG_HANDLE(WEASEL_IPC_FOCUS_IN, OnFocusIn)
   PIPE_MSG_HANDLE(WEASEL_IPC_FOCUS_OUT, OnFocusOut)
@@ -481,6 +525,14 @@ void Server::AddMenuHandler(UINT uID, CommandHandler handler) {
 
 void Server::SetTrayRefreshCallback(std::function<void()> callback) {
   m_pImpl->SetTrayRefreshCallback(callback);
+}
+
+void Server::SetSettingsChangedCallback(std::function<void()> callback) {
+  m_pImpl->SetSettingsChangedCallback(callback);
+}
+
+void Server::SetCapsLockStateCallback(std::function<void(bool)> callback) {
+  m_pImpl->SetCapsLockStateCallback(callback);
 }
 
 HWND Server::GetHWnd() {

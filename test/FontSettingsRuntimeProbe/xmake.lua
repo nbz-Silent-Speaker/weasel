@@ -1,0 +1,6 @@
+target("FontSettingsRuntimeProbe")
+  set_kind("binary")
+  set_default(false)
+  add_files("./FontSettingsRuntimeProbe.cpp")
+  add_deps("WeaselUI")
+  add_syslinks("d2d1", "dwrite", "shcore")

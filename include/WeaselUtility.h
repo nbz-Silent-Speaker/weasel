@@ -34,6 +34,7 @@ inline std::wstring getUsername() {
 // data directories
 std::filesystem::path WeaselSharedDataPath();
 std::filesystem::path WeaselUserDataPath();
+std::filesystem::path WeaselDisplayUserDataPath();
 inline fs::path WeaselLogPath() {
   WCHAR _path[MAX_PATH] = {0};
   // default location

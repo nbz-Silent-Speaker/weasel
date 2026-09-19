@@ -32,6 +32,7 @@ enum WEASEL_IPC_COMMAND {
   WEASEL_IPC_SELECT_CANDIDATE_ON_CURRENT_PAGE,
   WEASEL_IPC_HIGHLIGHT_CANDIDATE_ON_CURRENT_PAGE,
   WEASEL_IPC_CHANGE_PAGE,
+  WEASEL_IPC_UPDATE_CAPS_LOCK,
   WEASEL_IPC_LAST_COMMAND
 };
 
@@ -85,6 +86,7 @@ struct RequestHandler {
   virtual void EndMaintenance() {}
   virtual void SetOption(DWORD session_id, const std::string& opt, bool val) {}
   virtual void UpdateColorTheme(BOOL darkMode) {}
+  virtual void RefreshUserSettings() {}
 };
 
 // 處理server端回應之物件
@@ -124,8 +126,15 @@ class Client {
   void EndMaintenance();
   // 测试连接
   bool Echo();
+  // Query the existing input session's pipe peer without sending or
+  // reconnecting.
+  bool QueryConnectedServer(DWORD& processId,
+                            DWORD& sessionId,
+                            DWORD& stage,
+                            DWORD& error) const;
   // 请求服务处理按键消息
   bool ProcessKeyEvent(KeyEvent const& keyEvent);
+  void UpdateCapsLockState(bool enabled);
   // 上屏正在編輯的文字
   bool CommitComposition();
   // 清除正在編輯的文字
@@ -170,6 +179,8 @@ class Server {
   // Callback invoked on the server message thread when a tray icon refresh is
   // requested from a pipe worker thread.
   void SetTrayRefreshCallback(std::function<void()> callback);
+  void SetSettingsChangedCallback(std::function<void()> callback);
+  void SetCapsLockStateCallback(std::function<void(bool)> callback);
 
  private:
   ServerImpl* m_pImpl;

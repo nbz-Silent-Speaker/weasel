@@ -76,15 +76,11 @@ static int CustomInstall(bool installing) {
     ret = RegQueryValueEx(hKey, L"Profile", NULL, &type, (LPBYTE)value, &len);
     if (ret == ERROR_SUCCESS && type == REG_SZ && value[0] != L'\0') {
       profile = value;
-      if (installing)
-        silent = true;
     } else {
       len = sizeof(data);
       ret = RegQueryValueEx(hKey, L"Hant", NULL, &type, (LPBYTE)&data, &len);
       if (ret == ERROR_SUCCESS && type == REG_DWORD) {
         profile = (data != 0) ? L"hant" : L"hans";
-        if (installing)
-          silent = true;
       }
     }
     RegCloseKey(hKey);
@@ -96,8 +92,7 @@ static int CustomInstall(bool installing) {
     dlg.profile = profile;
     dlg.user_dir = user_dir;
     if (IDOK != dlg.DoModal()) {
-      if (!installing)
-        return 1;  // aborted by user
+      return 1;  // aborted by user, including interactive reinstalls
     } else {
       profile = dlg.profile;
       user_dir = dlg.user_dir;

@@ -65,8 +65,11 @@ STDMETHODIMP WeaselTSF::OnLayoutChange(ITfContext* pContext,
   if (pContext != _pTextEditSinkContext)
     return S_OK;
 
-  if (lcode == TF_LC_CHANGE)
+  ++_r19LayoutCallbacks;
+  if (lcode == TF_LC_CHANGE) {
+    ++_r19LayoutChanges;
     _UpdateCompositionWindow(pContext);
+  }
   return S_OK;
 }
 

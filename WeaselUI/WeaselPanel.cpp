@@ -1,8 +1,17 @@
 #include "stdafx.h"
 #include "WeaselPanel.h"
+#include "../AcrylicAppSdkPoC/EdgeClipDiagnostic.h"
+#include "../AcrylicAppSdkPoC/AlignedAcrylicClip.h"
+#include "../AcrylicAppSdkPoC/AcrylicFallbackPolicy.h"
 
 #include <utility>
 #include <ShellScalingApi.h>
+#include <dwmapi.h>
+#include <commctrl.h>
+#include <appmodel.h>
+#include <string>
+#include <atomic>
+#include <new>
 #include <VersionHelpers.hpp>
 #include <WeaselIPCData.h>
 #include <algorithm>
@@ -24,6 +33,2338 @@
   ((((color & 0xff000000) >> 25) & 0xff) << 24) | (color & 0x00ffffff)
 
 #pragma comment(lib, "Shcore.lib")
+#pragma comment(lib, "Dwmapi.lib")
+#pragma comment(lib, "Advapi32.lib")
+#pragma comment(lib, "Comctl32.lib")
+
+namespace {
+
+// Numeric values keep the PoC buildable with Weasel's current
+// Windows SDK while DWM evaluates the attributes at runtime.
+constexpr DWORD kDwmaUseHostBackdropBrush = 17;
+constexpr DWORD kDwmaUseImmersiveDarkMode = 20;
+constexpr DWORD kDwmaWindowCornerPreference = 33;
+constexpr DWORD kDwmaBorderColor = 34;
+constexpr DWORD kDwmaSystemBackdropType = 38;
+constexpr DWORD kDwmaRedirectionBitmapAlpha = 39;
+
+constexpr int kDwmwcpDoNotRound = 1;       // DWMWCP_DONOTROUND
+constexpr int kDwmwcpRound = 2;            // DWMWCP_ROUND
+constexpr int kDwmsbtTransientWindow = 3;  // DWMSBT_TRANSIENTWINDOW
+constexpr COLORREF kDwmColorNone = 0xFFFFFFFEu;
+constexpr BYTE kAcrylicTintAlpha = 0x18;
+
+bool HasVisibleCandidateSurface(bool inlinePreedit,
+                                bool contextEmpty,
+                                size_t candidateCount,
+                                bool auxiliaryEmpty,
+                                bool preeditEmpty) {
+  if (inlinePreedit)
+    return candidateCount > 0 || !auxiliaryEmpty;
+  return !contextEmpty || candidateCount > 0 || !auxiliaryEmpty ||
+         !preeditEmpty;
+}
+
+constexpr wchar_t kWeaselAcrylicBackdropClass[] = L"WeaselAcrylicBackdropHost";
+constexpr wchar_t kAcrylicNativeDwmProperty[] = L"WeaselAcrylicNativeDwm";
+constexpr wchar_t kAcrylicChildClipFailedProperty[] =
+    L"WeaselAcrylicChildClipFailed";
+constexpr wchar_t kAcrylicChildClipCandidateProperty[] =
+    L"WeaselAcrylicChildClipCandidate";
+constexpr UINT kAcrylicChildClipFailedMessage = WM_APP + 0x526;
+constexpr wchar_t kAcrylicNativeDwmPaintsProperty[] =
+    L"WeaselAcrylicNativeDwmPaints";
+constexpr wchar_t kAcrylicUiProbeClass[] = L"WeaselAcrylicUiProbe";
+constexpr wchar_t kSearchDiagnosticCandidate[] =
+    L"WeaselAcrylicDiagnosticCandidate";
+constexpr wchar_t kSearchDiagnosticHost[] = L"WeaselAcrylicDiagnosticHost";
+constexpr wchar_t kSearchLocalFailureStage[] =
+    L"WeaselAcrylicLocalFailureStage";
+constexpr wchar_t kSearchLocalFailureHr[] = L"WeaselAcrylicLocalFailureHresult";
+constexpr wchar_t kSearchNativeAttempted[] = L"WeaselAcrylicNativeDwmAttempted";
+constexpr wchar_t kSearchNativeFrameHr[] =
+    L"WeaselAcrylicNativeDwmFrameHresult";
+constexpr wchar_t kSearchNativeAlphaHr[] =
+    L"WeaselAcrylicNativeDwmAlphaHresult";
+constexpr wchar_t kSearchNativeSetHr[] = L"WeaselAcrylicNativeDwmSetHresult";
+constexpr wchar_t kSearchNativeGetHr[] = L"WeaselAcrylicNativeDwmGetHresult";
+constexpr wchar_t kSearchNativeApplied[] = L"WeaselAcrylicNativeDwmAppliedType";
+
+// CI #22: follow the real candidate HWND, including position changes made by
+// the host application rather than MoveTo(). Install only for local Acrylic;
+// the CI #21 Settings protocol and its hidden client host are unchanged.
+constexpr wchar_t kLocalAcrylicGeometryProperty[] =
+    L"WeaselAcrylicLocalGeometryState";
+constexpr wchar_t kLocalAcrylicGeometryPolicy[] =
+    L"WeaselAcrylicGeometryPolicy";
+constexpr wchar_t kCandidatePlacementSessionEndedProperty[] =
+    L"WeaselCandidatePlacementSessionEnded";
+
+// R15 diagnostic-only candidate placement telemetry. These HWND properties are
+// scalar counters/coordinates read by an external observer. They do not alter
+// placement, visibility, Acrylic policy or message ordering.
+constexpr wchar_t kPlacementDiagSequence[] = L"WeaselDiagPlacementSequence";
+constexpr wchar_t kPlacementDiagEvent[] = L"WeaselDiagPlacementEvent";
+constexpr wchar_t kPlacementDiagCaller[] = L"WeaselDiagPlacementCaller";
+constexpr wchar_t kPlacementDiagCreateCount[] = L"WeaselDiagCreateCount";
+constexpr wchar_t kPlacementDiagRefreshCount[] = L"WeaselDiagRefreshCount";
+constexpr wchar_t kPlacementDiagMoveToCount[] = L"WeaselDiagMoveToCount";
+constexpr wchar_t kPlacementDiagRepositionCount[] =
+    L"WeaselDiagRepositionCount";
+constexpr wchar_t kPlacementDiagMoveToLeft[] = L"WeaselDiagMoveToLeft";
+constexpr wchar_t kPlacementDiagMoveToTop[] = L"WeaselDiagMoveToTop";
+constexpr wchar_t kPlacementDiagMoveToRight[] = L"WeaselDiagMoveToRight";
+constexpr wchar_t kPlacementDiagMoveToBottom[] = L"WeaselDiagMoveToBottom";
+constexpr wchar_t kPlacementDiagInputLeft[] = L"WeaselDiagInputLeft";
+constexpr wchar_t kPlacementDiagInputTop[] = L"WeaselDiagInputTop";
+constexpr wchar_t kPlacementDiagInputRight[] = L"WeaselDiagInputRight";
+constexpr wchar_t kPlacementDiagInputBottom[] = L"WeaselDiagInputBottom";
+constexpr wchar_t kPlacementDiagStickyBefore[] = L"WeaselDiagStickyBefore";
+constexpr wchar_t kPlacementDiagStickyAfter[] = L"WeaselDiagStickyAfter";
+constexpr wchar_t kPlacementDiagSessionEnded[] = L"WeaselDiagSessionEnded";
+constexpr wchar_t kPlacementDiagAdj[] = L"WeaselDiagAdj";
+constexpr wchar_t kPlacementDiagHeight[] = L"WeaselDiagHeight";
+constexpr wchar_t kPlacementDiagWorkBottom[] = L"WeaselDiagWorkBottom";
+constexpr wchar_t kPlacementDiagResultX[] = L"WeaselDiagResultX";
+constexpr wchar_t kPlacementDiagResultY[] = L"WeaselDiagResultY";
+constexpr wchar_t kPlacementDiagAnchorPending[] = L"WeaselDiagAnchorPending";
+constexpr wchar_t kPlacementDiagAnchorResolved[] = L"WeaselDiagAnchorResolved";
+constexpr wchar_t kPlacementDiagAnchorFallback[] = L"WeaselDiagAnchorFallback";
+
+// R17 diagnostic-only MoveTo sequence capture. The external observer can miss
+// multiple placement events between its 5 ms samples, so preserve the first
+// MoveTo calls for each candidate HWND in immutable scalar properties. This
+// telemetry does not delay, reject, rewrite or reorder any placement call.
+constexpr unsigned kPlacementDiagMoveTraceSlots = 12;
+constexpr wchar_t kPlacementDiagMoveTraceCount[] =
+    L"WeaselDiagR17MoveTraceCount";
+constexpr wchar_t kPlacementDiagCreateTick[] = L"WeaselDiagR17CreateTick";
+
+enum class PlacementDiagMoveDisposition : LONG_PTR {
+  Unknown = 0,
+  ProvisionalBlocked = 1,
+  StableOpenedGate = 2,
+  PostGateAccepted = 3,
+  FallbackReplayAccepted = 4,
+  TimerFailureAccepted = 5,
+  StabilizationDisabled = 6,
+  NoLayout = 7,
+};
+
+enum class PlacementDiagEvent : LONG_PTR {
+  Create = 1,
+  RefreshBeforeReposition = 2,
+  MoveToEnter = 3,
+  RepositionBlocked = 4,
+  RepositionCommit = 5,
+  ProvisionalAnchor = 6,
+  StableAnchor = 7,
+  ProvisionalFallback = 8,
+};
+
+enum class PlacementDiagCaller : LONG_PTR {
+  None = 0,
+  Refresh = 1,
+  MoveToStickyReset = 2,
+  MoveToAsciiTip = 3,
+  MoveToNormal = 4,
+};
+
+LONG_PTR PlacementDiagValue(HWND hwnd, const wchar_t* name) {
+  return hwnd ? reinterpret_cast<LONG_PTR>(::GetPropW(hwnd, name)) : 0;
+}
+
+void SetPlacementDiagValue(HWND hwnd, const wchar_t* name, LONG_PTR value) {
+  if (hwnd)
+    ::SetPropW(hwnd, name, reinterpret_cast<HANDLE>(value));
+}
+
+void IncrementPlacementDiag(HWND hwnd, const wchar_t* name) {
+  SetPlacementDiagValue(hwnd, name, PlacementDiagValue(hwnd, name) + 1);
+}
+
+void CommitPlacementDiagEvent(HWND hwnd, PlacementDiagEvent event) {
+  SetPlacementDiagValue(hwnd, kPlacementDiagEvent,
+                        static_cast<LONG_PTR>(event));
+  IncrementPlacementDiag(hwnd, kPlacementDiagSequence);
+}
+
+constexpr UINT_PTR kLocalAcrylicGeometrySubclass = 0x57414731;
+constexpr UINT_PTR kCandidateAnchorStabilizationTimer = 0x57414732;
+constexpr UINT kCandidateAnchorStabilizationMs = 50;
+
+struct LocalAcrylicGeometryState {
+  HWND candidate = nullptr;
+  WeaselPanel* panel = nullptr;
+  unsigned references = 1;  // Owned by the subclass, on this UI thread only.
+  unsigned depth = 0;
+  bool installed = false;
+  bool pending = false;
+  bool syncing = false;
+  bool anchorStabilizationEnabled = false;
+  bool anchorGateResolved = false;
+  bool provisionalAnchorPending = false;
+  bool acceptingProvisionalAnchor = false;
+  RECT provisionalAnchor = {};
+};
+
+LocalAcrylicGeometryState* LocalAcrylicGeometry(HWND hwnd) {
+  return hwnd ? reinterpret_cast<LocalAcrylicGeometryState*>(
+                    ::GetPropW(hwnd, kLocalAcrylicGeometryProperty))
+              : nullptr;
+}
+
+void SetPlacementMoveTraceValue(HWND hwnd,
+                                unsigned slot,
+                                const wchar_t* field,
+                                LONG_PTR value) {
+  if (!hwnd || !slot || slot > kPlacementDiagMoveTraceSlots || !field)
+    return;
+  wchar_t name[64] = {};
+  if (swprintf_s(name, _countof(name), L"WeaselDiagR17Move%02u%s", slot,
+                 field) < 0)
+    return;
+  SetPlacementDiagValue(hwnd, name, value);
+}
+
+unsigned BeginPlacementMoveTrace(HWND hwnd,
+                                 const RECT& rc,
+                                 const LocalAcrylicGeometryState* state) {
+  if (!hwnd)
+    return 0;
+  const LONG_PTR count =
+      PlacementDiagValue(hwnd, kPlacementDiagMoveTraceCount) + 1;
+  SetPlacementDiagValue(hwnd, kPlacementDiagMoveTraceCount, count);
+  if (count <= 0 || count > kPlacementDiagMoveTraceSlots)
+    return 0;
+  const unsigned slot = static_cast<unsigned>(count);
+  RECT windowRect = {};
+  ::GetWindowRect(hwnd, &windowRect);
+  SetPlacementMoveTraceValue(hwnd, slot, L"Tick", ::GetTickCount());
+  SetPlacementMoveTraceValue(hwnd, slot, L"Left", rc.left);
+  SetPlacementMoveTraceValue(hwnd, slot, L"Top", rc.top);
+  SetPlacementMoveTraceValue(hwnd, slot, L"Right", rc.right);
+  SetPlacementMoveTraceValue(hwnd, slot, L"Bottom", rc.bottom);
+  SetPlacementMoveTraceValue(
+      hwnd, slot, L"Enabled",
+      state && state->anchorStabilizationEnabled ? 1 : 0);
+  SetPlacementMoveTraceValue(hwnd, slot, L"Gate",
+                             state && state->anchorGateResolved ? 1 : 0);
+  SetPlacementMoveTraceValue(hwnd, slot, L"Pending",
+                             state && state->provisionalAnchorPending ? 1 : 0);
+  SetPlacementMoveTraceValue(
+      hwnd, slot, L"Accepting",
+      state && state->acceptingProvisionalAnchor ? 1 : 0);
+  SetPlacementMoveTraceValue(hwnd, slot, L"Visible",
+                             ::IsWindowVisible(hwnd) ? 1 : 0);
+  SetPlacementMoveTraceValue(hwnd, slot, L"WindowTop", windowRect.top);
+  SetPlacementMoveTraceValue(hwnd, slot, L"WindowBottom", windowRect.bottom);
+  SetPlacementMoveTraceValue(
+      hwnd, slot, L"SessionEnded",
+      ::GetPropW(hwnd, kCandidatePlacementSessionEndedProperty) ? 1 : 0);
+  SetPlacementMoveTraceValue(
+      hwnd, slot, L"Refresh",
+      PlacementDiagValue(hwnd, kPlacementDiagRefreshCount));
+  SetPlacementMoveTraceValue(
+      hwnd, slot, L"Reposition",
+      PlacementDiagValue(hwnd, kPlacementDiagRepositionCount));
+  SetPlacementMoveTraceValue(hwnd, slot, L"Seq",
+                             PlacementDiagValue(hwnd, kPlacementDiagSequence));
+  SetPlacementMoveTraceValue(hwnd, slot, L"Disposition", 0);
+  return slot;
+}
+
+void SetPlacementMoveTraceDisposition(
+    HWND hwnd,
+    unsigned slot,
+    PlacementDiagMoveDisposition disposition) {
+  SetPlacementMoveTraceValue(hwnd, slot, L"Disposition",
+                             static_cast<LONG_PTR>(disposition));
+}
+
+void ResetCandidateAnchorGate(LocalAcrylicGeometryState* state) {
+  if (!state)
+    return;
+  if (state->candidate)
+    ::KillTimer(state->candidate, kCandidateAnchorStabilizationTimer);
+  state->anchorGateResolved = false;
+  state->provisionalAnchorPending = false;
+  state->acceptingProvisionalAnchor = false;
+  state->provisionalAnchor = {};
+  if (state->candidate) {
+    SetPlacementDiagValue(state->candidate, kPlacementDiagAnchorPending, 0);
+    SetPlacementDiagValue(state->candidate, kPlacementDiagAnchorResolved, 0);
+    SetPlacementDiagValue(state->candidate, kPlacementDiagAnchorFallback, 0);
+  }
+}
+
+void ParkCandidateForProvisionalAnchor(HWND hwnd) {
+  if (!hwnd)
+    return;
+  constexpr int kParkCoordinate = -32000;
+  ::SetWindowPos(hwnd, nullptr, kParkCoordinate, kParkCoordinate, 0, 0,
+                 SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOREDRAW |
+                     SWP_NOOWNERZORDER);
+}
+
+void ReleaseLocalAcrylicGeometry(LocalAcrylicGeometryState* state) {
+  if (state && --state->references == 0)
+    delete state;
+}
+
+class LocalAcrylicGeometryRef {
+ public:
+  explicit LocalAcrylicGeometryRef(LocalAcrylicGeometryState* state)
+      : state_(state) {
+    if (state_)
+      ++state_->references;
+  }
+  ~LocalAcrylicGeometryRef() { ReleaseLocalAcrylicGeometry(state_); }
+  LocalAcrylicGeometryRef(const LocalAcrylicGeometryRef&) = delete;
+  LocalAcrylicGeometryRef& operator=(const LocalAcrylicGeometryRef&) = delete;
+
+ private:
+  LocalAcrylicGeometryState* state_;
+};
+
+void RequestLocalAcrylicGeometry(LocalAcrylicGeometryState* state) {
+  if (!state || !state->panel)
+    return;
+  LocalAcrylicGeometryRef hold(state);
+  state->pending = true;
+  if (state->depth || state->syncing)
+    return;
+
+  // Updating the second HWND can itself produce window messages. Coalesce a
+  // real follow-up, but never recurse or run an unbounded positioning loop.
+  for (unsigned pass = 0; pass < 2 && state->pending && state->panel; ++pass) {
+    state->pending = false;
+    state->syncing = true;
+    state->panel->ShowAcrylicBackdrop();
+    state->syncing = false;
+  }
+}
+
+bool DeferLocalAcrylicGeometry(HWND hwnd) {
+  auto state = LocalAcrylicGeometry(hwnd);
+  if (!state || !state->depth)
+    return false;
+  state->pending = true;
+  return true;
+}
+
+class LocalAcrylicGeometryBatch {
+ public:
+  explicit LocalAcrylicGeometryBatch(HWND hwnd)
+      : state_(LocalAcrylicGeometry(hwnd)), hold_(state_) {
+    if (state_) {
+      ++state_->depth;
+      // Layout can change its content inset without a HWND size change.
+      state_->pending = true;
+    }
+  }
+  ~LocalAcrylicGeometryBatch() {
+    if (state_ && --state_->depth == 0 && state_->pending)
+      RequestLocalAcrylicGeometry(state_);
+  }
+  LocalAcrylicGeometryBatch(const LocalAcrylicGeometryBatch&) = delete;
+  LocalAcrylicGeometryBatch& operator=(const LocalAcrylicGeometryBatch&) =
+      delete;
+
+ private:
+  LocalAcrylicGeometryState* state_;
+  LocalAcrylicGeometryRef hold_;
+};
+
+LRESULT CALLBACK LocalAcrylicGeometryProc(HWND hwnd,
+                                          UINT message,
+                                          WPARAM wParam,
+                                          LPARAM lParam,
+                                          UINT_PTR id,
+                                          DWORD_PTR data);
+
+void DetachLocalAcrylicGeometry(LocalAcrylicGeometryState* state,
+                                bool destroying = false) {
+  if (!state)
+    return;
+  ResetCandidateAnchorGate(state);
+  state->panel = nullptr;
+  state->pending = false;
+  if (LocalAcrylicGeometry(state->candidate) == state) {
+    ::RemovePropW(state->candidate, kLocalAcrylicGeometryProperty);
+    ::RemovePropW(state->candidate, kLocalAcrylicGeometryPolicy);
+  }
+  if (state->installed) {
+    const BOOL removed =
+        ::RemoveWindowSubclass(state->candidate, LocalAcrylicGeometryProc,
+                               kLocalAcrylicGeometrySubclass);
+    // If removal fails, keep the callback's reference until WM_NCDESTROY.
+    // A callback left installed must never point at freed state or panel data.
+    if (removed || destroying) {
+      state->installed = false;
+      ReleaseLocalAcrylicGeometry(state);
+    }
+  }
+}
+
+void RemoveLocalAcrylicGeometry(HWND hwnd) {
+  DetachLocalAcrylicGeometry(LocalAcrylicGeometry(hwnd));
+}
+
+LRESULT CALLBACK LocalAcrylicGeometryProc(HWND hwnd,
+                                          UINT message,
+                                          WPARAM wParam,
+                                          LPARAM lParam,
+                                          UINT_PTR id,
+                                          DWORD_PTR data) {
+  auto state = reinterpret_cast<LocalAcrylicGeometryState*>(data);
+  LocalAcrylicGeometryRef hold(state);
+  if (message == WM_NCDESTROY) {
+    ::RemovePropW(hwnd, kCandidatePlacementSessionEndedProperty);
+    DetachLocalAcrylicGeometry(state, true);
+    return ::DefSubclassProc(hwnd, message, wParam, lParam);
+  }
+
+  if (message == kAcrylicChildClipFailedMessage) {
+    const HWND backdrop = reinterpret_cast<HWND>(wParam);
+    if (::GetPropW(backdrop, kAcrylicChildClipCandidateProperty) == hwnd &&
+        ::GetPropW(backdrop, kAcrylicChildClipFailedProperty))
+      RequestLocalAcrylicGeometry(state);
+    return 0;
+  }
+
+  if (message == WM_TIMER && wParam == kCandidateAnchorStabilizationTimer) {
+    ::KillTimer(hwnd, kCandidateAnchorStabilizationTimer);
+    if (state && state->panel && state->provisionalAnchorPending) {
+      const RECT anchor = state->provisionalAnchor;
+      state->provisionalAnchorPending = false;
+      state->anchorGateResolved = true;
+      state->acceptingProvisionalAnchor = true;
+      SetPlacementDiagValue(hwnd, kPlacementDiagAnchorPending, 0);
+      SetPlacementDiagValue(hwnd, kPlacementDiagAnchorResolved, 1);
+      SetPlacementDiagValue(hwnd, kPlacementDiagAnchorFallback, 1);
+      CommitPlacementDiagEvent(hwnd, PlacementDiagEvent::ProvisionalFallback);
+      state->panel->MoveTo(anchor);
+      state->acceptingProvisionalAnchor = false;
+    }
+    return 0;
+  }
+
+  bool hidingCandidate = message == WM_SHOWWINDOW && wParam == FALSE;
+  if ((message == WM_WINDOWPOSCHANGING || message == WM_WINDOWPOSCHANGED) &&
+      lParam) {
+    const auto* position = reinterpret_cast<const WINDOWPOS*>(lParam);
+    hidingCandidate = hidingCandidate || (position->flags & SWP_HIDEWINDOW);
+  }
+
+  // The foreground is a layered HWND while the local Acrylic backdrop uses a
+  // separate DWM/Composition surface. Hide the backdrop before the layered
+  // candidate starts disappearing so the compositor cannot expose a one-frame
+  // Acrylic/text remnant during application-specific state transitions.
+  if (hidingCandidate) {
+    // A real HWND hide ends the current placement session. Do not let a later
+    // Refresh() reuse the sticky above-caret choice or the adjusted
+    // m_inputPos.bottom from this session before the host supplies a fresh
+    // MoveTo() caret rectangle.
+    ::SetPropW(hwnd, kCandidatePlacementSessionEndedProperty,
+               reinterpret_cast<HANDLE>(static_cast<INT_PTR>(1)));
+    ResetCandidateAnchorGate(state);
+    if (state && state->panel)
+      state->panel->HideAcrylicBackdrop();
+  }
+
+  // Let ATL and the application's existing handlers finish first for show,
+  // move and resize. Those paths need the final candidate geometry before the
+  // backdrop follows it.
+  const LRESULT result = ::DefSubclassProc(hwnd, message, wParam, lParam);
+  if (!hidingCandidate &&
+      (message == WM_WINDOWPOSCHANGED || message == WM_SHOWWINDOW))
+    RequestLocalAcrylicGeometry(state);
+  return result;
+}
+
+bool InstallLocalAcrylicGeometry(HWND hwnd,
+                                 WeaselPanel* panel,
+                                 bool stabilizeInitialAnchor) {
+  if (!hwnd || !panel)
+    return false;
+  if (LocalAcrylicGeometry(hwnd))
+    return true;
+  auto state = new (std::nothrow) LocalAcrylicGeometryState;
+  if (!state)
+    return false;
+  state->candidate = hwnd;
+  state->panel = panel;
+  state->anchorStabilizationEnabled = stabilizeInitialAnchor;
+  if (!::SetPropW(hwnd, kLocalAcrylicGeometryProperty,
+                  reinterpret_cast<HANDLE>(state))) {
+    ReleaseLocalAcrylicGeometry(state);
+    return false;
+  }
+  if (!::SetWindowSubclass(hwnd, LocalAcrylicGeometryProc,
+                           kLocalAcrylicGeometrySubclass,
+                           reinterpret_cast<DWORD_PTR>(state))) {
+    ::RemovePropW(hwnd, kLocalAcrylicGeometryProperty);
+    ReleaseLocalAcrylicGeometry(state);
+    return false;
+  }
+  state->installed = true;
+  ::SetPropW(hwnd, kLocalAcrylicGeometryPolicy,
+             reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(1)));
+  return true;
+}
+
+bool LocalAcrylicGeometryMatches(HWND backdrop,
+                                 HWND candidate,
+                                 int x,
+                                 int y,
+                                 int width,
+                                 int height) {
+  RECT actual = {};
+  return ::IsWindowVisible(backdrop) && ::GetWindowRect(backdrop, &actual) &&
+         actual.left == x && actual.top == y && actual.right == x + width &&
+         actual.bottom == y + height &&
+         ::GetWindow(candidate, GW_HWNDNEXT) == backdrop;
+}
+
+COLORREF WithAlpha(COLORREF color, BYTE alpha) {
+  return (color & 0x00FFFFFFu) | (static_cast<COLORREF>(alpha) << 24);
+}
+
+bool IsDarkColor(COLORREF color) {
+  const int luminance =
+      GetRValue(color) * 299 + GetGValue(color) * 587 + GetBValue(color) * 114;
+  return luminance < 128000;
+}
+
+bool HandleExternalAcrylicMessage(HWND hwnd,
+                                  UINT message,
+                                  WPARAM wParam,
+                                  LPARAM lParam,
+                                  LRESULT& result);
+
+LRESULT CALLBACK AcrylicBackdropWndProc(HWND hwnd,
+                                        UINT message,
+                                        WPARAM wParam,
+                                        LPARAM lParam) {
+  LRESULT result = 0;
+  if (HandleExternalAcrylicMessage(hwnd, message, wParam, lParam, result))
+    return result;
+  switch (message) {
+    case WM_ERASEBKGND:
+      if (::GetPropW(hwnd, kAcrylicNativeDwmProperty)) {
+        RECT client = {};
+        if (::GetClientRect(hwnd, &client)) {
+          ::FillRect(reinterpret_cast<HDC>(wParam), &client,
+                     static_cast<HBRUSH>(::GetStockObject(BLACK_BRUSH)));
+        }
+        return 1;
+      }
+      return 1;
+    case WM_NCHITTEST:
+      return HTTRANSPARENT;
+    case WM_MOUSEACTIVATE:
+      return MA_NOACTIVATE;
+    case WM_NCACTIVATE:
+      return DefWindowProcW(hwnd, WM_NCACTIVATE, TRUE, lParam);
+    case WM_PAINT: {
+      PAINTSTRUCT ps = {};
+      HDC dc = BeginPaint(hwnd, &ps);
+      if (::GetPropW(hwnd, kAcrylicNativeDwmProperty)) {
+        RECT client = {};
+        if (::GetClientRect(hwnd, &client)) {
+          ::FillRect(dc, &client,
+                     static_cast<HBRUSH>(::GetStockObject(BLACK_BRUSH)));
+        }
+        const ULONG_PTR paints = reinterpret_cast<ULONG_PTR>(::GetPropW(
+                                     hwnd, kAcrylicNativeDwmPaintsProperty)) +
+                                 1;
+        ::SetPropW(hwnd, kAcrylicNativeDwmPaintsProperty,
+                   reinterpret_cast<HANDLE>(paints));
+      }
+      EndPaint(hwnd, &ps);
+      return 0;
+    }
+    default:
+      return DefWindowProcW(hwnd, message, wParam, lParam);
+  }
+}
+
+HMODULE AcrylicWindowModule() {
+  static int moduleAnchor = 0;
+  HMODULE module = nullptr;
+  if (!::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                GET_MODULE_HANDLE_EX_FLAG_PIN,
+                            reinterpret_cast<LPCWSTR>(&moduleAnchor), &module))
+    return nullptr;
+  return module;
+}
+
+bool EnsureAcrylicBackdropClass() {
+  const HMODULE module = AcrylicWindowModule();
+  if (!module)
+    return false;
+  WNDCLASSEXW wc = {};
+  wc.cbSize = sizeof(wc);
+  wc.lpfnWndProc = AcrylicBackdropWndProc;
+  wc.hInstance = module;
+  wc.lpszClassName = kWeaselAcrylicBackdropClass;
+
+  if (RegisterClassExW(&wc))
+    return true;
+
+  if (::GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+    return false;
+  WNDCLASSEXW existing{};
+  existing.cbSize = sizeof(existing);
+  return ::GetClassInfoExW(module, kWeaselAcrylicBackdropClass, &existing) &&
+         existing.lpfnWndProc == AcrylicBackdropWndProc;
+}
+
+constexpr wchar_t kWeaselAcrylicAppSdkDll[] = L"WeaselAcrylicAppSdk.dll";
+constexpr wchar_t kWeaselAcrylicAppSdkActiveProperty[] =
+    L"WeaselAcrylicAppSdkActive";
+constexpr wchar_t kWeaselAcrylicSystemCompositionActiveProperty[] =
+    L"WeaselAcrylicSystemCompositionActive";
+constexpr wchar_t kWeaselAcrylicForcedSystemCompositionActiveProperty[] =
+    L"WeaselAcrylicForcedSystemCompositionActive";
+constexpr wchar_t kWeaselAcrylicPackagedSystemCompositionFallbackProperty[] =
+    L"WeaselAcrylicPackagedSystemCompositionFallback";
+constexpr wchar_t kWeaselAcrylicSystemCompositionCornerRadiusProperty[] =
+    L"WeaselAcrylicSystemCompositionCornerRadius";
+constexpr wchar_t kAcrylicLocalClipWidthProperty[] =
+    L"WeaselAcrylicLocalClipWidth";
+constexpr wchar_t kAcrylicLocalClipHeightProperty[] =
+    L"WeaselAcrylicLocalClipHeight";
+constexpr wchar_t kAcrylicLocalClipRadiusProperty[] =
+    L"WeaselAcrylicLocalClipRadius";
+constexpr wchar_t kAcrylicStageProperty[] = L"WeaselAcrylicAppSdkStage";
+constexpr wchar_t kAcrylicHrProperty[] = L"WeaselAcrylicAppSdkHresult";
+constexpr wchar_t kAcrylicPolicyProperty[] = L"WeaselAcrylicAppSdkPolicy";
+
+void SetAcrylicDiagnostic(HWND hwnd, LONG stage, HRESULT hr) {
+  ::SetPropW(hwnd, kAcrylicPolicyProperty,
+             reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(3)));
+  ::SetPropW(hwnd, kAcrylicStageProperty,
+             reinterpret_cast<HANDLE>(
+                 static_cast<ULONG_PTR>(static_cast<DWORD>(stage))));
+  ::SetPropW(
+      hwnd, kAcrylicHrProperty,
+      reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(static_cast<DWORD>(hr))));
+}
+
+// The installer/TSF language-bar code use the HKLM WeaselRoot value. In an
+// in-process TSF client, GetModuleFileName(nullptr) is WINWORD/Chrome, not
+// Rime.
+HRESULT ReadAcrylicInstallRoot(std::wstring& root) {
+  // Open each registry view explicitly. The RRF_SUBKEY_WOW64* flags are
+  // not declared when WeaselUI targets Windows 8.1 (_WIN32_WINNT=0x0603).
+  const REGSAM views[] = {KEY_WOW64_32KEY, KEY_WOW64_64KEY};
+  for (REGSAM view : views) {
+    HKEY key = nullptr;
+    const LSTATUS opened =
+        ::RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Rime\\Weasel", 0,
+                        KEY_QUERY_VALUE | view, &key);
+    if (opened != ERROR_SUCCESS)
+      continue;
+    WCHAR value[32768] = {};
+    DWORD bytes = static_cast<DWORD>(sizeof(value));
+    const LSTATUS result = ::RegGetValueW(
+        key, nullptr, L"WeaselRoot", RRF_RT_REG_SZ, nullptr, value, &bytes);
+    ::RegCloseKey(key);
+    if (result != ERROR_SUCCESS)
+      continue;
+    root = value;
+    while (!root.empty() && (root.back() == L'\\' || root.back() == L'/'))
+      root.pop_back();
+    // Only a local absolute installation path; no CWD/PATH, HKCU, or network
+    // directory is used to locate executable plugin code in another process.
+    if (root.size() >= 3 &&
+        ((root[0] >= L'A' && root[0] <= L'Z') ||
+         (root[0] >= L'a' && root[0] <= L'z')) &&
+        root[1] == L':' && (root[2] == L'\\' || root[2] == L'/'))
+      return S_OK;
+    return HRESULT_FROM_WIN32(ERROR_BAD_PATHNAME);
+  }
+  return HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND);
+}
+
+class AcrylicAppSdkBridge {
+ public:
+  bool TryInitialize(HWND hwnd, BOOL darkMode, bool inServer) {
+    if (!hwnd || !::IsWindow(hwnd))
+      return false;
+#if (!defined(_M_X64) && !defined(_M_IX86)) || defined(_M_ARM64EC)
+    // Build-matched x64 and x86 helpers are packaged separately. Native ARM
+    // clients keep the normal skin without loading an incompatible DLL.
+    SetAcrylicDiagnostic(hwnd, -10,
+                         HRESULT_FROM_WIN32(ERROR_EXE_MACHINE_TYPE_MISMATCH));
+    return false;
+#else
+    // Protect against re-entry during LoadLibrary/bootstrap on the same UI
+    // thread. The native loader cache is shared, but targets live in helper
+    // TLS.
+    static thread_local bool entering = false;
+    if (entering) {
+      SetAcrylicDiagnostic(hwnd, -11, HRESULT_FROM_WIN32(ERROR_BUSY));
+      return false;
+    }
+    entering = true;
+    struct EntryScope {
+      bool& flag;
+      ~EntryScope() { flag = false; }
+    } scope{entering};
+    LoadRequest request{this, inServer};
+    if (!::InitOnceExecuteOnce(&once_, LoadCallback, &request, nullptr)) {
+      SetAcrylicDiagnostic(hwnd, -20, HRESULT_FROM_WIN32(::GetLastError()));
+      return false;
+    }
+    if (!ready_.load()) {
+      SetAcrylicDiagnostic(hwnd, loadStage_, loadResult_);
+      return false;
+    }
+    const BOOL ok = attach_(hwnd, darkMode);
+    SetAcrylicDiagnostic(hwnd, lastStage_(), lastHr_());
+    return ok && isWindowActive_(hwnd) && ::IsWindow(hwnd);
+#endif
+  }
+
+  void SetDarkMode(HWND hwnd, BOOL darkMode) {
+    if (ready_.load() && hwnd)
+      setWindowTheme_(hwnd, darkMode);
+  }
+
+  void DetachWindow(HWND hwnd) {
+    if (ready_.load() && hwnd)
+      detach_(hwnd);
+  }
+
+  void RequestThreadShutdownIfLoaded() {
+    if (ready_.load())
+      requestShutdown_();
+  }
+
+ private:
+  using AttachFn = BOOL(WINAPI*)(HWND, BOOL);
+  using ThemeFn = void(WINAPI*)(HWND, BOOL);
+  using ActiveFn = BOOL(WINAPI*)(HWND);
+  using DetachFn = void(WINAPI*)(HWND);
+  using RequestShutdownFn = HRESULT(WINAPI*)();
+  using DiagnosticFn = LONG(WINAPI*)();
+  struct LoadRequest {
+    AcrylicAppSdkBridge* self;
+    bool inServer;
+  };
+
+  static BOOL CALLBACK LoadCallback(PINIT_ONCE, PVOID parameter, PVOID*) {
+    auto request = static_cast<LoadRequest*>(parameter);
+    auto self = request->self;
+    try {
+      self->Load(request->inServer);
+    } catch (...) {
+      self->loadResult_ = E_UNEXPECTED;
+    }
+    // Cache failure too; do not load a runtime on every keystroke. After fixing
+    // installation/runtime, restart the host app to retry with a clean graph.
+    return TRUE;
+  }
+
+  void Load(bool inServer) {
+    loadStage_ = -20;
+    std::wstring root;
+    loadResult_ = ReadAcrylicInstallRoot(root);
+    if (FAILED(loadResult_) && inServer) {
+      // Developer/server fallback ONLY. Never follow Word's executable path.
+      WCHAR executable[32768] = {};
+      const DWORD length =
+          ::GetModuleFileNameW(nullptr, executable, _countof(executable));
+      if (length && length < _countof(executable)) {
+        root.assign(executable, length);
+        const auto slash = root.find_last_of(L"\\/");
+        if (slash != std::wstring::npos) {
+          root.resize(slash);
+          loadResult_ = S_OK;
+        }
+      }
+    }
+    if (FAILED(loadResult_))
+      return;
+#if defined(_M_IX86)
+    // Select by THIS process's architecture, not the OS/server architecture.
+    root += L"\\acrylic\\x86";
+#endif
+    std::wstring helperPath = root + L"\\" + kWeaselAcrylicAppSdkDll;
+    loadStage_ = -30;
+    module_ = ::LoadLibraryExW(
+        helperPath.c_str(), nullptr,
+        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+    if (!module_) {
+      const DWORD error = ::GetLastError();
+      loadResult_ = error ? HRESULT_FROM_WIN32(error) : E_FAIL;
+      return;
+    }
+    // Keep one reference for process lifetime. Runtime objects/queues are NOT
+    // unloaded when a composition ends. Policy version stops old DLL mixing.
+    loadStage_ = -40;
+    auto policy = reinterpret_cast<DiagnosticFn>(::GetProcAddress(
+        module_, "WeaselAcrylicAppSdkGetLifetimePolicyVersion"));
+    if (!policy || policy() != 3) {
+      loadResult_ = HRESULT_FROM_WIN32(ERROR_REVISION_MISMATCH);
+      return;
+    }
+    attach_ = reinterpret_cast<AttachFn>(
+        ::GetProcAddress(module_, "WeaselAcrylicAppSdkAttach"));
+    setWindowTheme_ = reinterpret_cast<ThemeFn>(
+        ::GetProcAddress(module_, "WeaselAcrylicAppSdkSetWindowTheme"));
+    isWindowActive_ = reinterpret_cast<ActiveFn>(
+        ::GetProcAddress(module_, "WeaselAcrylicAppSdkIsWindowActive"));
+    detach_ = reinterpret_cast<DetachFn>(
+        ::GetProcAddress(module_, "WeaselAcrylicAppSdkDetach"));
+    requestShutdown_ = reinterpret_cast<RequestShutdownFn>(
+        ::GetProcAddress(module_, "WeaselAcrylicAppSdkRequestThreadShutdown"));
+    lastStage_ = reinterpret_cast<DiagnosticFn>(
+        ::GetProcAddress(module_, "WeaselAcrylicAppSdkGetLastStage"));
+    lastHr_ = reinterpret_cast<DiagnosticFn>(
+        ::GetProcAddress(module_, "WeaselAcrylicAppSdkGetLastHresult"));
+    if (!attach_ || !setWindowTheme_ || !isWindowActive_ || !detach_ ||
+        !requestShutdown_ || !lastStage_ || !lastHr_) {
+      loadResult_ = HRESULT_FROM_WIN32(ERROR_PROC_NOT_FOUND);
+      return;
+    }
+    loadResult_ = S_OK;
+    ready_.store(true);
+  }
+
+  INIT_ONCE once_ = INIT_ONCE_STATIC_INIT;
+  std::atomic<bool> ready_{false};
+  HMODULE module_ = nullptr;
+  AttachFn attach_ = nullptr;
+  ThemeFn setWindowTheme_ = nullptr;
+  ActiveFn isWindowActive_ = nullptr;
+  DetachFn detach_ = nullptr;
+  RequestShutdownFn requestShutdown_ = nullptr;
+  DiagnosticFn lastStage_ = nullptr;
+  DiagnosticFn lastHr_ = nullptr;
+  LONG loadStage_ = -20;
+  HRESULT loadResult_ = E_PENDING;
+};
+
+AcrylicAppSdkBridge g_acrylicAppSdkBridge;
+
+bool AppSdkAcrylicNeedsExplicitClip(HWND backdrop) {
+  return backdrop && ::GetPropW(backdrop, kWeaselAcrylicAppSdkActiveProperty) &&
+         (!::GetPropW(backdrop,
+                      kWeaselAcrylicSystemCompositionActiveProperty) ||
+          ::GetPropW(backdrop,
+                     kWeaselAcrylicForcedSystemCompositionActiveProperty)) &&
+         !::GetPropW(backdrop, kAcrylicNativeDwmProperty);
+}
+
+int AcrylicClipProperty(HWND backdrop, const wchar_t* name) {
+  const ULONG_PTR stored =
+      reinterpret_cast<ULONG_PTR>(::GetPropW(backdrop, name));
+  return stored ? static_cast<int>(stored - 1) : -1;
+}
+
+void SetAcrylicClipProperty(HWND backdrop, const wchar_t* name, int value) {
+  ::SetPropW(backdrop, name,
+             reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(value + 1)));
+}
+
+void ClearAlignedAcrylicClip(HWND backdrop) {
+  ::RemovePropW(backdrop, weasel_acrylic::kAlignedClipWidth);
+  ::RemovePropW(backdrop, weasel_acrylic::kAlignedClipHeight);
+  ::RemovePropW(backdrop, weasel_acrylic::kAlignedClipRadius);
+}
+
+bool PublishAlignedAcrylicClip(HWND backdrop,
+                               bool eligible,
+                               int width,
+                               int height,
+                               int radius) {
+  using namespace weasel_acrylic;
+  if (!eligible) {
+    ClearAlignedAcrylicClip(backdrop);
+    return !::GetPropW(backdrop, kAlignedClipWidth) &&
+           !::GetPropW(backdrop, kAlignedClipHeight) &&
+           !::GetPropW(backdrop, kAlignedClipRadius);
+  }
+  const auto matches = [&] {
+    return AcrylicClipProperty(backdrop, kAlignedClipWidth) == width &&
+           AcrylicClipProperty(backdrop, kAlignedClipHeight) == height &&
+           AcrylicClipProperty(backdrop, kAlignedClipRadius) == radius;
+  };
+  if (matches())
+    return true;
+  // Width is the validity flag: invalidate first and publish it last. Never
+  // apply a new style qualification to a previous window's dimensions.
+  ClearAlignedAcrylicClip(backdrop);
+  if (::GetPropW(backdrop, kAlignedClipWidth))
+    return false;
+  SetAcrylicClipProperty(backdrop, kAlignedClipHeight, height);
+  SetAcrylicClipProperty(backdrop, kAlignedClipRadius, radius);
+  SetAcrylicClipProperty(backdrop, kAlignedClipWidth, width);
+  if (matches())
+    return true;
+  ClearAlignedAcrylicClip(backdrop);
+  return false;
+}
+
+void ClearAcrylicExplicitClip(HWND backdrop, bool redraw) {
+  if (!backdrop)
+    return;
+  if (::GetPropW(backdrop, kAcrylicLocalClipWidthProperty) ||
+      ::GetPropW(backdrop, kAcrylicLocalClipHeightProperty) ||
+      ::GetPropW(backdrop, kAcrylicLocalClipRadiusProperty))
+    ::SetWindowRgn(backdrop, nullptr, redraw ? TRUE : FALSE);
+  ::RemovePropW(backdrop, kAcrylicLocalClipWidthProperty);
+  ::RemovePropW(backdrop, kAcrylicLocalClipHeightProperty);
+  ::RemovePropW(backdrop, kAcrylicLocalClipRadiusProperty);
+  ::RemovePropW(backdrop, weasel_acrylic::kEdgeClipSample);
+  ClearAlignedAcrylicClip(backdrop);
+}
+
+bool AcrylicExplicitClipMatches(HWND backdrop,
+                                int width,
+                                int height,
+                                int radius) {
+  return AcrylicClipProperty(backdrop, kAcrylicLocalClipWidthProperty) ==
+             width &&
+         AcrylicClipProperty(backdrop, kAcrylicLocalClipHeightProperty) ==
+             height &&
+         AcrylicClipProperty(backdrop, kAcrylicLocalClipRadiusProperty) ==
+             radius;
+}
+
+bool ApplyAcrylicExplicitClip(HWND backdrop,
+                              int width,
+                              int height,
+                              int radius) {
+  if (!backdrop || width <= 0 || height <= 0)
+    return false;
+  radius = max(0, min(radius, min(width, height) / 2));
+  if (AcrylicExplicitClipMatches(backdrop, width, height, radius))
+    return true;
+
+  if (radius == 0) {
+    if (!::SetWindowRgn(backdrop, nullptr, TRUE))
+      return false;
+  } else {
+    const int diameter = radius * 2;
+    HRGN region =
+        ::CreateRoundRectRgn(0, 0, width + 1, height + 1, diameter, diameter);
+    if (!region)
+      return false;
+    if (!::SetWindowRgn(backdrop, region, TRUE)) {
+      ::DeleteObject(region);
+      return false;
+    }
+    // After a successful SetWindowRgn, Windows owns the region handle.
+  }
+
+  SetAcrylicClipProperty(backdrop, kAcrylicLocalClipWidthProperty, width);
+  SetAcrylicClipProperty(backdrop, kAcrylicLocalClipHeightProperty, height);
+  SetAcrylicClipProperty(backdrop, kAcrylicLocalClipRadiusProperty, radius);
+  return true;
+}
+
+// Phase2 R1: optional asynchronous compatible-client -> WeaselServer lease.
+// Only HWNDs and integer tokens cross processes. The client publishes the final
+// content rectangle; the server never calculates a second caret/owner offset.
+constexpr UINT kExternalUpdate = WM_APP + 0x51A;
+constexpr UINT kExternalRelease = WM_APP + 0x51B;
+constexpr UINT kExternalAck = WM_APP + 0x51C;
+constexpr UINT_PTR kExternalTimer = 0x51A;
+constexpr DWORD kExternalProtocol = 2;
+constexpr DWORD kExternalTimeoutMs = 600;
+constexpr DWORD kExternalRetryMs = 1000;
+constexpr wchar_t kExtProtocol[] = L"WeaselAcrylicExternalProtocol";
+constexpr wchar_t kExtServer[] = L"WeaselAcrylicExternalServer";
+constexpr wchar_t kExtToken[] = L"WeaselAcrylicExternalToken";
+constexpr wchar_t kExtSequence[] = L"WeaselAcrylicExternalSequence";
+constexpr wchar_t kExtCandidate[] = L"WeaselAcrylicExternalCandidate";
+constexpr wchar_t kExtWanted[] = L"WeaselAcrylicExternalWanted";
+constexpr wchar_t kExtX[] = L"WeaselAcrylicExternalX";
+constexpr wchar_t kExtY[] = L"WeaselAcrylicExternalY";
+constexpr wchar_t kExtWidth[] = L"WeaselAcrylicExternalWidth";
+constexpr wchar_t kExtHeight[] = L"WeaselAcrylicExternalHeight";
+constexpr wchar_t kExtDark[] = L"WeaselAcrylicExternalDark";
+constexpr wchar_t kExtClientPulse[] = L"WeaselAcrylicExternalClientPulse";
+constexpr wchar_t kExtServerPulse[] = L"WeaselAcrylicExternalServerPulse";
+constexpr wchar_t kExtOwner[] = L"WeaselAcrylicExternalOwner";
+constexpr wchar_t kExtActive[] = L"WeaselAcrylicExternalActive";
+constexpr wchar_t kExtAckClient[] = L"WeaselAcrylicExternalAckClient";
+constexpr wchar_t kExtAckToken[] = L"WeaselAcrylicExternalAckToken";
+constexpr wchar_t kExtAckSequence[] = L"WeaselAcrylicExternalAckSequence";
+constexpr wchar_t kExtRenderer[] = L"WeaselAcrylicExternalRendererHwnd";
+constexpr wchar_t kExtReady[] = L"WeaselAcrylicExternalReady";
+
+struct ExternalSnapshot {
+  HWND candidate = nullptr;
+  DWORD token = 0;
+  DWORD sequence = 0;
+  int x = 0;
+  int y = 0;
+  int width = 0;
+  int height = 0;
+  BOOL dark = FALSE;
+};
+
+struct ExternalAcrylicState {
+  bool server = false;
+  bool active = false;
+  bool foregroundReady = false;
+  bool pending = false;
+  bool attempted = false;
+  bool redrawing = false;
+  HWND candidate = nullptr;
+  HWND peer = nullptr;
+  WeaselPanel* panel = nullptr;  // Local pointer only, never published via IPC.
+  ExternalSnapshot snapshot;
+  DWORD token = 0;
+  DWORD lastAttempt = 0;
+  DWORD pendingSince = 0;
+  DWORD pendingSequence = 0;
+  DWORD boundServerPid = 0;  // Derived locally from the connected input pipe.
+  // R3 Search-only presentation guard; not a pixel-level blur detector.
+  bool searchPresentation = false;
+  bool presentationTiming = false;
+  bool presentationRepairUsed = false;
+  bool presentationBlocked = false;  // Client: retry only after hide/recreate.
+  DWORD presentationSince = 0;
+};
+
+ULONG_PTR ExternalProperty(HWND hwnd, const wchar_t* name) {
+  return reinterpret_cast<ULONG_PTR>(::GetPropW(hwnd, name));
+}
+
+bool SetExternalProperty(HWND hwnd, const wchar_t* name, ULONG_PTR value) {
+  return ::SetPropW(hwnd, name, reinterpret_cast<HANDLE>(value)) != FALSE;
+}
+
+bool ExternalFresh(DWORD now, DWORD then) {
+  return static_cast<DWORD>(now - then) <= kExternalTimeoutMs;
+}
+
+ExternalAcrylicState* ExternalState(HWND hwnd) {
+  return hwnd ? reinterpret_cast<ExternalAcrylicState*>(
+                    ::GetWindowLongPtrW(hwnd, GWLP_USERDATA))
+              : nullptr;
+}
+
+bool IsSettingsImage(const wchar_t* path, DWORD length) {
+  wchar_t windows[32768] = {};
+  const UINT count = ::GetWindowsDirectoryW(windows, _countof(windows));
+  if (!count || count >= _countof(windows))
+    return false;
+  const std::wstring expected = std::wstring(windows, count) +
+                                L"\\ImmersiveControlPanel\\SystemSettings.exe";
+  return ::CompareStringOrdinal(
+             path, static_cast<int>(length), expected.c_str(),
+             static_cast<int>(expected.size()), TRUE) == CSTR_EQUAL;
+}
+
+// Phase2 R1: one policy for the local client and server-side validation.
+// Package identity is queried from the process token, never from a window
+// property, parent-process snapshot, or an executable name on its own.
+enum class ExternalClientKind : DWORD {
+  None = 0,
+  Settings = 1,
+  Store = 2,
+  Outlook = 3,
+  Search = 4
+};
+constexpr wchar_t kExtCompatibility[] = L"WeaselAcrylicCompatibilityPolicy";
+constexpr wchar_t kExtClientKind[] = L"WeaselAcrylicClientKind";
+constexpr wchar_t kExtCoordinator[] = L"WeaselAcrylicCoordinatorHwnd";
+constexpr wchar_t kExtLowMessages[] = L"WeaselAcrylicExternalLowMessages";
+constexpr wchar_t kExtFilterError[] = L"WeaselAcrylicExternalFilterError";
+constexpr wchar_t kExtPostError[] = L"WeaselAcrylicExternalPostError";
+constexpr wchar_t kExtCreateStage[] = L"WeaselAcrylicCreateStage";
+constexpr wchar_t kExtCreateHr[] = L"WeaselAcrylicCreateHresult";
+constexpr wchar_t kExtPlacementError[] = L"WeaselAcrylicExternalPlacementError";
+constexpr wchar_t kExtPresentationPolicy[] = L"WeaselAcrylicPresentationPolicy";
+constexpr wchar_t kExtPresentationReady[] = L"WeaselAcrylicPresentationReady";
+constexpr wchar_t kExtPresentationStage[] = L"WeaselAcrylicPresentationStage";
+constexpr wchar_t kExtPresentationBlocker[] =
+    L"WeaselAcrylicPresentationBlocker";
+constexpr wchar_t kExtPresentationRepairs[] =
+    L"WeaselAcrylicPresentationRepairs";
+constexpr wchar_t kExtPresentationFailClient[] =
+    L"WeaselAcrylicPresentationFailClient";
+constexpr wchar_t kExtPresentationFailToken[] =
+    L"WeaselAcrylicPresentationFailToken";
+constexpr wchar_t kExtPresentationBlocked[] =
+    L"WeaselAcrylicPresentationBlocked";
+constexpr wchar_t kExtPresentationClientStage[] =
+    L"WeaselAcrylicPresentationClientStage";
+constexpr wchar_t kExtPresentationClientBlocker[] =
+    L"WeaselAcrylicPresentationClientBlocker";
+// R4: candidate-anchored, forward Z-order validation on both UI threads.
+// The asynchronous lease protocol is unchanged; only the presentation policy
+// version changes so a Search client never trusts an older reverse-only gate.
+constexpr DWORD kPresentationPolicyVersion = 2;
+constexpr DWORD kPresentationSettleMs = 100;
+
+bool ExternalPathEquals(const std::wstring& left, const std::wstring& right) {
+  return ::CompareStringOrdinal(left.c_str(), static_cast<int>(left.size()),
+                                right.c_str(), static_cast<int>(right.size()),
+                                TRUE) == CSTR_EQUAL;
+}
+
+bool ExternalImagePath(HANDLE process, std::wstring& path) {
+  wchar_t buffer[32768] = {};
+  DWORD count = _countof(buffer);
+  if (!::QueryFullProcessImageNameW(process, 0, buffer, &count) || !count ||
+      count >= _countof(buffer))
+    return false;
+  path.assign(buffer, count);
+  return true;
+}
+
+bool ExternalPackageFamily(HANDLE process, std::wstring& family) {
+  wchar_t buffer[256] = {};
+  UINT32 count = _countof(buffer);
+  if (::GetPackageFamilyName(process, &count, buffer) != ERROR_SUCCESS ||
+      !count || count > _countof(buffer))
+    return false;
+  family.assign(buffer);
+  return !family.empty();
+}
+
+bool ExternalImageInPackage(HANDLE process,
+                            const std::wstring& path,
+                            const wchar_t* executable) {
+  wchar_t package[256] = {};
+  UINT32 count = _countof(package);
+  if (::GetPackageFullName(process, &count, package) != ERROR_SUCCESS)
+    return false;
+  wchar_t directory[32768] = {};
+  count = _countof(directory);
+  if (::GetPackagePathByFullName(package, &count, directory) != ERROR_SUCCESS ||
+      !count || count > _countof(directory))
+    return false;
+  return ExternalPathEquals(path, std::wstring(directory) + L"\\" + executable);
+}
+
+ExternalClientKind ExternalKindForProcess(HANDLE process) {
+  std::wstring path;
+  if (!ExternalImagePath(process, path))
+    return ExternalClientKind::None;
+  if (IsSettingsImage(path.c_str(), static_cast<DWORD>(path.size())))
+    return ExternalClientKind::Settings;
+  std::wstring family;
+  if (!ExternalPackageFamily(process, family))
+    return ExternalClientKind::None;
+  if (family == L"Microsoft.WindowsStore_8wekyb3d8bbwe" &&
+      ExternalImageInPackage(process, path, L"WinStore.App.exe"))
+    return ExternalClientKind::Store;
+  if (family == L"Microsoft.OutlookForWindows_8wekyb3d8bbwe") {
+    if (ExternalImageInPackage(process, path, L"olk.exe"))
+      return ExternalClientKind::Outlook;
+    const auto slash = path.find_last_of(L"\\/");
+    if (slash != std::wstring::npos &&
+        ExternalPathEquals(path.substr(slash + 1), L"msedgewebview2.exe"))
+      return ExternalClientKind::Outlook;
+    // WebView2 is outside the package directory. Its real HWND owner is also
+    // checked against the installed olk.exe before a new lease is accepted.
+  }
+  if (family == L"MicrosoftWindows.Client.CBS_cw5n1h2txyewy" &&
+      ExternalImageInPackage(process, path, L"SearchHost.exe"))
+    return ExternalClientKind::Search;
+  return ExternalClientKind::None;
+}
+
+ExternalClientKind CurrentExternalKind() {
+#if defined(_M_X64) && !defined(_M_ARM64EC)
+  static const ExternalClientKind kind =
+      ExternalKindForProcess(::GetCurrentProcess());
+  return kind;
+#else
+  return ExternalClientKind::None;
+#endif
+}
+
+bool IsExternalCompatibleClient() {
+  return CurrentExternalKind() != ExternalClientKind::None;
+}
+
+bool ExternalAppContainer(HANDLE process, bool& appContainer) {
+  HANDLE token = nullptr;
+  if (!::OpenProcessToken(process, TOKEN_QUERY, &token))
+    return false;
+  DWORD value = 0;
+  DWORD bytes = 0;
+  const BOOL ok = ::GetTokenInformation(token, TokenIsAppContainer, &value,
+                                        sizeof(value), &bytes);
+  ::CloseHandle(token);
+  if (!ok)
+    return false;
+  appContainer = value != 0;
+  return true;
+}
+
+bool ExternalSameUser(HANDLE process) {
+  HANDLE ours = nullptr;
+  HANDLE theirs = nullptr;
+  if (!::OpenProcessToken(::GetCurrentProcess(), TOKEN_QUERY, &ours))
+    return false;
+  if (!::OpenProcessToken(process, TOKEN_QUERY, &theirs)) {
+    ::CloseHandle(ours);
+    return false;
+  }
+  alignas(TOKEN_USER) BYTE a[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE] = {};
+  alignas(TOKEN_USER) BYTE b[sizeof(TOKEN_USER) + SECURITY_MAX_SID_SIZE] = {};
+  DWORD bytes = 0;
+  const bool same =
+      ::GetTokenInformation(ours, TokenUser, a, sizeof(a), &bytes) &&
+      ::GetTokenInformation(theirs, TokenUser, b, sizeof(b), &bytes) &&
+      ::EqualSid(reinterpret_cast<TOKEN_USER*>(a)->User.Sid,
+                 reinterpret_cast<TOKEN_USER*>(b)->User.Sid);
+  ::CloseHandle(theirs);
+  ::CloseHandle(ours);
+  return same;
+}
+
+bool ExternalProcessMatches(DWORD pid, bool client) {
+  DWORD currentSession = 0;
+  DWORD otherSession = 0;
+  if (!pid || pid == ::GetCurrentProcessId() ||
+      !::ProcessIdToSessionId(::GetCurrentProcessId(), &currentSession) ||
+      !::ProcessIdToSessionId(pid, &otherSession) ||
+      currentSession != otherSession)
+    return false;
+  HANDLE process = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+  if (!process)
+    return false;
+  bool matches = false;
+  if (ExternalSameUser(process)) {
+    if (client) {
+      matches = ExternalKindForProcess(process) != ExternalClientKind::None;
+    } else {
+      std::wstring path;
+      std::wstring root;
+      matches = ExternalImagePath(process, path) &&
+                SUCCEEDED(ReadAcrylicInstallRoot(root)) &&
+                ExternalPathEquals(path, root + L"\\WeaselServer.exe");
+    }
+  }
+  ::CloseHandle(process);
+  return matches;
+}
+
+bool ExternalMediumServer() {
+  HANDLE token = nullptr;
+  if (!::OpenProcessToken(::GetCurrentProcess(), TOKEN_QUERY, &token))
+    return false;
+  alignas(TOKEN_MANDATORY_LABEL)
+      BYTE buffer[sizeof(TOKEN_MANDATORY_LABEL) + SECURITY_MAX_SID_SIZE] = {};
+  DWORD bytes = 0;
+  bool allowed = false;
+  if (::GetTokenInformation(token, TokenIntegrityLevel, buffer, sizeof(buffer),
+                            &bytes)) {
+    const PSID sid =
+        reinterpret_cast<TOKEN_MANDATORY_LABEL*>(buffer)->Label.Sid;
+    const UCHAR count = *::GetSidSubAuthorityCount(sid);
+    allowed = count && *::GetSidSubAuthority(sid, count - 1) ==
+                           SECURITY_MANDATORY_MEDIUM_RID;
+  }
+  ::CloseHandle(token);
+  return allowed;
+}
+
+void PrepareExternalLowMessages(HWND hwnd) {
+  // Only this renderer HWND and two integer/handle-only protocol messages.
+  // Never change process-wide filters, UIAccess, UAC, or another app's token.
+  DWORD error = ERROR_ACCESS_DENIED;
+  bool allowed = false;
+  if (ExternalMediumServer()) {
+    if (::ChangeWindowMessageFilterEx(hwnd, kExternalUpdate, MSGFLT_ALLOW,
+                                      nullptr)) {
+      if (::ChangeWindowMessageFilterEx(hwnd, kExternalRelease, MSGFLT_ALLOW,
+                                        nullptr)) {
+        allowed = true;
+        error = ERROR_SUCCESS;
+      } else {
+        error = ::GetLastError();
+        ::ChangeWindowMessageFilterEx(hwnd, kExternalUpdate, MSGFLT_RESET,
+                                      nullptr);
+      }
+    } else {
+      error = ::GetLastError();
+    }
+  }
+  SetExternalProperty(hwnd, kExtLowMessages, allowed ? 1 : 0);
+  SetExternalProperty(hwnd, kExtFilterError, error);
+}
+
+bool ExternalNewClientGeometry(HWND client, const ExternalSnapshot& snap) {
+  DWORD clientPid = 0;
+  DWORD candidatePid = 0;
+  const DWORD clientThread = ::GetWindowThreadProcessId(client, &clientPid);
+  const DWORD candidateThread =
+      ::GetWindowThreadProcessId(snap.candidate, &candidatePid);
+  if (!clientThread || clientThread != candidateThread ||
+      clientPid != candidatePid)
+    return false;
+  const auto exStyle = ::GetWindowLongPtrW(snap.candidate, GWL_EXSTYLE);
+  if (!(exStyle & WS_EX_LAYERED) || !(exStyle & WS_EX_NOACTIVATE))
+    return false;
+  RECT rect = {};
+  if (!::GetWindowRect(snap.candidate, &rect) || snap.x < rect.left ||
+      snap.y < rect.top ||
+      static_cast<LONGLONG>(snap.x) + snap.width > rect.right ||
+      static_cast<LONGLONG>(snap.y) + snap.height > rect.bottom)
+    return false;
+  return true;
+}
+
+bool ExternalClientOwnerMatches(HWND client, HWND candidate) {
+  DWORD clientPid = 0;
+  ::GetWindowThreadProcessId(client, &clientPid);
+  // Outlook WebView2's executable path alone is not a sufficient identity.
+  HANDLE process =
+      ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, clientPid);
+  if (!process)
+    return false;
+  const auto kind = ExternalKindForProcess(process);
+  ::CloseHandle(process);
+  if (kind == ExternalClientKind::None)
+    return false;
+  if (kind != ExternalClientKind::Outlook)
+    return true;
+  const HWND owner = ::GetWindow(candidate, GW_OWNER);
+  if (!owner)
+    return false;
+  DWORD ownerPid = 0;
+  ::GetWindowThreadProcessId(::GetAncestor(owner, GA_ROOT), &ownerPid);
+  process = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, ownerPid);
+  if (!process)
+    return false;
+  std::wstring path;
+  std::wstring family;
+  const bool matches = ExternalSameUser(process) &&
+                       ExternalImagePath(process, path) &&
+                       ExternalPackageFamily(process, family) &&
+                       family == L"Microsoft.OutlookForWindows_8wekyb3d8bbwe" &&
+                       ExternalImageInPackage(process, path, L"olk.exe");
+  ::CloseHandle(process);
+  return matches;
+}
+
+bool IsExternalHostClass(HWND hwnd) {
+  wchar_t name[64] = {};
+  return hwnd && ::IsWindow(hwnd) &&
+         ::GetClassNameW(hwnd, name, _countof(name)) &&
+         ::lstrcmpW(name, kWeaselAcrylicBackdropClass) == 0;
+}
+
+bool ExternalCandidateVisible(HWND candidate) {
+  if (!candidate || !::IsWindow(candidate) || !::IsWindowVisible(candidate))
+    return false;
+  const HWND owner = ::GetWindow(candidate, GW_OWNER);
+  if (owner && (!::IsWindowVisible(owner) || ::IsIconic(owner)))
+    return false;
+  DWORD cloaked = 0;
+  if (owner &&
+      SUCCEEDED(::DwmGetWindowAttribute(owner, DWMWA_CLOAKED, &cloaked,
+                                        sizeof(cloaked))) &&
+      cloaked)
+    return false;
+  return true;
+}
+
+bool ExternalServerAvailable(HWND hwnd) {
+  return IsExternalHostClass(hwnd) &&
+         ExternalProperty(hwnd, kExtProtocol) == kExternalProtocol &&
+         ExternalProperty(hwnd, kExtServer) == 1 &&
+         ExternalProperty(hwnd, kWeaselAcrylicAppSdkActiveProperty) == 1 &&
+         ExternalProperty(hwnd, kAcrylicStageProperty) == 100;
+}
+
+bool ExternalCoordinatorOnly();
+
+// R2 binds restricted Search/Store clients to their existing input pipe peer.
+// This inherits the trust of that input connection; a PID is not a signature.
+// The candidate-side route must not OpenProcess/OpenProcessToken on the server.
+constexpr wchar_t kExtIdentityRoute[] = L"WeaselAcrylicServerIdentityRoute";
+constexpr wchar_t kExtPipeStage[] = L"WeaselAcrylicPipeStage";
+constexpr wchar_t kExtPipeError[] = L"WeaselAcrylicPipeError";
+constexpr wchar_t kExtPipePid[] = L"WeaselAcrylicPipeServerPid";
+constexpr wchar_t kExtPipeSession[] = L"WeaselAcrylicPipeServerSession";
+constexpr wchar_t kExtBoundPid[] = L"WeaselAcrylicBoundServerPid";
+
+bool QueryExternalPipeServer(HWND client,
+                             ExternalAcrylicState* state,
+                             DWORD& processId) {
+  processId = 0;
+  DWORD sessionId = 0;
+  DWORD stage = 11;
+  DWORD error = ERROR_NOT_SUPPORTED;
+  const bool ok =
+      state && state->panel &&
+      state->panel->QueryAcrylicServer(processId, sessionId, stage, error);
+  SetExternalProperty(client, kExtIdentityRoute, 2);
+  SetExternalProperty(client, kExtPipeStage, stage);
+  SetExternalProperty(client, kExtPipeError, error);
+  SetExternalProperty(client, kExtPipePid, ok ? processId : 0);
+  SetExternalProperty(client, kExtPipeSession, ok ? sessionId : 0);
+  if (!ok || !processId) {
+    processId = 0;
+    return false;
+  }
+  return true;
+}
+
+struct ExternalServerSearch {
+  HWND window = nullptr;
+  DWORD stage = 1;  // 1 no server; 2 policy; 3 filter; 4 legacy identity.
+  DWORD pipePid = 0;
+  bool pipeBound = false;  // 5 pipe query failed; 6 HWND PID differs from pipe.
+};
+
+BOOL CALLBACK FindExternalServerCallback(HWND hwnd, LPARAM parameter) {
+  if (!ExternalServerAvailable(hwnd) ||
+      (::IsWindowVisible(hwnd) && ExternalProperty(hwnd, kExtActive) != 1))
+    return TRUE;
+  auto search = reinterpret_cast<ExternalServerSearch*>(parameter);
+  if (CurrentExternalKind() != ExternalClientKind::Settings &&
+      ExternalProperty(hwnd, kExtCompatibility) != 1) {
+    search->stage = 2;
+    return TRUE;
+  }
+  if (ExternalCoordinatorOnly() &&
+      ExternalProperty(hwnd, kExtLowMessages) != 1) {
+    search->stage = 3;
+    return TRUE;
+  }
+  DWORD pid = 0;
+  ::GetWindowThreadProcessId(hwnd, &pid);
+  if (search->pipeBound) {
+    if (!pid || pid != search->pipePid) {
+      search->stage = 6;
+      return TRUE;
+    }
+  } else if (!ExternalProcessMatches(pid, false)) {
+    search->stage = 4;
+    return TRUE;
+  }
+  search->window = hwnd;
+  search->stage = 0;
+  return FALSE;
+}
+
+HWND FindExternalServer(HWND client) {
+  ExternalServerSearch search;
+  auto state = ExternalState(client);
+  search.pipeBound = ExternalCoordinatorOnly();
+  if (search.pipeBound) {
+    if (!QueryExternalPipeServer(client, state, search.pipePid)) {
+      SetExternalProperty(client, L"WeaselAcrylicExternalDiscovery", 5);
+      return nullptr;  // No fallback to class-name or unverified PID discovery.
+    }
+  } else {
+    SetExternalProperty(client, kExtIdentityRoute, 1);
+  }
+  ::EnumWindows(FindExternalServerCallback, reinterpret_cast<LPARAM>(&search));
+  if (state) {
+    state->boundServerPid = search.window ? search.pipePid : 0;
+    SetExternalProperty(client, kExtBoundPid, state->boundServerPid);
+  }
+  SetExternalProperty(client, L"WeaselAcrylicExternalDiscovery", search.stage);
+  return search.window;
+}
+
+ExternalAcrylicState* MakeExternalState(HWND hwnd, bool server) {
+  if (auto state = ExternalState(hwnd))
+    return state->server == server ? state : nullptr;
+  auto state = new (std::nothrow) ExternalAcrylicState;
+  if (!state)
+    return nullptr;
+  state->server = server;
+  ::SetLastError(ERROR_SUCCESS);
+  ::SetWindowLongPtrW(hwnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(state));
+  if (::GetLastError() != ERROR_SUCCESS) {
+    delete state;
+    return nullptr;
+  }
+  return state;
+}
+
+void PrepareExternalServer(HWND hwnd) {
+#if defined(_M_X64) && !defined(_M_ARM64EC)
+  if (!MakeExternalState(hwnd, true))
+    return;
+  PrepareExternalLowMessages(hwnd);
+  SetExternalProperty(hwnd, kExtCompatibility, 1);
+  SetExternalProperty(hwnd, kExtPresentationPolicy, kPresentationPolicyVersion);
+  if (!SetExternalProperty(hwnd, kExtProtocol, kExternalProtocol) ||
+      !SetExternalProperty(hwnd, kExtServer, 1)) {
+    ::RemovePropW(hwnd, kExtProtocol);
+    ::RemovePropW(hwnd, kExtServer);
+  }
+#endif
+}
+
+bool ExternalBorrowed(HWND hwnd) {
+  const auto state = ExternalState(hwnd);
+  return state && state->server && state->active;
+}
+
+void EndExternalServerLease(HWND hwnd, ExternalAcrylicState* state) {
+  if (!state || !state->server || !state->active)
+    return;
+  const HWND client = state->peer;
+  const DWORD token = state->token;
+  state->active = false;
+  state->peer = nullptr;
+  state->candidate = nullptr;
+  ::KillTimer(hwnd, kExternalTimer);
+  ::RemovePropW(hwnd, kExtActive);
+  ::RemovePropW(hwnd, kExtPresentationReady);
+  ::RemovePropW(hwnd, kExtOwner);
+  ::RemovePropW(hwnd, kExtAckClient);
+  ::RemovePropW(hwnd, kExtAckToken);
+  ::RemovePropW(hwnd, kExtAckSequence);
+  ::ShowWindow(hwnd, SW_HIDE);
+  if (client)
+    ::PostMessageW(client, kExternalAck, reinterpret_cast<WPARAM>(hwnd), token);
+}
+
+bool ReadExternalSnapshot(HWND client, DWORD token, ExternalSnapshot& snap) {
+  const DWORD seq = static_cast<DWORD>(ExternalProperty(client, kExtSequence));
+  if (!seq || (seq & 1) ||
+      ExternalProperty(client, kExtProtocol) != kExternalProtocol ||
+      ExternalProperty(client, kExtToken) != token ||
+      ExternalProperty(client, kExtWanted) != 1)
+    return false;
+  snap.candidate =
+      reinterpret_cast<HWND>(ExternalProperty(client, kExtCandidate));
+  snap.token = token;
+  snap.sequence = seq;
+  snap.x =
+      static_cast<LONG>(static_cast<DWORD>(ExternalProperty(client, kExtX)));
+  snap.y =
+      static_cast<LONG>(static_cast<DWORD>(ExternalProperty(client, kExtY)));
+  snap.width = static_cast<int>(ExternalProperty(client, kExtWidth));
+  snap.height = static_cast<int>(ExternalProperty(client, kExtHeight));
+  snap.dark = ExternalProperty(client, kExtDark) ? TRUE : FALSE;
+  return ExternalProperty(client, kExtSequence) == seq &&
+         ExternalProperty(client, kExtToken) == token &&
+         ExternalProperty(client, kExtWanted) == 1 && snap.width > 0 &&
+         snap.height > 0 && snap.width <= 32768 && snap.height <= 32768;
+}
+
+// Keep the trace at the point of validation, in the process doing the check.
+// An external observer's later window walk is not an atomic desktop snapshot.
+struct SearchPresentationTrace {
+  HWND first = nullptr;
+  HWND last = nullptr;
+  DWORD steps = 0;
+};
+
+void RecordSearchPresentationTrace(HWND hwnd,
+                                   bool client,
+                                   const SearchPresentationTrace& trace) {
+  SetExternalProperty(hwnd,
+                      client ? L"WeaselAcrylicPresentationClientFirst"
+                             : L"WeaselAcrylicPresentationFirst",
+                      reinterpret_cast<ULONG_PTR>(trace.first));
+  SetExternalProperty(hwnd,
+                      client ? L"WeaselAcrylicPresentationClientLast"
+                             : L"WeaselAcrylicPresentationLast",
+                      reinterpret_cast<ULONG_PTR>(trace.last));
+  SetExternalProperty(hwnd,
+                      client ? L"WeaselAcrylicPresentationClientSteps"
+                             : L"WeaselAcrylicPresentationSteps",
+                      trace.steps);
+  if (client)
+    SetExternalProperty(hwnd, L"WeaselAcrylicPresentationClientPolicy",
+                        kPresentationPolicyVersion);
+}
+
+// R4: start at the known real candidate and follow GW_HWNDNEXT to the expected
+// backdrop. The R3 control captures contain forward chains that reach the host
+// while a reverse desktop walk skips the Search candidate entirely. Do not
+// assume that a filtered/changing window view forms a reversible linked list.
+// Still reject an actual visible intersection before reaching the host. This
+// is structural validation, not a certificate of blur or pixel visibility.
+DWORD CheckSearchPresentation(HWND host,
+                              const ExternalSnapshot& snap,
+                              HWND& blocker,
+                              SearchPresentationTrace* trace = nullptr) {
+  blocker = nullptr;
+  if (trace)
+    *trace = SearchPresentationTrace{};
+  if (host == snap.candidate || !ExternalCandidateVisible(snap.candidate) ||
+      !::IsWindowVisible(host))
+    return 10;
+  RECT rect = {};
+  if (!::GetWindowRect(host, &rect) || rect.left != snap.x ||
+      rect.top != snap.y ||
+      static_cast<LONGLONG>(rect.right) - rect.left != snap.width ||
+      static_cast<LONGLONG>(rect.bottom) - rect.top != snap.height)
+    return 20;
+  DWORD cloaked = 0;
+  if (FAILED(::DwmGetWindowAttribute(host, DWMWA_CLOAKED, &cloaked,
+                                     sizeof(cloaked))) ||
+      cloaked)
+    return 30;
+  HWND current = snap.candidate;
+  for (unsigned i = 0; i < 512; ++i) {
+    const HWND next = ::GetWindow(current, GW_HWNDNEXT);
+    if (trace) {
+      if (i == 0)
+        trace->first = next;
+      trace->last = next;
+      trace->steps = i + 1;
+    }
+    if (!next || next == current || next == snap.candidate)
+      return 50;
+    if (next == host)
+      return 100;
+    current = next;
+    if (!::IsWindowVisible(current))
+      continue;
+    DWORD hidden = 0;
+    if (SUCCEEDED(::DwmGetWindowAttribute(current, DWMWA_CLOAKED, &hidden,
+                                          sizeof(hidden))) &&
+        hidden)
+      continue;
+    RECT other = {};
+    if (!::GetWindowRect(current, &other))
+      return 60;
+    if (other.left < rect.right && other.right > rect.left &&
+        other.top < rect.bottom && other.bottom > rect.top) {
+      blocker = current;
+      return 40;
+    }
+  }
+  return 70;
+}
+
+bool SearchProcessForPresentation(DWORD pid) {
+  HANDLE process = ::OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+  if (!process)
+    return false;
+  const bool search =
+      ExternalKindForProcess(process) == ExternalClientKind::Search;
+  ::CloseHandle(process);
+  return search;
+}
+
+// Run only from the server's existing 100 ms lease timer. No new timer, IPC
+// wait, foreground activation, foreign HWND move, or window-band mutation.
+void RefreshSearchPresentation(HWND hwnd, ExternalAcrylicState* state) {
+  if (!state || !state->server || !state->active || !state->searchPresentation)
+    return;
+  HWND blocker = nullptr;
+  SearchPresentationTrace trace;
+  const DWORD stage =
+      CheckSearchPresentation(hwnd, state->snapshot, blocker, &trace);
+  RecordSearchPresentationTrace(hwnd, false, trace);
+  SetExternalProperty(hwnd, kExtPresentationStage, stage);
+  SetExternalProperty(hwnd, kExtPresentationBlocker,
+                      reinterpret_cast<ULONG_PTR>(blocker));
+  if (stage == 100) {
+    if (!state->presentationTiming) {
+      state->presentationSince = ::GetTickCount();
+      state->presentationTiming = true;
+    }
+    if (static_cast<DWORD>(::GetTickCount() - state->presentationSince) <
+        kPresentationSettleMs) {
+      SetExternalProperty(hwnd, kExtPresentationStage, 2);  // Settling.
+      return;
+    }
+    if (ExternalProperty(hwnd, kExtPresentationReady) != 1 &&
+        SetExternalProperty(hwnd, kExtPresentationReady, 1))
+      ::PostMessageW(state->peer, kExternalAck, reinterpret_cast<WPARAM>(hwnd),
+                     state->token);
+    return;
+  }
+  SetExternalProperty(hwnd, kExtPresentationReady, 0);
+  state->presentationTiming = false;
+  if (!state->presentationRepairUsed) {
+    state->presentationRepairUsed = true;
+    SetExternalProperty(hwnd, kExtPresentationRepairs, 1);
+    const auto& snap = state->snapshot;
+    ::SetLastError(ERROR_SUCCESS);
+    const BOOL repaired = ::SetWindowPos(
+        hwnd, snap.candidate, snap.x, snap.y, snap.width, snap.height,
+        SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER);
+    const DWORD repairError = repaired ? ERROR_SUCCESS : ::GetLastError();
+    if (ExternalState(hwnd) != state || repaired)
+      return;  // Re-check after another timer tick, not in the same call.
+    SetExternalProperty(hwnd, kExtPlacementError, repairError);
+  }
+  // One unsuccessful repair ends this lease. The matching client records a
+  // sticky block until hide/recreate, avoiding an input-driven retry storm.
+  SetExternalProperty(hwnd, kExtPresentationFailClient,
+                      reinterpret_cast<ULONG_PTR>(state->peer));
+  SetExternalProperty(hwnd, kExtPresentationFailToken, state->token);
+  EndExternalServerLease(hwnd, state);
+}
+
+void ApplyExternalSnapshot(HWND hwnd,
+                           ExternalAcrylicState* state,
+                           HWND client,
+                           DWORD token) {
+  ExternalSnapshot snap;
+  if (!state || !state->server || !token || !ExternalServerAvailable(hwnd) ||
+      !IsExternalHostClass(client) ||
+      !ReadExternalSnapshot(client, token, snap) ||
+      !ExternalCandidateVisible(snap.candidate) ||
+      !ExternalFresh(::GetTickCount(), static_cast<DWORD>(ExternalProperty(
+                                           client, kExtClientPulse))))
+    return;
+  DWORD clientPid = 0;
+  DWORD candidatePid = 0;
+  ::GetWindowThreadProcessId(client, &clientPid);
+  ::GetWindowThreadProcessId(snap.candidate, &candidatePid);
+  if (!clientPid || clientPid != candidatePid)
+    return;
+  const bool compatibilityClient =
+      ExternalProperty(client, kExtCompatibility) == 1;
+  if (compatibilityClient && !ExternalNewClientGeometry(client, snap))
+    return;
+  const bool sameLease = state->active && state->peer == client &&
+                         state->token == token &&
+                         state->candidate == snap.candidate;
+  if (!sameLease) {
+    if (!ExternalProcessMatches(clientPid, true) ||
+        (compatibilityClient &&
+         !ExternalClientOwnerMatches(client, snap.candidate)))
+      return;
+    if (state->active && state->peer != client &&
+        ExternalCandidateVisible(state->candidate))
+      return;
+    if (::IsWindowVisible(hwnd) && !state->active)
+      return;  // Never borrow a backdrop displaying the server's own panel.
+    EndExternalServerLease(hwnd, state);
+    // External Settings/Store/Search leases still publish the historical
+    // ContentRect geometry. Do not leave a local candidate's expanded explicit
+    // clip on the shared server Acrylic HWND.
+    if (AppSdkAcrylicNeedsExplicitClip(hwnd)) {
+      ClearAcrylicExplicitClip(hwnd, false);
+      int corner = kDwmwcpRound;
+      ::DwmSetWindowAttribute(hwnd, kDwmaWindowCornerPreference, &corner,
+                              sizeof(corner));
+    }
+    state->active = true;
+    state->peer = client;
+    state->candidate = snap.candidate;
+    state->token = token;
+    state->searchPresentation =
+        compatibilityClient && SearchProcessForPresentation(clientPid);
+    state->presentationTiming = false;
+    state->presentationRepairUsed = false;
+    SetExternalProperty(hwnd, kExtPresentationReady, 0);
+    SetExternalProperty(hwnd, kExtPresentationStage, 1);
+    SetExternalProperty(hwnd, kExtPresentationRepairs, 0);
+    SetExternalProperty(hwnd, kExtPresentationFailClient, 0);
+    SetExternalProperty(hwnd, kExtPresentationFailToken, 0);
+    if (!::SetTimer(hwnd, kExternalTimer, 100, nullptr)) {
+      EndExternalServerLease(hwnd, state);
+      return;
+    }
+  }
+  if (!sameLease || state->snapshot.dark != snap.dark) {
+    ::DwmSetWindowAttribute(hwnd, kDwmaUseImmersiveDarkMode, &snap.dark,
+                            sizeof(snap.dark));
+    g_acrylicAppSdkBridge.SetDarkMode(hwnd, snap.dark);
+  }
+  ::SetLastError(ERROR_SUCCESS);
+  const BOOL positioned = ::SetWindowPos(
+      hwnd, snap.candidate, snap.x, snap.y, snap.width, snap.height,
+      SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER);
+  const DWORD placementError = positioned ? ERROR_SUCCESS : ::GetLastError();
+  RECT placed = {};
+  const bool placementVerified =
+      !compatibilityClient ||
+      (positioned && ::GetWindowRect(hwnd, &placed) && placed.left == snap.x &&
+       placed.top == snap.y &&
+       static_cast<LONGLONG>(placed.right) - placed.left == snap.width &&
+       static_cast<LONGLONG>(placed.bottom) - placed.top == snap.height &&
+       (state->searchPresentation ||
+        ::GetWindow(snap.candidate, GW_HWNDNEXT) == hwnd));
+  SetExternalProperty(
+      hwnd, kExtPlacementError,
+      placementVerified && positioned
+          ? ERROR_SUCCESS
+          : (placementError ? placementError : ERROR_INVALID_WINDOW_HANDLE));
+  if (!positioned || !placementVerified ||
+      !SetExternalProperty(hwnd, kExtOwner,
+                           reinterpret_cast<ULONG_PTR>(snap.candidate)) ||
+      !SetExternalProperty(hwnd, kExtAckClient,
+                           reinterpret_cast<ULONG_PTR>(client)) ||
+      !SetExternalProperty(hwnd, kExtAckToken, token) ||
+      !SetExternalProperty(hwnd, kExtAckSequence, snap.sequence) ||
+      !SetExternalProperty(hwnd, kExtServerPulse, ::GetTickCount()) ||
+      !SetExternalProperty(hwnd, kExtActive, 1)) {
+    EndExternalServerLease(hwnd, state);
+    return;
+  }
+  state->snapshot = snap;
+  if (state->searchPresentation) {
+    state->presentationTiming = false;
+    SetExternalProperty(hwnd, kExtPresentationReady, 0);
+    SetExternalProperty(hwnd, kExtPresentationStage, 1);
+    return;  // Search ACK is delayed until two stable presentation samples.
+  }
+  ::PostMessageW(client, kExternalAck, reinterpret_cast<WPARAM>(hwnd), token);
+}
+
+bool ExternalLeaseReady(HWND client, const ExternalAcrylicState* state) {
+  const HWND host = state ? state->peer : nullptr;
+  if (state && state->searchPresentation) {
+    HWND blocker = nullptr;
+    SearchPresentationTrace trace;
+    const DWORD stage =
+        host ? CheckSearchPresentation(host, state->snapshot, blocker, &trace)
+             : 0;
+    RecordSearchPresentationTrace(client, true, trace);
+    SetExternalProperty(client, kExtPresentationClientStage, stage);
+    SetExternalProperty(client, kExtPresentationClientBlocker,
+                        reinterpret_cast<ULONG_PTR>(blocker));
+    if (!host ||
+        ExternalProperty(host, kExtPresentationPolicy) !=
+            kPresentationPolicyVersion ||
+        ExternalProperty(host, kExtPresentationReady) != 1 ||
+        ExternalProperty(host, kExtAckSequence) != state->snapshot.sequence ||
+        stage != 100)
+      return false;
+  }
+  return state && !state->server && state->active && host &&
+         ExternalServerAvailable(host) && ::IsWindowVisible(host) &&
+         ExternalProperty(host, kExtActive) == 1 &&
+         ExternalProperty(host, kExtAckClient) ==
+             reinterpret_cast<ULONG_PTR>(client) &&
+         ExternalProperty(host, kExtAckToken) == state->token &&
+         ExternalProperty(host, kExtAckSequence) != 0 &&
+         ExternalProperty(host, kExtOwner) ==
+             reinterpret_cast<ULONG_PTR>(state->candidate) &&
+         ExternalFresh(::GetTickCount(), static_cast<DWORD>(ExternalProperty(
+                                             host, kExtServerPulse)));
+}
+
+void RefreshExternalForeground(HWND hwnd, ExternalAcrylicState* state) {
+  if (!state || state->server)
+    return;
+  const bool ready = ExternalLeaseReady(hwnd, state);
+  if (ready == state->foregroundReady)
+    return;
+  state->foregroundReady = ready;
+  if (ready) {
+    SetExternalProperty(state->candidate, kExtReady, 1);
+    SetExternalProperty(state->candidate, kExtRenderer,
+                        reinterpret_cast<ULONG_PTR>(state->peer));
+  } else {
+    ::RemovePropW(state->candidate, kExtReady);
+    ::RemovePropW(state->candidate, kExtRenderer);
+  }
+  // Some TSF hosts ignore WM_PAINT; use the existing direct redraw entry point.
+  if (!state->redrawing && state->panel && ::IsWindow(state->candidate) &&
+      ::IsWindowVisible(state->candidate)) {
+    state->redrawing = true;
+    state->panel->RedrawWindow();
+    if (ExternalState(hwnd) == state)
+      state->redrawing = false;
+  }
+}
+
+void ReleaseExternalClient(HWND hwnd) {
+  auto state = ExternalState(hwnd);
+  if (!state || state->server)
+    return;
+  ::KillTimer(hwnd, kExternalTimer);
+  SetExternalProperty(hwnd, kExtWanted, 0);
+  ::RemovePropW(hwnd, kExtToken);  // Reject delayed requests from this lease.
+  if (state->peer && state->active)
+    ::PostMessageW(state->peer, kExternalRelease,
+                   reinterpret_cast<WPARAM>(hwnd), state->token);
+  ::RemovePropW(state->candidate, kExtReady);
+  ::RemovePropW(state->candidate, kExtRenderer);
+  state->active = false;
+  state->pending = false;
+  state->foregroundReady = false;
+  state->attempted = false;
+  state->peer = nullptr;
+  state->token = 0;
+  state->boundServerPid = 0;
+  state->presentationBlocked = false;
+  SetExternalProperty(hwnd, kExtPresentationBlocked, 0);
+  SetExternalProperty(hwnd, kExtBoundPid, 0);
+}
+
+DWORD NextExternalToken() {
+  static std::atomic<DWORD> counter{::GetTickCount() ^ ::GetCurrentProcessId()};
+  DWORD value = counter.fetch_add(1) + 1;
+  if (!value)
+    value = counter.fetch_add(1) + 1;
+  return value;
+}
+
+bool PublishExternalSnapshot(HWND hwnd,
+                             ExternalAcrylicState* state,
+                             const ExternalSnapshot& snap) {
+  DWORD seq = state->snapshot.sequence + 2;
+  if (!seq)
+    seq = 2;
+  if (!SetExternalProperty(hwnd, kExtSequence, seq - 1) ||
+      !SetExternalProperty(hwnd, kExtProtocol, kExternalProtocol) ||
+      !SetExternalProperty(hwnd, kExtCandidate,
+                           reinterpret_cast<ULONG_PTR>(state->candidate)) ||
+      !SetExternalProperty(hwnd, kExtToken, state->token) ||
+      !SetExternalProperty(hwnd, kExtX, static_cast<DWORD>(snap.x)) ||
+      !SetExternalProperty(hwnd, kExtY, static_cast<DWORD>(snap.y)) ||
+      !SetExternalProperty(hwnd, kExtWidth, snap.width) ||
+      !SetExternalProperty(hwnd, kExtHeight, snap.height) ||
+      !SetExternalProperty(hwnd, kExtDark, snap.dark ? 1 : 0) ||
+      !SetExternalProperty(hwnd, kExtClientPulse, ::GetTickCount()) ||
+      !SetExternalProperty(hwnd, kExtWanted, 1) ||
+      !SetExternalProperty(hwnd, kExtSequence, seq))
+    return false;
+  state->snapshot = snap;
+  state->snapshot.sequence = seq;
+  return true;
+}
+
+// A pipe reconnection/server restart invalidates the lease before new requests.
+// The callback reads the current TLS handle, not the handle from first attach.
+bool ExternalPipePeerCurrent(HWND hwnd, ExternalAcrylicState* state) {
+  if (!ExternalCoordinatorOnly())
+    return true;
+  DWORD pipePid = 0;
+  const bool queried = QueryExternalPipeServer(hwnd, state, pipePid);
+  DWORD windowPid = 0;
+  if (state->peer)
+    ::GetWindowThreadProcessId(state->peer, &windowPid);
+  if (queried && pipePid == state->boundServerPid && windowPid == pipePid)
+    return true;
+
+  SetExternalProperty(hwnd, L"WeaselAcrylicExternalDiscovery", queried ? 6 : 5);
+  // Release is asynchronous, and only affects this HWND/token on the server.
+  if (state->peer)
+    ::PostMessageW(state->peer, kExternalRelease,
+                   reinterpret_cast<WPARAM>(hwnd), state->token);
+  state->token = NextExternalToken();
+  SetExternalProperty(hwnd, kExtToken, state->token);
+  state->peer = nullptr;
+  state->pending = false;
+  state->boundServerPid = 0;
+  SetExternalProperty(hwnd, kExtBoundPid, 0);
+  state->attempted = false;
+  return false;
+}
+
+void RequestExternalSnapshot(HWND hwnd, ExternalAcrylicState* state) {
+  if (!state || state->server || !state->active || state->presentationBlocked)
+    return;
+  const DWORD now = ::GetTickCount();
+  if (state->peer)
+    ExternalPipePeerCurrent(hwnd, state);
+  if (state->peer && !ExternalServerAvailable(state->peer)) {
+    state->peer = nullptr;
+    state->pending = false;
+  }
+  if (state->pending && ExternalLeaseReady(hwnd, state)) {
+    const DWORD acknowledged =
+        static_cast<DWORD>(ExternalProperty(state->peer, kExtAckSequence));
+    if (static_cast<DWORD>(acknowledged - state->pendingSequence) < 0x80000000u)
+      state->pending = false;  // Recover even if the posted ACK was lost.
+  }
+  if (state->pending) {
+    if (static_cast<DWORD>(now - state->pendingSince) <= kExternalTimeoutMs)
+      return;
+    // Invalidate a late request before trying again; never wait on the input
+    // thread.
+    const HWND oldPeer = state->peer;
+    const DWORD oldToken = state->token;
+    state->token = NextExternalToken();
+    SetExternalProperty(hwnd, kExtToken, state->token);
+    if (oldPeer)
+      ::PostMessageW(oldPeer, kExternalRelease, reinterpret_cast<WPARAM>(hwnd),
+                     oldToken);
+    state->peer = nullptr;
+    state->pending = false;
+    state->lastAttempt = now;
+    state->attempted = true;
+  }
+  if (!state->peer) {
+    if (state->attempted &&
+        static_cast<DWORD>(now - state->lastAttempt) < kExternalRetryMs)
+      return;
+    state->lastAttempt = now;
+    state->attempted = true;
+    state->peer = FindExternalServer(hwnd);
+    if (!state->peer)
+      return;
+  }
+  // The pending request reads the newest published snapshot, so keystrokes and
+  // CI #20 moves coalesce instead of queuing one geometry message per change.
+  if (ExternalLeaseReady(hwnd, state) &&
+      ExternalProperty(state->peer, kExtAckSequence) ==
+          state->snapshot.sequence)
+    return;
+  ::SetLastError(ERROR_SUCCESS);
+  if (::PostMessageW(state->peer, kExternalUpdate,
+                     reinterpret_cast<WPARAM>(hwnd), state->token)) {
+    SetExternalProperty(hwnd, kExtPostError, ERROR_SUCCESS);
+    state->pending = true;
+    state->pendingSince = now;
+    state->pendingSequence = state->snapshot.sequence;
+  } else {
+    const DWORD error = ::GetLastError();
+    SetExternalProperty(hwnd, kExtPostError, error);
+    state->peer = nullptr;
+    state->lastAttempt = now;
+  }
+}
+
+void SyncExternalClient(HWND hwnd,
+                        HWND candidate,
+                        WeaselPanel* panel,
+                        int x,
+                        int y,
+                        int width,
+                        int height,
+                        BOOL dark) {
+  if (!hwnd || !IsExternalCompatibleClient() || width <= 0 || height <= 0 ||
+      !ExternalCandidateVisible(candidate))
+    return;
+  auto state = MakeExternalState(hwnd, false);
+  if (!state)
+    return;
+  state->candidate = candidate;
+  state->panel = panel;
+  state->searchPresentation =
+      CurrentExternalKind() == ExternalClientKind::Search;
+  if (CurrentExternalKind() != ExternalClientKind::Settings) {
+    SetExternalProperty(hwnd, kExtCompatibility, 1);
+    SetExternalProperty(hwnd, kExtClientKind,
+                        static_cast<DWORD>(CurrentExternalKind()));
+  }
+  if (!state->active) {
+    state->token = NextExternalToken();
+    state->snapshot.sequence = 0;
+    state->active = true;
+    if (!::SetTimer(hwnd, kExternalTimer, 50, nullptr)) {
+      ReleaseExternalClient(hwnd);
+      return;
+    }
+  }
+  ExternalSnapshot snap;
+  snap.candidate = candidate;
+  snap.token = state->token;
+  snap.x = x;
+  snap.y = y;
+  snap.width = width;
+  snap.height = height;
+  snap.dark = dark;
+  const auto& old = state->snapshot;
+  if (!old.sequence || old.x != x || old.y != y || old.width != width ||
+      old.height != height || old.dark != dark) {
+    if (!PublishExternalSnapshot(hwnd, state, snap)) {
+      ReleaseExternalClient(hwnd);
+      return;
+    }
+  }
+  RequestExternalSnapshot(hwnd, state);
+}
+
+bool ExternalForegroundReady(HWND hwnd) {
+  const auto state = ExternalState(hwnd);
+  return state && state->foregroundReady && ExternalLeaseReady(hwnd, state);
+}
+
+void DestroyExternalState(HWND hwnd) {
+  auto state = ExternalState(hwnd);
+  if (!state)
+    return;
+  if (state->server)
+    EndExternalServerLease(hwnd, state);
+  else
+    ReleaseExternalClient(hwnd);
+  ::KillTimer(hwnd, kExternalTimer);
+  ::RemovePropW(hwnd, kExtProtocol);
+  ::RemovePropW(hwnd, kExtServer);
+  ::SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+  delete state;
+}
+
+bool HandleExternalAcrylicMessage(HWND hwnd,
+                                  UINT message,
+                                  WPARAM wParam,
+                                  LPARAM lParam,
+                                  LRESULT& result) {
+  auto state = ExternalState(hwnd);
+  if (!state)
+    return false;
+  result = 0;
+  if (message == WM_NCDESTROY) {
+    DestroyExternalState(hwnd);
+    return false;
+  }
+  if (message == kExternalUpdate && state->server) {
+    ApplyExternalSnapshot(hwnd, state, reinterpret_cast<HWND>(wParam),
+                          static_cast<DWORD>(lParam));
+    return true;
+  }
+  if (message == kExternalRelease && state->server) {
+    if (state->peer == reinterpret_cast<HWND>(wParam) &&
+        state->token == static_cast<DWORD>(lParam))
+      EndExternalServerLease(hwnd, state);
+    return true;
+  }
+  if (message == kExternalAck && !state->server) {
+    if (state->peer == reinterpret_cast<HWND>(wParam) &&
+        state->token == static_cast<DWORD>(lParam)) {
+      state->pending = false;
+      if (!ExternalLeaseReady(hwnd, state)) {
+        if (state->searchPresentation &&
+            ExternalProperty(state->peer, kExtPresentationFailClient) ==
+                reinterpret_cast<ULONG_PTR>(hwnd) &&
+            ExternalProperty(state->peer, kExtPresentationFailToken) ==
+                state->token) {
+          state->presentationBlocked = true;
+          SetExternalProperty(hwnd, kExtPresentationBlocked, 1);
+        }
+        // A negative ACK must not create an immediate retry/ACK busy loop.
+        state->peer = nullptr;
+        state->lastAttempt = ::GetTickCount();
+        state->attempted = true;
+        state->token = NextExternalToken();
+        SetExternalProperty(hwnd, kExtToken, state->token);
+      }
+      RefreshExternalForeground(hwnd, state);
+      if (ExternalState(hwnd) == state)
+        RequestExternalSnapshot(hwnd, state);
+    }
+    return true;
+  }
+  if (message != WM_TIMER || wParam != kExternalTimer)
+    return false;
+  if (state->server) {
+    if (state->active) {
+      const HWND client = state->peer;
+      if (!IsExternalHostClass(client) ||
+          ExternalProperty(client, kExtToken) != state->token ||
+          ExternalProperty(client, kExtWanted) != 1 ||
+          !ExternalCandidateVisible(state->candidate) ||
+          !ExternalFresh(::GetTickCount(), static_cast<DWORD>(ExternalProperty(
+                                               client, kExtClientPulse)))) {
+        EndExternalServerLease(hwnd, state);
+      } else {
+        // Liveness only. Geometry still comes exclusively from panel snapshots.
+        SetExternalProperty(hwnd, kExtServerPulse, ::GetTickCount());
+        RefreshSearchPresentation(hwnd, state);
+      }
+    }
+  } else if (state->active) {
+    if (!ExternalCandidateVisible(state->candidate)) {
+      const bool wasReady = state->foregroundReady;
+      const HWND candidate = state->candidate;
+      WeaselPanel* panel = state->panel;
+      ReleaseExternalClient(hwnd);
+      // A cloaked/minimized owner can return with the same candidate HWND.
+      // Restore its backing pixels now, without reactivating the hidden lease.
+      if (wasReady && panel && ::IsWindow(candidate) &&
+          ::IsWindowVisible(candidate))
+        panel->RedrawWindow();
+    } else {
+      SetExternalProperty(hwnd, kExtClientPulse, ::GetTickCount());
+      RefreshExternalForeground(hwnd, state);
+      if (ExternalState(hwnd) == state) {
+        RequestExternalSnapshot(hwnd, state);
+        RefreshExternalForeground(hwnd, state);
+      }
+    }
+  }
+  return true;
+}
+
+bool SearchUsesLocalNativeDwmFallback();
+
+HWND FindCurrentAcrylicUiProbe() {
+  HWND previous = nullptr;
+  for (unsigned count = 0; count < 64; ++count) {
+    const HWND probe =
+        ::FindWindowExW(HWND_MESSAGE, previous, kAcrylicUiProbeClass, nullptr);
+    if (!probe)
+      return nullptr;
+    previous = probe;
+    DWORD processId = 0;
+    ::GetWindowThreadProcessId(probe, &processId);
+    if (processId == ::GetCurrentProcessId())
+      return probe;
+  }
+  return nullptr;
+}
+
+void SetSearchDiagnosticProperty(HWND candidate,
+                                 const wchar_t* name,
+                                 ULONG_PTR value) {
+  SetExternalProperty(candidate, name, value);
+  if (CurrentExternalKind() != ExternalClientKind::Search)
+    return;
+  if (const HWND probe = FindCurrentAcrylicUiProbe()) {
+    SetExternalProperty(probe, kSearchDiagnosticCandidate,
+                        reinterpret_cast<ULONG_PTR>(candidate));
+    SetExternalProperty(probe, name, value);
+  }
+}
+
+void ResetSearchLocalDiagnostics(HWND candidate) {
+  if (CurrentExternalKind() != ExternalClientKind::Search)
+    return;
+  const wchar_t* properties[] = {
+      kSearchDiagnosticHost,  kSearchLocalFailureStage, kSearchLocalFailureHr,
+      kSearchNativeAttempted, kSearchNativeFrameHr,     kSearchNativeAlphaHr,
+      kSearchNativeSetHr,     kSearchNativeGetHr,       kSearchNativeApplied,
+  };
+  for (const auto property : properties)
+    SetSearchDiagnosticProperty(candidate, property, 0);
+}
+
+void SetSearchLocalFailure(HWND candidate, LONG stage, HRESULT hr) {
+  SetSearchDiagnosticProperty(candidate, kSearchLocalFailureStage,
+                              static_cast<DWORD>(stage));
+  SetSearchDiagnosticProperty(candidate, kSearchLocalFailureHr,
+                              static_cast<DWORD>(hr));
+}
+
+void SetAcrylicCreationDiagnostic(HWND candidate, LONG stage, HRESULT hr) {
+  if (stage == 1)
+    ResetSearchLocalDiagnostics(candidate);
+  SetSearchDiagnosticProperty(candidate, kExtCompatibility, 1);
+  SetSearchDiagnosticProperty(candidate, kExtClientKind,
+                              static_cast<DWORD>(CurrentExternalKind()));
+  SetSearchDiagnosticProperty(candidate, kExtCreateStage,
+                              static_cast<DWORD>(stage));
+  SetSearchDiagnosticProperty(candidate, kExtCreateHr, static_cast<DWORD>(hr));
+}
+
+bool TrySearchNativeDwm(HWND candidate, HWND backdrop, BOOL darkMode) {
+  if (!candidate || !backdrop || !SearchUsesLocalNativeDwmFallback())
+    return false;
+
+  SetSearchDiagnosticProperty(candidate, kSearchDiagnosticHost,
+                              reinterpret_cast<ULONG_PTR>(backdrop));
+  SetSearchDiagnosticProperty(candidate, kSearchNativeAttempted, 1);
+
+  // Type 3 can be accepted and read back while the Win32 client area is still
+  // composited as an opaque surface. Extend DWM glass across the whole local
+  // host first, then accept the native Desktop Acrylic result.
+  const MARGINS fullGlass = {-1, -1, -1, -1};
+  const HRESULT frameHr = ::DwmExtendFrameIntoClientArea(backdrop, &fullGlass);
+  SetSearchDiagnosticProperty(candidate, kSearchNativeFrameHr,
+                              static_cast<DWORD>(frameHr));
+  if (FAILED(frameHr)) {
+    SetSearchLocalFailure(candidate, -111, frameHr);
+    return false;
+  }
+
+  // Windows 11 26100+ ignores the alpha channel in a window redirection
+  // bitmap by default. Search needs that alpha for the zero-alpha DWM glass
+  // surface below, otherwise Type 3 can be accepted while the client still
+  // presents as an opaque gray rectangle.
+  BOOL useRedirectionAlpha = TRUE;
+  const HRESULT alphaHr = ::DwmSetWindowAttribute(
+      backdrop, kDwmaRedirectionBitmapAlpha, &useRedirectionAlpha,
+      sizeof(useRedirectionAlpha));
+  SetSearchDiagnosticProperty(candidate, kSearchNativeAlphaHr,
+                              static_cast<DWORD>(alphaHr));
+  if (FAILED(alphaHr)) {
+    SetSearchLocalFailure(candidate, -112, alphaHr);
+    return false;
+  }
+
+  int corner = kDwmwcpRound;
+  ::DwmSetWindowAttribute(backdrop, kDwmaWindowCornerPreference, &corner,
+                          sizeof(corner));
+  COLORREF borderColor = kDwmColorNone;
+  ::DwmSetWindowAttribute(backdrop, kDwmaBorderColor, &borderColor,
+                          sizeof(borderColor));
+  ::DwmSetWindowAttribute(backdrop, kDwmaUseImmersiveDarkMode, &darkMode,
+                          sizeof(darkMode));
+
+  int requested = kDwmsbtTransientWindow;
+  const HRESULT setHr = ::DwmSetWindowAttribute(
+      backdrop, kDwmaSystemBackdropType, &requested, sizeof(requested));
+  int applied = 0;
+  const HRESULT getHr =
+      SUCCEEDED(setHr)
+          ? ::DwmGetWindowAttribute(backdrop, kDwmaSystemBackdropType, &applied,
+                                    sizeof(applied))
+          : setHr;
+
+  SetSearchDiagnosticProperty(candidate, kSearchNativeSetHr,
+                              static_cast<DWORD>(setHr));
+  SetSearchDiagnosticProperty(candidate, kSearchNativeGetHr,
+                              static_cast<DWORD>(getHr));
+  SetSearchDiagnosticProperty(candidate, kSearchNativeApplied,
+                              static_cast<DWORD>(applied));
+
+  if (FAILED(setHr) || FAILED(getHr) || applied != kDwmsbtTransientWindow) {
+    const HRESULT failure =
+        FAILED(setHr)
+            ? setHr
+            : (FAILED(getHr) ? getHr : HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED));
+    SetSearchLocalFailure(candidate, -110, failure);
+    return false;
+  }
+
+  ::SetPropW(backdrop, kAcrylicNativeDwmProperty,
+             reinterpret_cast<HANDLE>(static_cast<INT_PTR>(1)));
+  ::SetPropW(backdrop, kAcrylicNativeDwmPaintsProperty, nullptr);
+  ::SetWindowPos(backdrop, nullptr, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE |
+                     SWP_FRAMECHANGED);
+  ::RedrawWindow(backdrop, nullptr, nullptr,
+                 RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW | RDW_FRAME);
+  return true;
+}
+
+bool ExternalCoordinatorOnly() {
+  const auto kind = CurrentExternalKind();
+  if (kind != ExternalClientKind::Store)
+    return false;
+  bool appContainer = false;
+  return ExternalAppContainer(::GetCurrentProcess(), appContainer) &&
+         appContainer;
+}
+
+bool SearchUsesLocalNativeDwmFallback() {
+  if (CurrentExternalKind() != ExternalClientKind::Search)
+    return false;
+  bool appContainer = false;
+  return ExternalAppContainer(::GetCurrentProcess(), appContainer) &&
+         appContainer;
+}
+
+HWND CreateExternalCoordinator(HWND candidate) {
+  // A message-only endpoint performs no DWM/COM initialization and is never
+  // displayed. A low-integrity client does not have to create a second visual
+  // window owned by the medium-integrity ApplicationFrameHost.
+  HWND hwnd =
+      ::CreateWindowExW(0, kWeaselAcrylicBackdropClass, L"", 0, 0, 0, 0, 0,
+                        HWND_MESSAGE, nullptr, AcrylicWindowModule(), nullptr);
+  const DWORD error = hwnd ? ERROR_SUCCESS : ::GetLastError();
+  SetAcrylicCreationDiagnostic(candidate, hwnd ? 20 : -20,
+                               HRESULT_FROM_WIN32(error));
+  if (hwnd) {
+    SetExternalProperty(candidate, kExtCoordinator,
+                        reinterpret_cast<ULONG_PTR>(hwnd));
+    SetExternalProperty(hwnd, kExtCandidate,
+                        reinterpret_cast<ULONG_PTR>(candidate));
+    SetExternalProperty(hwnd, kExtClientKind,
+                        static_cast<DWORD>(CurrentExternalKind()));
+    SetExternalProperty(hwnd, kExtCompatibility, 1);
+  }
+  return hwnd;
+}
+
+}  // namespace
 
 template <class t0, class t1, class t2>
 inline void LoadIconNecessary(t0& a, t1& b, t2& c, int d) {
@@ -56,6 +2397,7 @@ WeaselPanel::WeaselPanel(weasel::UI& ui)
       m_octx(ui.octx()),
       m_status(ui.status()),
       m_in_server(ui.InServer()),
+      m_acrylicServerQuery(ui.acrylicServerQuery()),
       m_style(ui.style()),
       m_ostyle(ui.ostyle()),
       m_candidateCount(0),
@@ -93,10 +2435,458 @@ WeaselPanel::WeaselPanel(weasel::UI& ui)
 }
 
 WeaselPanel::~WeaselPanel() {
+  _DestroyAcrylicBackdrop();
+  // Only full client UI destruction (e.g. TSF Deactivate), not each Esc.
+  // This requests asynchronous cleanup on the normal host message loop.
+  if (!m_in_server)
+    g_acrylicAppSdkBridge.RequestThreadShutdownIfLoaded();
   Gdiplus::GdiplusShutdown(_m_gdiplusToken);
   delete m_layout;
   m_layout = NULL;
   // pDWR.reset();
+}
+
+bool WeaselPanel::_UpdateAcrylicBackdropMode() {
+  const bool requested = weasel::UserSettings::Load().acrylic;
+  if (requested == m_acrylicRequested)
+    return false;
+  m_acrylicRequested = requested;
+  _DestroyAcrylicBackdrop();
+  if (!requested)
+    return true;
+  m_acrylicBackdropEnabled = _CreateAcrylicBackdrop();
+  if (m_acrylicBackdropEnabled ||
+      (m_acrylicBackdrop && !m_in_server && IsExternalCompatibleClient() &&
+       CurrentExternalKind() != ExternalClientKind::Settings))
+    InstallLocalAcrylicGeometry(
+        m_hWnd, this,
+        !m_in_server && CurrentExternalKind() == ExternalClientKind::None);
+  return true;
+}
+
+bool WeaselPanel::_CreateAcrylicBackdrop() {
+  m_acrylicBackdropEnabled = false;
+  if (!m_acrylicRequested)
+    return false;
+  SetAcrylicCreationDiagnostic(m_hWnd, 1, S_OK);
+  if (!EnsureAcrylicBackdropClass()) {
+    SetAcrylicCreationDiagnostic(m_hWnd, -1,
+                                 HRESULT_FROM_WIN32(::GetLastError()));
+    return false;
+  }
+  if (!m_in_server && ExternalCoordinatorOnly()) {
+    m_acrylicBackdrop = CreateExternalCoordinator(m_hWnd);
+    return false;  // No local material; foreground stays opaque until ACK.
+  }
+
+  m_acrylicBackdrop = CreateWindowExW(
+      WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
+      kWeaselAcrylicBackdropClass, L"", WS_POPUP, 0, 0, 0, 0,
+      ::GetWindow(m_hWnd, GW_OWNER), nullptr, AcrylicWindowModule(), nullptr);
+
+  if (!m_acrylicBackdrop) {
+    const HRESULT createHr = HRESULT_FROM_WIN32(::GetLastError());
+    SetSearchLocalFailure(m_hWnd, -2, createHr);
+    SetAcrylicCreationDiagnostic(m_hWnd, -2, createHr);
+    if (!m_in_server && IsExternalCompatibleClient())
+      m_acrylicBackdrop = CreateExternalCoordinator(m_hWnd);
+    return false;
+  }
+  SetExternalProperty(m_hWnd, kExtCoordinator,
+                      reinterpret_cast<ULONG_PTR>(m_acrylicBackdrop));
+
+  const BOOL useDarkMode = IsDarkColor(m_style.back_color) ? TRUE : FALSE;
+  const bool searchLocal = !m_in_server && SearchUsesLocalNativeDwmFallback();
+
+  // A generic packaged TSF host may not carry the Windows App SDK activation
+  // classes. Permit the helper's system-composition fallback only for that
+  // unclassified in-process route. Known restricted clients keep their
+  // existing coordinator policies, and unpackaged hosts ignore this marker.
+  if (weasel_acrylic::RequestPackagedSystemCompositionFallback(
+          m_in_server, static_cast<unsigned>(CurrentExternalKind()))) {
+    ::SetPropW(m_acrylicBackdrop,
+               kWeaselAcrylicPackagedSystemCompositionFallbackProperty,
+               reinterpret_cast<HANDLE>(static_cast<INT_PTR>(1)));
+  }
+
+  // Search's system Composition path clips its blur visual with the same
+  // skin radius used by the layered foreground. Publish that pixel radius
+  // before helper Attach; the helper refreshes its clip after each resize.
+  if (searchLocal) {
+    const int radius = DPI_SCALE(m_style.round_corner_ex);
+    if (radius > 0) {
+      ::SetPropW(m_acrylicBackdrop,
+                 kWeaselAcrylicSystemCompositionCornerRadiusProperty,
+                 reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(radius)));
+    } else {
+      ::RemovePropW(m_acrylicBackdrop,
+                    kWeaselAcrylicSystemCompositionCornerRadiusProperty);
+    }
+    COLORREF borderColor = kDwmColorNone;
+    ::DwmSetWindowAttribute(m_acrylicBackdrop, kDwmaBorderColor, &borderColor,
+                            sizeof(borderColor));
+    ::DwmSetWindowAttribute(m_acrylicBackdrop, kDwmaUseImmersiveDarkMode,
+                            &useDarkMode, sizeof(useDarkMode));
+  }
+
+  // R9: SearchHost first asks the existing helper for a local composition
+  // target. The helper still prefers Windows App SDK DesktopAcrylic, but when
+  // the packaged Search host cannot activate that factory it can fall back to
+  // the system Windows.UI.Composition visual layer on this same HWND.
+  if (searchLocal && g_acrylicAppSdkBridge.TryInitialize(m_acrylicBackdrop,
+                                                         useDarkMode, false)) {
+    ::SetPropW(m_acrylicBackdrop, kWeaselAcrylicAppSdkActiveProperty,
+               reinterpret_cast<HANDLE>(static_cast<INT_PTR>(1)));
+    m_acrylicBackdropEnabled = true;
+    const bool systemComposition =
+        ::GetPropW(m_acrylicBackdrop,
+                   kWeaselAcrylicSystemCompositionActiveProperty) != nullptr;
+    // SystemComposition already owns an explicit rounded clip. AppSDK Acrylic
+    // receives its exact foreground-matched clip during _SyncAcrylicBackdrop().
+    // In both cases, disable Windows' independent system corner radius.
+    int corner = kDwmwcpDoNotRound;
+    ::DwmSetWindowAttribute(m_acrylicBackdrop, kDwmaWindowCornerPreference,
+                            &corner, sizeof(corner));
+    SetAcrylicCreationDiagnostic(m_hWnd, systemComposition ? 180 : 100, S_OK);
+    return true;
+  }
+
+  // Keep R8's native DWM path as a second local fallback. It is no longer the
+  // preferred Search path because Type 3 + same Band + redirection alpha was
+  // accepted by DWM on the test machine without producing visible blur.
+  if (searchLocal &&
+      TrySearchNativeDwm(m_hWnd, m_acrylicBackdrop, useDarkMode)) {
+    m_acrylicBackdropEnabled = true;
+    SetAcrylicCreationDiagnostic(m_hWnd, 110, S_OK);
+    return true;
+  }
+
+  MARGINS margins = {-1, -1, -1, -1};
+  const HRESULT frameHr =
+      DwmExtendFrameIntoClientArea(m_acrylicBackdrop, &margins);
+  if (FAILED(frameHr)) {
+    SetSearchLocalFailure(m_hWnd, -3, frameHr);
+    SetAcrylicCreationDiagnostic(m_hWnd, -3, frameHr);
+    if (m_in_server || !IsExternalCompatibleClient())
+      _DestroyAcrylicBackdrop();
+    return false;  // Compatible clients can use this hidden endpoint instead.
+  }
+
+  BOOL useHostBackdropBrush = TRUE;
+  const HRESULT brushHr = DwmSetWindowAttribute(
+      m_acrylicBackdrop, kDwmaUseHostBackdropBrush, &useHostBackdropBrush,
+      sizeof(useHostBackdropBrush));
+  if (FAILED(brushHr)) {
+    SetSearchLocalFailure(m_hWnd, -4, brushHr);
+    SetAcrylicCreationDiagnostic(m_hWnd, -4, brushHr);
+    if (m_in_server || !IsExternalCompatibleClient())
+      _DestroyAcrylicBackdrop();
+    return false;
+  }
+
+  int corner = kDwmwcpRound;
+  DwmSetWindowAttribute(m_acrylicBackdrop, kDwmaWindowCornerPreference, &corner,
+                        sizeof(corner));
+
+  COLORREF borderColor = kDwmColorNone;
+  DwmSetWindowAttribute(m_acrylicBackdrop, kDwmaBorderColor, &borderColor,
+                        sizeof(borderColor));
+
+  DwmSetWindowAttribute(m_acrylicBackdrop, kDwmaUseImmersiveDarkMode,
+                        &useDarkMode, sizeof(useDarkMode));
+
+  // B.2c: both server and TSF client HWNDs use the installed optional helper.
+  // The helper resolves the runtime explicitly and owns targets per UI thread.
+  // Failure restores the skin and retains diagnostics on a hidden host.
+  if (!searchLocal && g_acrylicAppSdkBridge.TryInitialize(
+                          m_acrylicBackdrop, useDarkMode, m_in_server)) {
+    if (::GetPropW(m_acrylicBackdrop, L"WeaselAcrylicChildClipEnabled") &&
+        !::SetPropW(m_acrylicBackdrop, kAcrylicChildClipCandidateProperty,
+                    reinterpret_cast<HANDLE>(m_hWnd))) {
+      _DestroyAcrylicBackdrop();
+      return false;
+    }
+    ::SetPropW(m_acrylicBackdrop, kWeaselAcrylicAppSdkActiveProperty,
+               reinterpret_cast<HANDLE>(static_cast<INT_PTR>(1)));
+    m_acrylicBackdropEnabled = true;
+    const bool systemComposition =
+        ::GetPropW(m_acrylicBackdrop,
+                   kWeaselAcrylicSystemCompositionActiveProperty) != nullptr;
+    int explicitCorner = kDwmwcpDoNotRound;
+    ::DwmSetWindowAttribute(m_acrylicBackdrop, kDwmaWindowCornerPreference,
+                            &explicitCorner, sizeof(explicitCorner));
+    SetAcrylicCreationDiagnostic(m_hWnd, systemComposition ? 180 : 100, S_OK);
+    if (m_in_server)
+      PrepareExternalServer(m_acrylicBackdrop);
+    return true;
+  }
+
+  const HRESULT appSdkHr = static_cast<HRESULT>(static_cast<DWORD>(
+      ExternalProperty(m_acrylicBackdrop, kAcrylicHrProperty)));
+  g_acrylicAppSdkBridge.DetachWindow(m_acrylicBackdrop);
+
+  // Search already tried helper-local composition and the native DWM path
+  // immediately after creating its local visual host. If both fail, retain
+  // the local diagnostics and fall back to the existing external coordinator
+  // without making the foreground transparent.
+  if (!m_in_server && SearchUsesLocalNativeDwmFallback()) {
+    if (!ExternalProperty(m_hWnd, kSearchLocalFailureStage))
+      SetSearchLocalFailure(m_hWnd, -5, appSdkHr);
+    _DestroyAcrylicBackdrop();
+    m_acrylicBackdrop = CreateExternalCoordinator(m_hWnd);
+    return false;
+  }
+
+  // Other clients keep the existing fail-safe behavior. Leaving
+  // m_acrylicBackdropEnabled false preserves the configured skin.
+  SetAcrylicCreationDiagnostic(m_hWnd, -5, appSdkHr);
+  ::ShowWindow(m_acrylicBackdrop, SW_HIDE);
+  return false;
+}
+void WeaselPanel::_DestroyAcrylicBackdrop() {
+  RemoveLocalAcrylicGeometry(m_hWnd);
+  DestroyExternalState(m_acrylicBackdrop);
+  ::RemovePropW(m_hWnd, kExtCoordinator);
+  m_acrylicBackdropEnabled = false;
+  if (m_acrylicBackdrop) {
+    ClearAcrylicExplicitClip(m_acrylicBackdrop, false);
+    ::RemovePropW(m_acrylicBackdrop, kWeaselAcrylicAppSdkActiveProperty);
+    ::RemovePropW(m_acrylicBackdrop,
+                  kWeaselAcrylicSystemCompositionCornerRadiusProperty);
+    ::RemovePropW(m_acrylicBackdrop, kAcrylicNativeDwmProperty);
+    ::ShowWindow(m_acrylicBackdrop, SW_HIDE);
+    // Detach this HWND only. Neither unload the DLL nor stop the UI queue.
+    g_acrylicAppSdkBridge.DetachWindow(m_acrylicBackdrop);
+    ::DestroyWindow(m_acrylicBackdrop);
+    m_acrylicBackdrop = NULL;
+  }
+}
+void WeaselPanel::_UpdateAcrylicBackdropTheme() {
+  if (!m_acrylicBackdrop)
+    return;
+
+  BOOL useDarkMode = IsDarkColor(m_style.back_color) ? TRUE : FALSE;
+  DwmSetWindowAttribute(m_acrylicBackdrop, kDwmaUseImmersiveDarkMode,
+                        &useDarkMode, sizeof(useDarkMode));
+
+  if (::GetPropW(m_acrylicBackdrop,
+                 kWeaselAcrylicSystemCompositionActiveProperty) &&
+      !::GetPropW(m_acrylicBackdrop,
+                  kWeaselAcrylicForcedSystemCompositionActiveProperty)) {
+    const int radius = DPI_SCALE(m_style.round_corner_ex);
+    if (radius > 0) {
+      ::SetPropW(m_acrylicBackdrop,
+                 kWeaselAcrylicSystemCompositionCornerRadiusProperty,
+                 reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(radius)));
+    } else {
+      ::RemovePropW(m_acrylicBackdrop,
+                    kWeaselAcrylicSystemCompositionCornerRadiusProperty);
+    }
+  }
+
+  if (::GetPropW(m_acrylicBackdrop, kWeaselAcrylicAppSdkActiveProperty) &&
+      !::GetPropW(m_acrylicBackdrop, kAcrylicNativeDwmProperty)) {
+    int corner = kDwmwcpDoNotRound;
+    ::DwmSetWindowAttribute(m_acrylicBackdrop, kDwmaWindowCornerPreference,
+                            &corner, sizeof(corner));
+  }
+
+  g_acrylicAppSdkBridge.SetDarkMode(m_acrylicBackdrop, useDarkMode);
+}
+bool WeaselPanel::_ShouldShowAcrylicBackdrop() const {
+  if (!m_acrylicBackdrop || !m_layout || hide_candidates)
+    return false;
+  const auto localState = LocalAcrylicGeometry(m_hWnd);
+  if (localState && localState->provisionalAnchorPending)
+    return false;
+  if (!m_acrylicBackdropEnabled &&
+      (m_in_server || !IsExternalCompatibleClient()))
+    return false;
+
+  return HasVisibleCandidateSurface(m_style.inline_preedit, m_ctx.empty(),
+                                    m_candidateCount, m_ctx.aux.empty(),
+                                    m_ctx.preedit.empty());
+}
+
+void WeaselPanel::_SyncAcrylicBackdrop() {
+  auto localState = LocalAcrylicGeometry(m_hWnd);
+  LocalAcrylicGeometryRef lifetime(localState);
+  if (DeferLocalAcrylicGeometry(m_hWnd))
+    return;
+  const auto stopFailedChildClip = [&]() {
+    if (!m_acrylicBackdrop ||
+        !::GetPropW(m_acrylicBackdrop, kAcrylicChildClipFailedProperty))
+      return false;
+    const bool repaint = m_acrylicBackdropEnabled;
+    m_acrylicBackdropEnabled = false;
+    HideAcrylicBackdrop();
+    // Repaint once using the existing non-Acrylic skin. A nested Sync sees
+    // enabled=false and cannot recursively request another repaint.
+    if (repaint)
+      RedrawWindow();
+    return true;
+  };
+  if (stopFailedChildClip())
+    return;
+  if (!_ShouldShowAcrylicBackdrop() || !::IsWindowVisible(m_hWnd)) {
+    HideAcrylicBackdrop();
+    return;
+  }
+
+  CRect panelRect;
+  GetWindowRect(&panelRect);
+  CRect contentRect = m_layout->GetContentRect();
+
+  const int contentX = panelRect.left + contentRect.left;
+  const int contentY = panelRect.top + contentRect.top;
+  const int contentWidth = contentRect.Width();
+  const int contentHeight = contentRect.Height();
+
+  if (contentWidth <= 0 || contentHeight <= 0) {
+    HideAcrylicBackdrop();
+    return;
+  }
+
+  if (!m_acrylicBackdropEnabled) {
+    // External compatibility clients keep the established ContentRect protocol.
+    // The shared server host is restored to DWM rounding when a lease begins.
+    SyncExternalClient(m_acrylicBackdrop, m_hWnd, this, contentX, contentY,
+                       contentWidth, contentHeight,
+                       IsDarkColor(m_style.back_color) ? TRUE : FALSE);
+    return;
+  }
+
+  // A genuinely visible server-side candidate takes priority over a lease.
+  // Routine Hide() calls from the server's hidden UI do not revoke the lease.
+  if (m_in_server && ExternalBorrowed(m_acrylicBackdrop))
+    EndExternalServerLease(m_acrylicBackdrop, ExternalState(m_acrylicBackdrop));
+  const bool explicitClip = AppSdkAcrylicNeedsExplicitClip(m_acrylicBackdrop);
+  const int borderPx = explicitClip && COLORNOTTRANSPARENT(m_style.border_color)
+                           ? max(0, DPI_SCALE(m_style.border))
+                           : 0;
+  const int envelope = (borderPx + 1) / 2;
+  const int x = contentX - envelope;
+  const int y = contentY - envelope;
+  const int width = contentWidth + envelope * 2;
+  const int height = contentHeight + envelope * 2;
+  const int radius =
+      explicitClip ? max(0, DPI_SCALE(m_style.round_corner_ex) + envelope) : 0;
+
+  if (::GetPropW(m_acrylicBackdrop, weasel_acrylic::kAlignedClipEnabled)) {
+    const bool eligible =
+        explicitClip && weasel_acrylic::SupportsAlignedAcrylicClip(
+                            contentWidth, contentHeight, borderPx,
+                            (m_style.border_color >> 24) & 255,
+                            DPI_SCALE(m_style.round_corner_ex), envelope);
+    if (!PublishAlignedAcrylicClip(m_acrylicBackdrop, eligible, width, height,
+                                   radius)) {
+      _DestroyAcrylicBackdrop();
+      RedrawWindow();
+      return;
+    }
+  }
+
+  // Publish current style eligibility before helper calls can re-enter. The
+  // helper independently checks the live host dimensions and DPI as well.
+  if (::GetPropW(m_acrylicBackdrop, weasel_acrylic::kEdgeClipEnabled)) {
+    const bool sample = weasel_acrylic::IsMeasuredEdgeClipSample(
+        static_cast<int>(dpi), contentWidth, contentHeight, borderPx,
+        (m_style.border_color >> 24) & 255, DPI_SCALE(m_style.round_corner_ex),
+        envelope, !IsDarkColor(m_style.back_color),
+        m_style.layout_type == UIStyle::LAYOUT_VERTICAL);
+    const HANDLE wanted = sample ? reinterpret_cast<HANDLE>(1) : nullptr;
+    if (::GetPropW(m_acrylicBackdrop, weasel_acrylic::kEdgeClipSample) !=
+        wanted) {
+      if (sample)
+        ::SetPropW(m_acrylicBackdrop, weasel_acrylic::kEdgeClipSample, wanted);
+      else
+        ::RemovePropW(m_acrylicBackdrop, weasel_acrylic::kEdgeClipSample);
+      if (::GetPropW(m_acrylicBackdrop, weasel_acrylic::kEdgeClipSample) !=
+          wanted) {
+        // Never keep a previous sample qualification after a publication error.
+        _DestroyAcrylicBackdrop();
+        RedrawWindow();
+        return;
+      }
+    }
+  }
+  _UpdateAcrylicBackdropTheme();
+  // Theme updates can re-enter the host and destroy/recreate this panel.
+  if (localState && !localState->panel)
+    return;
+  if (stopFailedChildClip())
+    return;
+
+  const bool geometryMatches = LocalAcrylicGeometryMatches(
+      m_acrylicBackdrop, m_hWnd, x, y, width, height);
+  const bool clipMatches =
+      !explicitClip ||
+      AcrylicExplicitClipMatches(m_acrylicBackdrop, width, height, radius);
+
+  // Skip duplicate geometry/visibility/Z-order work, including notifications
+  // caused by our own SetWindowPos. The clip is part of that visual geometry:
+  // style-only border/radius changes must still refresh it.
+  if (geometryMatches && clipMatches)
+    return;
+
+  if (!geometryMatches) {
+    // Keep the Acrylic host immediately below the existing layered candidate.
+    ::SetWindowPos(m_acrylicBackdrop, m_hWnd, x, y, width, height,
+                   SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER);
+  }
+
+  if (explicitClip) {
+    // Proven corner model:
+    // 1) disable DWM's unrelated system radius;
+    // 2) cover the centered GDI+ border's real outer alpha envelope; and
+    // 3) clip the Acrylic HWND to the same outer round-rect.
+    int corner = kDwmwcpDoNotRound;
+    const HRESULT cornerHr =
+        ::DwmSetWindowAttribute(m_acrylicBackdrop, kDwmaWindowCornerPreference,
+                                &corner, sizeof(corner));
+    if (FAILED(cornerHr) ||
+        !ApplyAcrylicExplicitClip(m_acrylicBackdrop, width, height, radius)) {
+      // Fail safe to the pre-fix presentation instead of exposing an unrounded
+      // expanded Acrylic rectangle.
+      ClearAcrylicExplicitClip(m_acrylicBackdrop, false);
+      corner = kDwmwcpRound;
+      ::DwmSetWindowAttribute(m_acrylicBackdrop, kDwmaWindowCornerPreference,
+                              &corner, sizeof(corner));
+      ::SetWindowPos(m_acrylicBackdrop, m_hWnd, contentX, contentY,
+                     contentWidth, contentHeight,
+                     SWP_NOACTIVATE | SWP_SHOWWINDOW | SWP_NOOWNERZORDER);
+    }
+    // R22 A and B consume the same completed host geometry and local radius.
+    // Refresh after publication, including radius-only changes and fallback.
+    g_acrylicAppSdkBridge.SetDarkMode(
+        m_acrylicBackdrop, IsDarkColor(m_style.back_color) ? TRUE : FALSE);
+    if (localState && !localState->panel)
+      return;
+    stopFailedChildClip();
+    return;
+  }
+
+  // The system Composition clip uses the real client size. Refresh once more
+  // after SetWindowPos so first-show and resize geometry match immediately.
+  if (::GetPropW(m_acrylicBackdrop,
+                 kWeaselAcrylicSystemCompositionActiveProperty))
+    _UpdateAcrylicBackdropTheme();
+}
+
+void WeaselPanel::ShowAcrylicBackdrop() {
+  auto state = LocalAcrylicGeometry(m_hWnd);
+  if (state && !state->syncing) {
+    RequestLocalAcrylicGeometry(state);
+    return;
+  }
+  _SyncAcrylicBackdrop();
+}
+
+void WeaselPanel::HideAcrylicBackdrop() {
+  ReleaseExternalClient(m_acrylicBackdrop);
+  if (m_acrylicBackdrop &&
+      !(m_in_server && ExternalBorrowed(m_acrylicBackdrop)))
+    ::ShowWindow(m_acrylicBackdrop, SW_HIDE);
 }
 
 void WeaselPanel::_ResizeWindow() {
@@ -133,6 +2923,10 @@ void WeaselPanel::_CreateLayout() {
 
 // 更新界面
 void WeaselPanel::Refresh() {
+  const bool acrylicModeChanged = _UpdateAcrylicBackdropMode();
+  const bool styleChanged = m_ostyle != m_style;
+  LocalAcrylicGeometryBatch geometry(m_hWnd);
+  IncrementPlacementDiag(m_hWnd, kPlacementDiagRefreshCount);
   bool should_show_icon =
       (m_status.ascii_mode || !m_status.composing || !m_ctx.aux.empty());
   m_candidateCount = min(m_ctx.cinfo.candies.size(), MAX_CANDIDATES_COUNT);
@@ -172,12 +2966,23 @@ void WeaselPanel::Refresh() {
     m_layout->DoLayout(dc, pDWR);
     ReleaseDC(dc);
     _ResizeWindow();
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagCaller,
+                          static_cast<LONG_PTR>(PlacementDiagCaller::Refresh));
+    CommitPlacementDiagEvent(m_hWnd,
+                             PlacementDiagEvent::RefreshBeforeReposition);
     _RepositionWindow();
-    if (m_ctx != m_octx) {
+    if (m_ctx != m_octx || acrylicModeChanged || styleChanged) {
       m_octx = m_ctx;
       RedrawWindow();
     }
   }
+}
+
+void WeaselPanel::ReloadUserSettings() {
+  if (pDWR)
+    pDWR->ReloadUserSettings();
+  Refresh();
+  RedrawWindow();
 }
 
 void WeaselPanel::_InitFontRes(bool forced) {
@@ -986,6 +3791,7 @@ bool WeaselPanel::_DrawCandidates(CDCHandle& dc, bool back) {
 
 // draw client area
 void WeaselPanel::DoPaint(CDCHandle dc) {
+  LocalAcrylicGeometryBatch geometry(m_hWnd);
   // turn off WS_EX_TRANSPARENT, for better resp performance
   ModifyStyleEx(WS_EX_TRANSPARENT, WS_EX_LAYERED);
   GetClientRect(&rcw);
@@ -1034,11 +3840,26 @@ void WeaselPanel::DoPaint(CDCHandle dc) {
       delete[] rects;
       delete[] btmys;
     }
+    // Keep the whole-panel foreground background and the Acrylic backdrop on
+    // the same content predicate. During some host transitions m_ctx can be
+    // cleared before the cached candidate count is refreshed; treating the
+    // still-drawn candidates as visible avoids a one-frame text-only remnant.
+    const bool hasVisibleCandidateSurface = HasVisibleCandidateSurface(
+        m_style.inline_preedit, m_ctx.empty(), m_candidateCount,
+        m_ctx.aux.empty(), m_ctx.preedit.empty());
     // background and candidates back, hilite back drawing start
-    if ((!m_ctx.empty() && !m_style.inline_preedit) ||
-        (m_style.inline_preedit && (m_candidateCount || !m_ctx.aux.empty()))) {
+    if (hasVisibleCandidateSurface) {
       CRect backrc = m_layout->GetContentRect();
-      _HighlightText(memDC, backrc, m_style.back_color, m_style.shadow_color,
+      COLORREF backColor = m_style.back_color;
+      COLORREF shadowColor = m_style.shadow_color;
+      const bool localAcrylic =
+          m_acrylicBackdropEnabled && !ExternalBorrowed(m_acrylicBackdrop);
+      if (localAcrylic || ExternalForegroundReady(m_acrylicBackdrop)) {
+        if (COLORNOTTRANSPARENT(backColor))
+          backColor = WithAlpha(backColor, kAcrylicTintAlpha);
+        shadowColor = TRANS_COLOR;
+      }
+      _HighlightText(memDC, backrc, backColor, shadowColor,
                      DPI_SCALE(m_style.round_corner_ex), BackType::BACKGROUND,
                      IsToRoundStruct(), m_style.border_color);
     }
@@ -1107,10 +3928,13 @@ void WeaselPanel::DoPaint(CDCHandle dc) {
       drawn = true;
     }
     /* Nothing drawn, hide candidate window */
-    if (!drawn)
+    if (!drawn) {
+      HideAcrylicBackdrop();
       ShowWindow(SW_HIDE);
+    }
   }
   _LayerUpdate(rcw, memDC);
+  _SyncAcrylicBackdrop();
 
   // clean objs
   ::DeleteDC(memDC);
@@ -1143,8 +3967,17 @@ LRESULT WeaselPanel::OnCreate(UINT uMsg,
                               WPARAM wParam,
                               LPARAM lParam,
                               BOOL& bHandled) {
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagCreateTick, ::GetTickCount());
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagMoveTraceCount, 0);
+  IncrementPlacementDiag(m_hWnd, kPlacementDiagCreateCount);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagCaller,
+                        static_cast<LONG_PTR>(PlacementDiagCaller::None));
+  CommitPlacementDiagEvent(m_hWnd, PlacementDiagEvent::Create);
+
   m_mouse_entry = false;
   m_hoverIndex = -1;
+  m_acrylicRequested = false;
+  _UpdateAcrylicBackdropMode();
   Refresh();
   return TRUE;
 }
@@ -1153,11 +3986,24 @@ LRESULT WeaselPanel::OnDestroy(UINT uMsg,
                                WPARAM wParam,
                                LPARAM lParam,
                                BOOL& bHandled) {
+  _DestroyAcrylicBackdrop();
   m_hoverIndex = -1;
   m_lastMousePos = {-1, -1};
   m_sticky = false;
   delete m_layout;
   m_layout = NULL;
+  return 0;
+}
+
+LRESULT WeaselPanel::OnUserSettingsChanged(UINT uMsg,
+                                           WPARAM wParam,
+                                           LPARAM lParam,
+                                           BOOL& bHandled) {
+  if (!uMsg) {
+    bHandled = FALSE;
+    return 0;
+  }
+  ReloadUserSettings();
   return 0;
 }
 
@@ -1170,8 +4016,116 @@ LRESULT WeaselPanel::OnDpiChanged(UINT uMsg,
 }
 
 void WeaselPanel::MoveTo(RECT const& rc) {
-  if (!m_layout)
+  LocalAcrylicGeometryBatch geometry(m_hWnd);
+  IncrementPlacementDiag(m_hWnd, kPlacementDiagMoveToCount);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagMoveToLeft, rc.left);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagMoveToTop, rc.top);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagMoveToRight, rc.right);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagMoveToBottom, rc.bottom);
+  CommitPlacementDiagEvent(m_hWnd, PlacementDiagEvent::MoveToEnter);
+
+  auto localState = LocalAcrylicGeometry(m_hWnd);
+  const unsigned moveTraceSlot =
+      BeginPlacementMoveTrace(m_hWnd, rc, localState);
+  bool moveTraceClassified = false;
+  if (!m_layout) {
+    SetPlacementMoveTraceDisposition(m_hWnd, moveTraceSlot,
+                                     PlacementDiagMoveDisposition::NoLayout);
     return;  // avoid handling nullptr in _RepositionWindow
+  }
+
+  // Some hosts can publish a valid caret, then briefly regress to a point-like
+  // rectangle before the candidate HWND is shown, and finally publish the real
+  // caret again. If the first valid rectangle already opened the initial gate,
+  // re-arm the same 50 ms provisional path for that hidden pre-show regression.
+  // Once the candidate is visible, preserve the historical point-caret
+  // behavior.
+  if (localState && localState->anchorStabilizationEnabled &&
+      localState->anchorGateResolved &&
+      !localState->acceptingProvisionalAnchor && rc.bottom <= rc.top &&
+      !::IsWindowVisible(m_hWnd)) {
+    localState->anchorGateResolved = false;
+  }
+
+  if (localState && localState->anchorStabilizationEnabled &&
+      !localState->anchorGateResolved &&
+      !localState->acceptingProvisionalAnchor) {
+    if (rc.bottom <= rc.top) {
+      localState->provisionalAnchor = rc;
+      if (!localState->provisionalAnchorPending) {
+        localState->provisionalAnchorPending = true;
+        SetPlacementDiagValue(m_hWnd, kPlacementDiagAnchorPending, 1);
+        SetPlacementDiagValue(m_hWnd, kPlacementDiagAnchorResolved, 0);
+        SetPlacementDiagValue(m_hWnd, kPlacementDiagAnchorFallback, 0);
+        CommitPlacementDiagEvent(m_hWnd, PlacementDiagEvent::ProvisionalAnchor);
+        SetPlacementMoveTraceDisposition(
+            m_hWnd, moveTraceSlot,
+            PlacementDiagMoveDisposition::ProvisionalBlocked);
+        moveTraceClassified = true;
+        HideAcrylicBackdrop();
+        ParkCandidateForProvisionalAnchor(m_hWnd);
+        if (!::SetTimer(m_hWnd, kCandidateAnchorStabilizationTimer,
+                        kCandidateAnchorStabilizationMs, nullptr)) {
+          // Timer setup failure must preserve historical behavior rather than
+          // suppressing a legitimate point-like caret indefinitely.
+          localState->provisionalAnchorPending = false;
+          localState->anchorGateResolved = true;
+          SetPlacementDiagValue(m_hWnd, kPlacementDiagAnchorPending, 0);
+          SetPlacementDiagValue(m_hWnd, kPlacementDiagAnchorResolved, 1);
+          SetPlacementDiagValue(m_hWnd, kPlacementDiagAnchorFallback, 1);
+          CommitPlacementDiagEvent(m_hWnd,
+                                   PlacementDiagEvent::ProvisionalFallback);
+          SetPlacementMoveTraceDisposition(
+              m_hWnd, moveTraceSlot,
+              PlacementDiagMoveDisposition::TimerFailureAccepted);
+          moveTraceClassified = true;
+        } else {
+          return;
+        }
+      } else {
+        SetPlacementDiagValue(m_hWnd, kPlacementDiagAnchorPending, 1);
+        CommitPlacementDiagEvent(m_hWnd, PlacementDiagEvent::ProvisionalAnchor);
+        SetPlacementMoveTraceDisposition(
+            m_hWnd, moveTraceSlot,
+            PlacementDiagMoveDisposition::ProvisionalBlocked);
+        moveTraceClassified = true;
+        return;
+      }
+    } else {
+      if (localState->provisionalAnchorPending)
+        ::KillTimer(m_hWnd, kCandidateAnchorStabilizationTimer);
+      localState->provisionalAnchorPending = false;
+      localState->anchorGateResolved = true;
+      SetPlacementDiagValue(m_hWnd, kPlacementDiagAnchorPending, 0);
+      SetPlacementDiagValue(m_hWnd, kPlacementDiagAnchorResolved, 1);
+      SetPlacementDiagValue(m_hWnd, kPlacementDiagAnchorFallback, 0);
+      CommitPlacementDiagEvent(m_hWnd, PlacementDiagEvent::StableAnchor);
+      SetPlacementMoveTraceDisposition(
+          m_hWnd, moveTraceSlot,
+          PlacementDiagMoveDisposition::StableOpenedGate);
+      moveTraceClassified = true;
+    }
+  }
+
+  if (!moveTraceClassified) {
+    const PlacementDiagMoveDisposition disposition =
+        !localState || !localState->anchorStabilizationEnabled
+            ? PlacementDiagMoveDisposition::StabilizationDisabled
+            : (localState->acceptingProvisionalAnchor
+                   ? PlacementDiagMoveDisposition::FallbackReplayAccepted
+                   : PlacementDiagMoveDisposition::PostGateAccepted);
+    SetPlacementMoveTraceDisposition(m_hWnd, moveTraceSlot, disposition);
+  }
+
+  // The candidate HWND may have been hidden between two host input sessions
+  // without Refresh() observing candidateCount > 0 -> 0. A fresh MoveTo()
+  // is the first reliable new-session caret anchor, so discard the previous
+  // sticky placement only here, before using rc.
+  if (::RemovePropW(m_hWnd, kCandidatePlacementSessionEndedProperty)) {
+    m_sticky = false;
+    m_istorepos = false;
+  }
+
   m_redraw_by_monitor_change = false;
   // The conditions for resetting the sticky state:
   // 1. When the input session ends (ctx.empty() is true)
@@ -1186,6 +4140,9 @@ void WeaselPanel::MoveTo(RECT const& rc) {
     // Force reposition the window
     m_inputPos = rc;
     m_inputPos.OffsetRect(0, 6);
+    SetPlacementDiagValue(
+        m_hWnd, kPlacementDiagCaller,
+        static_cast<LONG_PTR>(PlacementDiagCaller::MoveToStickyReset));
     _RepositionWindow(true);
     RedrawWindow();
     return;
@@ -1198,6 +4155,9 @@ void WeaselPanel::MoveTo(RECT const& rc) {
     ::GetCursorPos(&p);
     RECT irc{p.x - STATUS_ICON_SIZE, p.y - STATUS_ICON_SIZE, p.x, p.y};
     m_inputPos = irc;
+    SetPlacementDiagValue(
+        m_hWnd, kPlacementDiagCaller,
+        static_cast<LONG_PTR>(PlacementDiagCaller::MoveToAsciiTip));
     _RepositionWindow(true);
     RedrawWindow();
   } else if (!(rc.left == m_inputPos.left && rc.bottom != m_inputPos.bottom &&
@@ -1210,6 +4170,9 @@ void WeaselPanel::MoveTo(RECT const& rc) {
     // buffer current m_istorepos status
     bool m_istorepos_buf = m_istorepos;
     // with parameter to avoid vertical flicker
+    SetPlacementDiagValue(
+        m_hWnd, kPlacementDiagCaller,
+        static_cast<LONG_PTR>(PlacementDiagCaller::MoveToNormal));
     _RepositionWindow(true);
     // m_istorepos status changed by _RepositionWindow, or tips to show,
     // redrawing is required
@@ -1217,9 +4180,52 @@ void WeaselPanel::MoveTo(RECT const& rc) {
         m_layout->ShouldDisplayStatusIcon() || m_redraw_by_monitor_change)
       RedrawWindow();
   }
+  // Both local and external Acrylic follow the final candidate position.
+  // Local batches defer this until layout/painting is complete; Settings
+  // retains the CI #21 asynchronous publish path without owner translation.
+  _SyncAcrylicBackdrop();
 }
 
 void WeaselPanel::_RepositionWindow(const bool& adj) {
+  // Refresh() can arrive before the host publishes the next caret rectangle.
+  // After an actual candidate hide, m_inputPos.bottom may still contain the
+  // previous window's adjusted Y and m_sticky may still describe its
+  // above-caret placement. Keep the hidden window where it is until MoveTo()
+  // consumes the session marker and installs a fresh anchor.
+  if (::GetPropW(m_hWnd, kCandidatePlacementSessionEndedProperty)) {
+    IncrementPlacementDiag(m_hWnd, kPlacementDiagRepositionCount);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagSessionEnded, 1);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagAdj, adj ? 1 : 0);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagStickyBefore, m_sticky ? 1 : 0);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagInputLeft, m_inputPos.left);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagInputTop, m_inputPos.top);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagInputRight, m_inputPos.right);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagInputBottom, m_inputPos.bottom);
+    CommitPlacementDiagEvent(m_hWnd, PlacementDiagEvent::RepositionBlocked);
+    return;
+  }
+
+  const auto localState = LocalAcrylicGeometry(m_hWnd);
+  if (localState && localState->provisionalAnchorPending) {
+    IncrementPlacementDiag(m_hWnd, kPlacementDiagRepositionCount);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagSessionEnded, 0);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagAdj, adj ? 1 : 0);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagStickyBefore, m_sticky ? 1 : 0);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagInputLeft, m_inputPos.left);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagInputTop, m_inputPos.top);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagInputRight, m_inputPos.right);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagInputBottom, m_inputPos.bottom);
+    SetPlacementDiagValue(m_hWnd, kPlacementDiagAnchorPending, 1);
+    CommitPlacementDiagEvent(m_hWnd, PlacementDiagEvent::RepositionBlocked);
+    return;
+  }
+
+  IncrementPlacementDiag(m_hWnd, kPlacementDiagRepositionCount);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagSessionEnded, 0);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagAdj, adj ? 1 : 0);
+  const bool stickyBefore = m_sticky;
+  const CRect inputBefore = m_inputPos;
+
   RECT rcWorkArea;
   memset(&rcWorkArea, 0, sizeof(rcWorkArea));
   HMONITOR hMonitor = MonitorFromRect(m_inputPos, MONITOR_DEFAULTTONEAREST);
@@ -1287,8 +4293,22 @@ void WeaselPanel::_RepositionWindow(const bool& adj) {
     y = rcWorkArea.top;  // over workarea top
   // memorize adjusted position (to avoid window bouncing on height change)
   m_inputPos.bottom = y;
+
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagInputLeft, inputBefore.left);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagInputTop, inputBefore.top);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagInputRight, inputBefore.right);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagInputBottom, inputBefore.bottom);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagStickyBefore,
+                        stickyBefore ? 1 : 0);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagStickyAfter, m_sticky ? 1 : 0);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagHeight, height);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagWorkBottom, rcWorkArea.bottom);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagResultX, x);
+  SetPlacementDiagValue(m_hWnd, kPlacementDiagResultY, y);
+
   SetWindowPos(HWND_TOPMOST, x, y, 0, 0,
                SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOREDRAW);
+  CommitPlacementDiagEvent(m_hWnd, PlacementDiagEvent::RepositionCommit);
 }
 
 void WeaselPanel::_TextOut(const CRect& rc,

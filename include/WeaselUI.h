@@ -1,6 +1,7 @@
 ﻿#pragma once
 
 #include <WeaselIPCData.h>
+#include <WeaselUserSettings.h>
 #include <vector>
 #include <regex>
 #include <iterator>
@@ -8,6 +9,7 @@
 #include <dwrite_2.h>
 #include <memory>
 #include <functional>
+#include <utility>
 #include <WeaselUtility.h>
 
 namespace weasel {
@@ -18,6 +20,11 @@ enum ClientCapabilities {
 
 class UIImpl;
 class DirectWriteResources;
+struct ResolvedFontChoice {
+  std::wstring family;
+  DWRITE_FONT_WEIGHT weight = DWRITE_FONT_WEIGHT_NORMAL;
+  DWRITE_FONT_STYLE style = DWRITE_FONT_STYLE_NORMAL;
+};
 template <class T>
 using an = std::shared_ptr<T>;
 
@@ -58,6 +65,7 @@ class UI {
 
   // 更新界面显示内容
   void Update(Context const& ctx, Status const& status);
+  void ReloadUserSettings();
 
   Context& ctx() { return ctx_; }
   Context& octx() { return octx_; }
@@ -67,6 +75,15 @@ class UI {
   PDWR pdwr() { return pDWR; }
   bool GetIsReposition();
   bool& InServer() { return in_server_; }
+
+  using AcrylicServerQuery =
+      std::function<bool(DWORD&, DWORD&, DWORD&, DWORD&)>;
+  void SetAcrylicServerQuery(AcrylicServerQuery query) {
+    acrylicServerQuery_ = std::move(query);
+  }
+  const AcrylicServerQuery& acrylicServerQuery() const {
+    return acrylicServerQuery_;
+  }
 
   std::function<void(size_t* const, size_t* const, bool* const, bool* const)>&
   uiCallback() {
@@ -89,6 +106,7 @@ class UI {
   UIStyle style_;
   UIStyle ostyle_;
   bool in_server_;
+  AcrylicServerQuery acrylicServerQuery_;
   std::function<void(size_t* const, size_t* const, bool* const, bool* const)>
       _UICallback;
 };
@@ -111,12 +129,8 @@ class DirectWriteResources {
                            const int& nCount,
                            IDWriteTextFormat1* const txtFormat,
                            const float& width,
-                           const float& height) {
-    return pDWFactory->CreateTextLayout(
-        text.c_str(), nCount, txtFormat, width, height,
-        reinterpret_cast<IDWriteTextLayout**>(
-            pTextLayout.ReleaseAndGetAddressOf()));
-  }
+                           const float& height);
+  void ReloadUserSettings();
   void DrawRect(D2D1_RECT_F* const rect,
                 const float& strokeWidth = 1.0f,
                 ID2D1StrokeStyle* const sstyle = (ID2D1StrokeStyle*)0) {
@@ -159,6 +173,10 @@ class DirectWriteResources {
 
  private:
   UIStyle& _style;
+  FontSettings font_settings_;
+  std::array<ResolvedFontChoice, FontSettings::kChoiceCount>
+      resolved_font_settings_;
+  void _ResolveFontSettings();
   void _ParseFontFace(const std::wstring& fontFaceStr,
                       DWRITE_FONT_WEIGHT& fontWeight,
                       DWRITE_FONT_STYLE& fontStyle);

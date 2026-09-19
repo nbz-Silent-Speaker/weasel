@@ -3,7 +3,20 @@
 #include <string>
 #include <WeaselUtility.h>
 
-fs::path WeaselUserDataPath() {
+namespace {
+fs::path EnvironmentPath(const wchar_t* name) {
+  const DWORD length = ::GetEnvironmentVariableW(name, nullptr, 0);
+  if (!length)
+    return {};
+  std::wstring value(length, L'\0');
+  const DWORD copied = ::GetEnvironmentVariableW(name, value.data(), length);
+  if (!copied || copied >= length)
+    return {};
+  value.resize(copied);
+  return fs::path(value);
+}
+
+fs::path ConfiguredUserDataPath() {
   WCHAR _path[MAX_PATH] = {0};
   const WCHAR KEY[] = L"Software\\Rime\\Weasel";
   HKEY hKey;
@@ -23,8 +36,22 @@ fs::path WeaselUserDataPath() {
   ExpandEnvironmentStringsW(L"%AppData%\\Rime", _path, _countof(_path));
   return fs::path(_path);
 }
+}  // namespace
+
+fs::path WeaselUserDataPath() {
+  const auto preview_path = EnvironmentPath(L"WEASEL_PREVIEW_USER_DIR");
+  return preview_path.empty() ? ConfiguredUserDataPath() : preview_path;
+}
+
+fs::path WeaselDisplayUserDataPath() {
+  const auto display_path = EnvironmentPath(L"WEASEL_PREVIEW_DISPLAY_USER_DIR");
+  return display_path.empty() ? ConfiguredUserDataPath() : display_path;
+}
 
 fs::path WeaselSharedDataPath() {
+  const auto preview_path = EnvironmentPath(L"WEASEL_PREVIEW_SHARED_DIR");
+  if (!preview_path.empty())
+    return preview_path;
   wchar_t _path[MAX_PATH] = {0};
   GetModuleFileNameW(NULL, _path, _countof(_path));
   return fs::path(_path).remove_filename().append("data");

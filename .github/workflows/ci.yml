@@ -3,7 +3,7 @@ name: CI
 on:
   push:
     branches:
-      - '*'
+      - '**'
     tags:
       - '[0-9]+.*'
   pull_request:
@@ -22,8 +22,8 @@ jobs:
           wget https://apt.llvm.org/llvm-snapshot.gpg.key
           sudo gpg --dearmor < llvm-snapshot.gpg.key > /usr/share/keyrings/llvm-archive-keyring.gpg
           echo "deb [signed-by=/usr/share/keyrings/llvm-archive-keyring.gpg] http://apt.llvm.org/jammy/ llvm-toolchain-jammy-18 main" | sudo tee /etc/apt/sources.list.d/llvm-toolchain-jammy-18.list
-          sudo apt-get update
-          sudo apt-get install -y clang-format-18
+          sudo apt-get -o Acquire::ForceIPv4=true -o Acquire::Retries=3 update
+          sudo apt-get -o Acquire::ForceIPv4=true -o Acquire::Retries=3 install -y clang-format-18
           sudo ln -sf /usr/bin/clang-format-18 /usr/local/bin/clang-format
           clang-format --version
 
@@ -31,6 +31,11 @@ jobs:
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         shell: bash
         run: ./clang-format.sh -i
+
+      - name: Verify settings layout contract
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        shell: pwsh
+        run: ./WeaselDeployer/tests/CheckSettingsLayout.ps1
 
   build:
     needs: lint
@@ -77,6 +82,16 @@ jobs:
         with:
           sdk: ${{ env.SDKVER }}
 
+      - name: Test model installation and recovery
+        if: matrix.variant == 'msbuild'
+        shell: pwsh
+        run: .\WeaselDeployer\tests\RunModelTransactionTests.ps1
+
+      - name: Test input method icon resources and profile rollback
+        if: matrix.variant == 'msbuild'
+        shell: pwsh
+        run: .\WeaselDeployer\tests\RunInputMethodIconTests.ps1
+
       # bundled winsparkle v0.9.2 to disable auto open ReleaseNoteUrl in default browser
       - name: cache bundled winsparkle
         id: cache-winsparkle
@@ -118,19 +133,126 @@ jobs:
 
       - name: Get Rime files
         shell: pwsh
+        env:
+          RIME_GITHUB_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
+          $global:authorization = $env:RIME_GITHUB_TOKEN
           .\get-rime.ps1 -use dev
+
+      - name: Verify Rime development files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($requiredFile in @('include\rime_api.h', 'include\rime_levers_api.h', 'lib\rime.lib', 'lib64\rime.lib', 'output\Win32\rime.dll', 'output\rime.dll')) {
+            if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
+              throw "Rime dependency download incomplete: missing $requiredFile"
+            }
+            if ((Get-Item -LiteralPath $requiredFile).Length -eq 0) {
+              throw "Rime dependency download incomplete: empty $requiredFile"
+            }
+          }
 
       - name: Build data
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           .\build.bat data
+          if ($LASTEXITCODE -ne 0) { throw "Data build failed with exit code $LASTEXITCODE" }
 
       - name: Setup xmake
         if: matrix.variant == 'xmake'
         uses: xmake-io/github-action-setup-xmake@v1
+
+      - name: Build Windows App SDK Acrylic helper (x64)
+        if: matrix.variant == 'xmake'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          msbuild .\AcrylicAppSdkPoC\AcrylicAppSdkPoC.vcxproj /t:Restore /p:Configuration=Release /p:Platform=x64
+          if ($LASTEXITCODE -ne 0) { throw 'Acrylic x64 helper restore failed' }
+          msbuild .\AcrylicAppSdkPoC\AcrylicAppSdkPoC.vcxproj /m /p:Configuration=Release /p:Platform=x64
+          if ($LASTEXITCODE -ne 0) { throw 'Acrylic x64 helper build failed' }
+
+      - name: Test synchronous Acrylic child target (x64 and x86)
+        if: matrix.variant == 'xmake'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($testPlatform in @('x64', 'Win32')) {
+            msbuild .\AcrylicAppSdkPoC\tests\ChildBackdropTargetTests.vcxproj /m /p:Configuration=Release "/p:Platform=$testPlatform"
+            if ($LASTEXITCODE -ne 0) { throw "Child target tests failed to build: $testPlatform" }
+            $testDirectory = Join-Path $PWD "AcrylicAppSdkPoC\tests\bin\$testPlatform"
+            $testProcess = Start-Process -FilePath (Join-Path $testDirectory 'ChildBackdropTargetTests.exe') -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $testDirectory 'stdout.txt') -RedirectStandardError (Join-Path $testDirectory 'stderr.txt')
+            if (-not $testProcess.WaitForExit(20000)) {
+              $testProcess.Kill()
+              $testProcess.WaitForExit()
+              throw "Child target tests timed out: $testPlatform"
+            }
+            Get-Content -LiteralPath (Join-Path $testDirectory 'stdout.txt'), (Join-Path $testDirectory 'stderr.txt')
+            if ($testProcess.ExitCode -ne 0) { throw "Child target tests failed: $testPlatform" }
+          }
+
+      - name: Test TSF composition cleanup (x64 and x86)
+        if: matrix.variant == 'xmake'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          .\WeaselTSF\tests\PrepareCompositionTests.ps1
+          foreach ($testPlatform in @('x64', 'Win32')) {
+            msbuild .\WeaselTSF\tests\CompositionLifecycleTests.vcxproj /m /p:Configuration=Release "/p:Platform=$testPlatform"
+            if ($LASTEXITCODE -ne 0) { throw "Composition tests failed to build: $testPlatform" }
+            $testDirectory = Join-Path $PWD "WeaselTSF\tests\bin\$testPlatform"
+            $testProcess = Start-Process -FilePath (Join-Path $testDirectory 'CompositionLifecycleTests.exe') -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $testDirectory 'stdout.txt') -RedirectStandardError (Join-Path $testDirectory 'stderr.txt')
+            if (-not $testProcess.WaitForExit(20000)) {
+              $testProcess.Kill()
+              $testProcess.WaitForExit()
+              throw "Composition tests timed out: $testPlatform"
+            }
+            Get-Content -LiteralPath (Join-Path $testDirectory 'stdout.txt'), (Join-Path $testDirectory 'stderr.txt')
+            if ($testProcess.ExitCode -ne 0) { throw "Composition tests failed: $testPlatform" }
+          }
+
+      - name: Test Acrylic material pixels and theme changes (x64 and x86)
+        if: matrix.variant == 'xmake'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($testPlatform in @('x64', 'Win32')) {
+            msbuild .\AcrylicAppSdkPoC\tests\AcrylicMaterialTests.vcxproj /t:Restore /p:Configuration=Release "/p:Platform=$testPlatform"
+            if ($LASTEXITCODE -ne 0) { throw "Material test restore failed: $testPlatform" }
+            msbuild .\AcrylicAppSdkPoC\tests\AcrylicMaterialTests.vcxproj /m /p:Configuration=Release "/p:Platform=$testPlatform"
+            if ($LASTEXITCODE -ne 0) { throw "Material test build failed: $testPlatform" }
+            $testDirectory = Join-Path $PWD "AcrylicAppSdkPoC\tests\bin\material\$testPlatform"
+            $testProcess = Start-Process -FilePath (Join-Path $testDirectory 'AcrylicMaterialTests.exe') -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $testDirectory 'stdout.txt') -RedirectStandardError (Join-Path $testDirectory 'stderr.txt')
+            if (-not $testProcess.WaitForExit(30000)) {
+              $testProcess.Kill()
+              $testProcess.WaitForExit()
+              throw "Material tests timed out: $testPlatform"
+            }
+            Get-Content -LiteralPath (Join-Path $testDirectory 'stdout.txt'), (Join-Path $testDirectory 'stderr.txt')
+            if ($testProcess.ExitCode -ne 0) { throw "Material tests failed: $testPlatform" }
+          }
+
+      - name: Prepare and verify Acrylic runtime pair (x64)
+        if: matrix.variant == 'xmake'
+        shell: pwsh
+        run: .\AcrylicAppSdkPoC\verify-runtime.ps1 -Architecture x64
+
+      - name: Build Windows App SDK Acrylic helper (x86)
+        if: matrix.variant == 'xmake'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          msbuild .\AcrylicAppSdkPoC\AcrylicAppSdkPoC.vcxproj /t:Restore /p:Configuration=Release /p:Platform=Win32
+          if ($LASTEXITCODE -ne 0) { throw 'Acrylic x86 helper restore failed' }
+          msbuild .\AcrylicAppSdkPoC\AcrylicAppSdkPoC.vcxproj /m /p:Configuration=Release /p:Platform=Win32
+          if ($LASTEXITCODE -ne 0) { throw 'Acrylic x86 helper build failed' }
+
+      - name: Prepare and verify Acrylic runtime pair (x86)
+        if: matrix.variant == 'xmake'
+        shell: pwsh
+        run: .\AcrylicAppSdkPoC\verify-runtime.ps1 -Architecture x86
 
       - name: Build Weasel
         shell: pwsh
@@ -152,6 +274,33 @@ jobs:
           $ErrorActionPreference = 'Stop'
           output\7z.exe a -t7z "./output/archives/debug_symbols.7z" "output/*.pdb" -r
 
+      - name: Verify Acrylic DLLs in xmake installer
+        if: matrix.variant == 'xmake'
+        shell: pwsh
+        run: .\AcrylicAppSdkPoC\verify-runtime.ps1 -VerifyInstaller
+
+      - name: Upload WinAppSDK Acrylic helper artifact
+        if: matrix.variant == 'xmake'
+        uses: actions/upload-artifact@v4
+        with:
+          name: weasel-acrylic-appsdk-helper-${{ env.git_ref_name }}
+          if-no-files-found: error
+          path: |
+            .\output\WeaselAcrylicAppSdk.dll
+            .\output\Microsoft.WindowsAppRuntime.Bootstrap.dll
+            .\output\acrylic\x86\WeaselAcrylicAppSdk.dll
+            .\output\acrylic\x86\Microsoft.WindowsAppRuntime.Bootstrap.dll
+            .\output\acrylic-runtime-x64.json
+            .\output\acrylic-runtime-x86.json
+
+      - name: Upload xmake installer artifact
+        if: matrix.variant == 'xmake'
+        uses: actions/upload-artifact@v4
+        with:
+          name: weasel-xmake-acrylic-${{ env.git_ref_name }}
+          if-no-files-found: error
+          path: |
+            .\output\archives\weasel*.exe
       - name: Upload artifacts
         if: matrix.variant == 'msbuild'
         uses: actions/upload-artifact@v4

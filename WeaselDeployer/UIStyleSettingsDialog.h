@@ -1,37 +1,99 @@
 #pragma once
-
 #include "resource.h"
+#include "SettingsNavigation.h"
 #include "UIStyleSettings.h"
+#include <WeaselAppearanceDraft.h>
 
-class UIStyleSettingsDialog : public CDialogImpl<UIStyleSettingsDialog> {
+namespace weasel {
+struct AppearancePreview;
+}
+
+class UIStyleSettingsDialog
+    : public settings_navigation::HostedDialogImpl<UIStyleSettingsDialog> {
  public:
   enum { IDD = IDD_STYLE_SETTING };
-
-  UIStyleSettingsDialog(UIStyleSettings* settings);
-  ~UIStyleSettingsDialog();
+  explicit UIStyleSettingsDialog(UIStyleSettings* settings)
+      : settings_(settings) {}
+  bool saved() const { return saved_; }
+  bool deployed() const { return deployed_; }
+  bool HasUnappliedChanges() const;
+  bool ApplyChanges();
+  bool ConfirmClose() const;
+  bool PrepareForDisplay();
 
  protected:
   BEGIN_MSG_MAP(UIStyleSettingsDialog)
   MESSAGE_HANDLER(WM_INITDIALOG, OnInitDialog)
   MESSAGE_HANDLER(WM_CLOSE, OnClose)
-  COMMAND_ID_HANDLER(IDOK, OnOK)
-  COMMAND_HANDLER(IDC_COLOR_SCHEME, LBN_SELCHANGE, OnColorSchemeSelChange)
+  MESSAGE_HANDLER(WM_DESTROY, OnDestroy)
+  MESSAGE_HANDLER(WM_DRAWITEM, OnDrawItem)
+  MESSAGE_HANDLER(WM_MEASUREITEM, OnMeasureItem)
+  MESSAGE_HANDLER(WM_CTLCOLORSTATIC, OnStaticColor)
+  MESSAGE_HANDLER(WM_CTLCOLORBTN, OnButtonColor)
+  COMMAND_ID_HANDLER(IDOK, OnSave)
+  COMMAND_ID_HANDLER(IDC_APPLY, OnSave)
+  COMMAND_ID_HANDLER(IDCANCEL, OnCancel)
+  COMMAND_ID_HANDLER(IDC_RESTORE_APPEARANCE, OnReset)
+  COMMAND_ID_HANDLER(IDC_ACRYLIC_ENABLED, OnMaterial)
+  COMMAND_HANDLER(IDC_APPEARANCE_THEME_MODE, CBN_SELCHANGE, OnThemeMode)
+  COMMAND_ID_HANDLER(IDC_EDIT_GROUP, OnEditor)
+  COMMAND_ID_HANDLER(IDC_EDIT_SINGLE, OnEditor)
+  COMMAND_HANDLER(IDC_COLOR_FAMILY, CBN_SELCHANGE, OnGroup)
+  COMMAND_RANGE_HANDLER(IDC_COLOR_LIGHT, IDC_COLOR_DARK, OnSingle)
+  COMMAND_RANGE_HANDLER(settings_navigation::kInput,
+                        settings_navigation::kStatusIcons,
+                        OnNavigate)
   END_MSG_MAP()
-
   LRESULT OnInitDialog(UINT, WPARAM, LPARAM, BOOL&);
   LRESULT OnClose(UINT, WPARAM, LPARAM, BOOL&);
-  LRESULT OnOK(WORD, WORD code, HWND, BOOL&);
-  LRESULT OnColorSchemeSelChange(WORD, WORD, HWND, BOOL&);
-
-  void Populate();
-  void Preview(int index);
-
+  LRESULT OnDestroy(UINT, WPARAM, LPARAM, BOOL&);
+  LRESULT OnDrawItem(UINT, WPARAM, LPARAM, BOOL&);
+  LRESULT OnMeasureItem(UINT, WPARAM, LPARAM, BOOL&);
+  LRESULT OnStaticColor(UINT, WPARAM, LPARAM, BOOL&);
+  LRESULT OnButtonColor(UINT, WPARAM, LPARAM, BOOL&);
+  LRESULT OnSave(WORD, WORD, HWND, BOOL&);
+  LRESULT OnCancel(WORD, WORD, HWND, BOOL&);
+  LRESULT OnReset(WORD, WORD, HWND, BOOL&);
+  LRESULT OnMaterial(WORD, WORD, HWND, BOOL&);
+  LRESULT OnThemeMode(WORD, WORD, HWND, BOOL&);
+  LRESULT OnEditor(WORD, WORD, HWND, BOOL&);
+  LRESULT OnGroup(WORD, WORD, HWND, BOOL&);
+  LRESULT OnSingle(WORD, WORD, HWND, BOOL&);
+  LRESULT OnNavigate(WORD, WORD id, HWND, BOOL&);
+  struct PaletteEntry {
+    CString label;
+    int index;
+    int heading = 0;
+  };
+  std::vector<PaletteEntry>& Entries(UINT id);
+  void AddEntry(CComboBox& combo, PaletteEntry entry);
+  void FillGroups();
+  void FillSingles();
+  void FillThemeMode();
+  void RefreshMode(bool refresh_theme_mode = true);
+  void RefreshThemeAvailability();
+  void RefreshPreview();
+  void InvalidatePreviewCache();
+  void PreparePreviews();
+  void PreparePreview(size_t index);
+  weasel::AppearancePreview PreviewStyle(bool dark);
+  bool ConfirmDiscard() const;
+  void ShowEditor(bool single);
+  void DrawCombo(const DRAWITEMSTRUCT& draw);
+  CString Text(UINT id) const;
   UIStyleSettings* settings_;
-  bool loaded_;
-  std::vector<ColorSchemeInfo> preset_;
-
-  CListBox color_schemes_;
-  CStatic preview_;
-  CImage image_;
-  CButton select_font_;
+  weasel::AppearanceDraft draft_;
+  std::vector<PaletteEntry> groups_;
+  std::vector<PaletteEntry> theme_modes_;
+  std::array<std::vector<PaletteEntry>, 2> singles_;
+  std::array<bool, 2> single_{};
+  ULONG_PTR graphics_token_ = 0;
+  std::array<HBITMAP, 2> preview_bitmaps_{};
+  std::array<SIZE, 2> preview_sizes_{};
+  std::array<std::string, 2> preview_keys_{};
+  std::array<bool, 2> preview_dirty_{true, true};
+  int item_height_ = 24;
+  bool saved_ = false;
+  bool deployed_ = false;
+  bool ready_ = false;
 };

@@ -64,6 +64,11 @@ bool ClientImpl::ProcessKeyEvent(KeyEvent const& keyEvent) {
   return ret != 0;
 }
 
+void ClientImpl::UpdateCapsLockState(bool enabled) {
+  if (_Active())
+    _SendMessage(WEASEL_IPC_UPDATE_CAPS_LOCK, enabled ? 1 : 0, session_id);
+}
+
 bool ClientImpl::CommitComposition() {
   if (!_Active())
     return false;
@@ -174,6 +179,19 @@ bool ClientImpl::Echo() {
   return (serverEcho == session_id);
 }
 
+bool ClientImpl::QueryConnectedServer(DWORD& processId,
+                                      DWORD& sessionId,
+                                      DWORD& stage,
+                                      DWORD& error) const {
+  processId = 0;
+  sessionId = 0;
+  stage = 10;
+  error = ERROR_PIPE_NOT_CONNECTED;
+  if (!session_id)
+    return false;
+  return channel.QueryServerIdentity(processId, sessionId, stage, error);
+}
+
 bool ClientImpl::GetResponseData(ResponseHandler const& handler) {
   if (!handler) {
     return false;
@@ -222,6 +240,10 @@ void Client::ShutdownServer() {
 
 bool Client::ProcessKeyEvent(KeyEvent const& keyEvent) {
   return m_pImpl->ProcessKeyEvent(keyEvent);
+}
+
+void Client::UpdateCapsLockState(bool enabled) {
+  m_pImpl->UpdateCapsLockState(enabled);
 }
 
 bool Client::CommitComposition() {
@@ -278,6 +300,13 @@ void Client::TrayCommand(UINT menuId) {
 
 bool Client::Echo() {
   return m_pImpl->Echo();
+}
+
+bool Client::QueryConnectedServer(DWORD& processId,
+                                  DWORD& sessionId,
+                                  DWORD& stage,
+                                  DWORD& error) const {
+  return m_pImpl->QueryConnectedServer(processId, sessionId, stage, error);
 }
 
 bool Client::GetResponseData(ResponseHandler handler) {

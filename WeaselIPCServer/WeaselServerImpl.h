@@ -1,6 +1,7 @@
 #pragma once
 #include <WeaselIPC.h>
 #include <map>
+#include <atomic>
 #include <Winnt.h>   // for security attributes constants
 #include <aclapi.h>  // for ACL
 #include <boost/thread.hpp>
@@ -29,6 +30,7 @@ class ServerImpl : public CWindowImpl<ServerImpl, CWindow, ServerWinTraits>
   MESSAGE_HANDLER(WM_SETTINGCHANGE, OnColorChange)
   MESSAGE_HANDLER(WM_COMMAND, OnCommand)
   MESSAGE_HANDLER(WM_WEASEL_SERVICE_NOTIFY, OnServiceNotifyMessage)
+  MESSAGE_RANGE_HANDLER(0xC000, 0xFFFF, OnRegisteredMessage)
   END_MSG_MAP()
 
   LRESULT OnColorChange(UINT uMsg,
@@ -51,11 +53,16 @@ class ServerImpl : public CWindowImpl<ServerImpl, CWindow, ServerWinTraits>
                                  WPARAM wParam,
                                  LPARAM lParam,
                                  BOOL& bHandled);
+  LRESULT OnRegisteredMessage(UINT uMsg,
+                              WPARAM wParam,
+                              LPARAM lParam,
+                              BOOL& bHandled);
   DWORD OnCommand(WEASEL_IPC_COMMAND uMsg, DWORD wParam, DWORD lParam);
   DWORD OnEcho(WEASEL_IPC_COMMAND uMsg, DWORD wParam, DWORD lParam);
   DWORD OnStartSession(WEASEL_IPC_COMMAND uMsg, DWORD wParam, DWORD lParam);
   DWORD OnEndSession(WEASEL_IPC_COMMAND uMsg, DWORD wParam, DWORD lParam);
   DWORD OnKeyEvent(WEASEL_IPC_COMMAND uMsg, DWORD wParam, DWORD lParam);
+  DWORD OnCapsLockState(WEASEL_IPC_COMMAND uMsg, DWORD wParam, DWORD lParam);
   DWORD OnShutdownServer(WEASEL_IPC_COMMAND uMsg, DWORD wParam, DWORD lParam);
   DWORD OnFocusIn(WEASEL_IPC_COMMAND uMsg, DWORD wParam, DWORD lParam);
   DWORD OnFocusOut(WEASEL_IPC_COMMAND uMsg, DWORD wParam, DWORD lParam);
@@ -93,6 +100,12 @@ class ServerImpl : public CWindowImpl<ServerImpl, CWindow, ServerWinTraits>
   void SetTrayRefreshCallback(std::function<void()> callback) {
     m_trayRefreshCallback = callback;
   }
+  void SetSettingsChangedCallback(std::function<void()> callback) {
+    m_settingsChangedCallback = callback;
+  }
+  void SetCapsLockStateCallback(std::function<void(bool)> callback) {
+    m_capsLockStateCallback = callback;
+  }
 
  private:
   void _Finailize();
@@ -104,9 +117,12 @@ class ServerImpl : public CWindowImpl<ServerImpl, CWindow, ServerWinTraits>
   RequestHandler* m_pRequestHandler;  // reference
   std::map<UINT, CommandHandler> m_MenuHandlers;
   std::function<void()> m_trayRefreshCallback;
+  std::function<void()> m_settingsChangedCallback;
+  std::function<void(bool)> m_capsLockStateCallback;
   HMODULE m_hUser32Module;
   SecurityAttribute sa;
   BOOL m_darkMode;
+  std::atomic<bool> m_colorThemeChanged{false};
 };
 
 }  // namespace weasel

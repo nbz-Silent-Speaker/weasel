@@ -1,12 +1,12 @@
 ﻿【小狼毫】輸入法
 ================
 
-本仓库基于[原版小狼毫 Weasel](https://github.com/rime/weasel)和[中州韵 Rime 输入法引擎](https://github.com/rime/librime)开发，**不是 Rime 官方发布版**。图形化设置与万象拼音 Lite 等增强功能目前在 [开发分支 `codex/wanxiang-lite-integration`](https://github.com/nbzQing/weasel/tree/codex/wanxiang-lite-integration)；下列功能介绍以该分支为准，尚未全部合入默认分支或发布为安装包。原版小狼毫的介绍、使用方法和致谢保留在下文。
+本仓库基于[原版小狼毫 Weasel](https://github.com/rime/weasel)和[中州韵 Rime 输入法引擎](https://github.com/rime/librime)开发，图形化设置与万象拼音 Lite 等增强功能的源码已合入 `master`。**本仓库不是 Rime 官方发布版**；原版小狼毫的介绍、使用方法和致谢保留在下文。
 
 [![下载本版](https://img.shields.io/github/v/release/nbzQing/weasel?label=%E4%B8%8B%E8%BD%BD%E6%9C%AC%E7%89%88)](https://github.com/nbzQing/weasel/releases)
 [![本版构建状态](https://github.com/nbzQing/weasel/actions/workflows/ci.yml/badge.svg)](https://github.com/nbzQing/weasel/actions/workflows/ci.yml)
 
-## 增强版开发分支的功能
+## 本版功能
 
 | 功能 | 内容 |
 | --- | --- |
@@ -17,11 +17,31 @@
 | 任务栏图标 | 分别设置中文、西文、大写锁定状态图标，选择全局或方案图标，预览浅色和深色任务栏；也可更换输入法标识图标，后者需要管理员授权。 |
 | 设置界面外观 | 设置窗口可跟随系统、始终浅色或始终深色。强调色可跟随 Windows、使用默认色 `#0A9DA1`，或通过取色器、颜色代码和 HEX/RGB/HSV/HSL/CMYK 数值自定义。 |
 
+## 设置界面预览
+
+以下截图来自本地隔离的设置预览，展示输入方案、候选框和任务栏图标的实际界面。
+
+### 输入方案与语法模型
+
+![输入方案与可选语法模型设置](docs/screenshots/settings-schemes.png)
+
+### 候选框配色
+
+![浅色与深色候选框配色预览](docs/screenshots/settings-appearance.png)
+
+### 候选框字体
+
+![候选框各类文字的字体与字号设置](docs/screenshots/settings-fonts.png)
+
+### 任务栏图标
+
+![输入状态图标与任务栏预览](docs/screenshots/settings-taskbar.png)
+
 ## 下载与使用
 
-1. 从[本仓库发布页](https://github.com/nbzQing/weasel/releases)下载安装包，先阅读对应版本的功能与架构说明。开发分支的最新代码不一定已包含在发布附件中；语法模型始终单独下载，不随安装包提供。
-2. 初次安装时，在「安装选项」中选择输入语言。使用包含万象拼音 Lite 的增强版安装包时，新用户首次部署默认启用该方案；已有用户的方案选择和自定义配置会保留。
-3. 在 Windows 输入法列表中选择小狼毫。增强版可从任务栏小狼毫图标的右键菜单打开「输入法设定」；修改输入法设置后点击「应用」。
+1. 从[本仓库发布页](https://github.com/nbzQing/weasel/releases)下载安装包，具体功能与架构以对应 Release 的说明为准。最新 `master` 源码可能尚未制成安装包；语法模型始终单独下载，不随安装包提供。
+2. 初次安装时，在「安装选项」中选择输入语言。新用户首次部署默认启用万象拼音 Lite；已有用户的方案选择和自定义配置会保留。
+3. 在 Windows 输入法列表中选择小狼毫。右键单击任务栏中的小狼毫图标，打开「输入法设定」；修改输入法设置后点击「应用」。
 
 用户词典和配置文件默认位于 `%AppData%\Rime`；如果更改过用户目录，以设置窗口「用户文件夹」显示的路径为准。直接编辑配置文件后，仍须重新部署。方案选单快捷键以当前方案配置为准，通常可使用 <kbd>Ctrl+`</kbd> 或 <kbd>F4</kbd>。
 

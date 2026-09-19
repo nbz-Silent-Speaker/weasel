@@ -1,0 +1,1764 @@
+#include <windows.h>
+#include <appmodel.h>
+#include <dispatcherqueue.h>
+#include <dwmapi.h>
+#include <roapi.h>
+#include <windows.ui.composition.interop.h>
+#include <MddBootstrap.h>
+#include <WindowsAppSDK-VersionInfo.h>
+
+#include <map>
+#include <memory>
+#include <new>
+#include <string>
+
+#include <winrt/base.h>
+#include <winrt/Windows.Foundation.h>
+#include <winrt/Microsoft.UI.h>
+#include <winrt/Microsoft.UI.Composition.SystemBackdrops.h>
+#include <winrt/Microsoft.UI.Interop.h>
+#include <winrt/Windows.System.h>
+#include <winrt/Windows.Foundation.Numerics.h>
+#include <winrt/Windows.Graphics.Effects.h>
+#include <winrt/Windows.UI.Composition.h>
+#include <winrt/Windows.UI.Composition.Desktop.h>
+
+#include "WeaselGaussianBlurEffect.h"
+#include "AcrylicMaterial.h"
+#include "RootClipDiagnosticState.h"
+#include "ChildBackdropTarget.h"
+#include "EdgeClipDiagnostic.h"
+#include "AlignedAcrylicClip.h"
+#include "AcrylicFallbackPolicy.h"
+
+#pragma comment(lib, "Dwmapi.lib")
+#pragma comment(lib, "CoreMessaging.lib")
+#pragma comment(lib, "RuntimeObject.lib")
+#pragma comment(lib, "OneCoreUAP.lib")
+
+namespace {
+
+using weasel_acrylic::kEdgeClipApplied;
+using weasel_acrylic::kEdgeClipEnabled;
+using weasel_acrylic::kEdgeClipEnvironment;
+using weasel_acrylic::kEdgeClipSample;
+
+// Policy v3: process-wide explicit bootstrap, thread-owned queues, HWND-owned
+// targets. No WinRT object has a static/TLS destructor that runs in DllMain.
+constexpr DWORD kDwmaUseHostBackdropBrush = 17;
+constexpr wchar_t kSystemCompositionActive[] =
+    L"WeaselAcrylicSystemCompositionActive";
+constexpr wchar_t kSystemCompositionStage[] =
+    L"WeaselAcrylicSystemCompositionStage";
+constexpr wchar_t kSystemCompositionHresult[] =
+    L"WeaselAcrylicSystemCompositionHresult";
+constexpr wchar_t kSystemCompositionHostBrushHr[] =
+    L"WeaselAcrylicSystemCompositionHostBrushHresult";
+constexpr wchar_t kSystemCompositionCornerRadius[] =
+    L"WeaselAcrylicSystemCompositionCornerRadius";
+constexpr wchar_t kLocalClipWidth[] = L"WeaselAcrylicLocalClipWidth";
+constexpr wchar_t kLocalClipHeight[] = L"WeaselAcrylicLocalClipHeight";
+constexpr wchar_t kLocalClipRadius[] = L"WeaselAcrylicLocalClipRadius";
+constexpr wchar_t kAppSdkRootClipActive[] =
+    L"WeaselAcrylicAppSdkRootClipActive";
+constexpr wchar_t kAppSdkRootClipWidth[] = L"WeaselAcrylicAppSdkRootClipWidth";
+constexpr wchar_t kAppSdkRootClipHeight[] =
+    L"WeaselAcrylicAppSdkRootClipHeight";
+constexpr wchar_t kAppSdkRootClipOffsetX[] =
+    L"WeaselAcrylicAppSdkRootClipOffsetX";
+constexpr wchar_t kAppSdkRootClipOffsetY[] =
+    L"WeaselAcrylicAppSdkRootClipOffsetY";
+constexpr wchar_t kAppSdkRootClipRadius[] =
+    L"WeaselAcrylicAppSdkRootClipRadius";
+constexpr wchar_t kForceSystemCompositionEnvironment[] =
+    L"WEASEL_R22_FORCE_SYSTEM_COMPOSITION";
+constexpr wchar_t kForcedSystemCompositionActive[] =
+    L"WeaselAcrylicForcedSystemCompositionActive";
+constexpr wchar_t kForcedSystemCompositionClipWidth[] =
+    L"WeaselAcrylicForcedSystemCompositionClipWidth";
+constexpr wchar_t kForcedSystemCompositionClipHeight[] =
+    L"WeaselAcrylicForcedSystemCompositionClipHeight";
+constexpr wchar_t kForcedSystemCompositionClipRadius[] =
+    L"WeaselAcrylicForcedSystemCompositionClipRadius";
+constexpr wchar_t kPackagedSystemCompositionFallback[] =
+    L"WeaselAcrylicPackagedSystemCompositionFallback";
+constexpr wchar_t kAppSdkFailureStage[] = L"WeaselAcrylicAppSdkFailureStage";
+constexpr wchar_t kAppSdkFailureHresult[] =
+    L"WeaselAcrylicAppSdkFailureHresult";
+constexpr wchar_t kLifetimeWindowClass[] = L"WeaselAcrylicThreadLifetimeV3";
+constexpr UINT_PTR kShutdownTimer = 1;
+constexpr UINT_PTR kRootClipTestTimer = 0x5225;
+constexpr wchar_t kRootClipTestEnvironment[] =
+    L"WEASEL_R22_ROOT_CLIP_DIAGNOSTIC";
+constexpr wchar_t kRootClipTestEnabled[] = L"WeaselAcrylicRootClipTestEnabled";
+constexpr wchar_t kRootClipTestRequest[] = L"WeaselAcrylicRootClipTestRequest";
+constexpr wchar_t kRootClipTestAck[] = L"WeaselAcrylicRootClipTestAck";
+constexpr wchar_t kRootClipTestMode[] = L"WeaselAcrylicRootClipTestMode";
+constexpr wchar_t kRootClipTestReason[] = L"WeaselAcrylicRootClipTestReason";
+constexpr wchar_t kRootClipTestReadback[] =
+    L"WeaselAcrylicRootClipTestReadback";
+constexpr wchar_t kRootClipTestError[] = L"WeaselAcrylicRootClipTestError";
+constexpr wchar_t kRootClipTestMarkerX[] = L"WeaselAcrylicRootClipTestMarkerX";
+constexpr wchar_t kRootClipTestMarkerY[] = L"WeaselAcrylicRootClipTestMarkerY";
+constexpr const wchar_t* kRootClipTestProperties[] = {
+    kRootClipTestEnabled, kRootClipTestRequest, kRootClipTestAck,
+    kRootClipTestMode,    kRootClipTestReason,  kRootClipTestReadback,
+    kRootClipTestError,   kRootClipTestMarkerX, kRootClipTestMarkerY};
+void CALLBACK RootClipTestTimerProc(HWND, UINT, UINT_PTR, DWORD) noexcept;
+constexpr UINT_PTR kChildClipTimer = 0x5226;
+constexpr wchar_t kChildClipEnvironment[] = L"WEASEL_R22_CHILD_CLIP_DIAGNOSTIC";
+constexpr wchar_t kChildClipEnabled[] = L"WeaselAcrylicChildClipEnabled";
+constexpr wchar_t kChildClipReady[] = L"WeaselAcrylicChildClipReady";
+constexpr wchar_t kChildClipFailed[] = L"WeaselAcrylicChildClipFailed";
+constexpr wchar_t kChildClipHresult[] = L"WeaselAcrylicChildClipHresult";
+constexpr wchar_t kChildClipPublications[] =
+    L"WeaselAcrylicChildClipPublications";
+constexpr wchar_t kChildClipSetterHr[] = L"WeaselAcrylicChildClipSetterHresult";
+constexpr wchar_t kChildClipThread[] =
+    L"WeaselAcrylicChildClipPublicationThread";
+constexpr wchar_t kChildClipCandidate[] = L"WeaselAcrylicChildClipCandidate";
+constexpr UINT kChildClipFailedMessage = WM_APP + 0x526;
+constexpr const wchar_t* kChildClipProperties[] = {
+    kChildClipEnabled, kChildClipReady,        kChildClipFailed,
+    kChildClipHresult, kChildClipPublications, kChildClipSetterHr,
+    kChildClipThread,  kChildClipCandidate,    kEdgeClipEnabled,
+    kEdgeClipSample,   kEdgeClipApplied};
+void CALLBACK ChildClipTimerProc(HWND, UINT, UINT_PTR, DWORD) noexcept;
+thread_local LONG t_lastStage = 0;
+thread_local HRESULT t_lastHresult = S_OK;
+thread_local wchar_t t_lastMessage[512] = {};
+
+void Diagnose(LONG stage, HRESULT hr = S_OK, LPCWSTR message = L"") noexcept {
+  t_lastStage = stage;
+  t_lastHresult = hr;
+  wcsncpy_s(t_lastMessage, message ? message : L"", _TRUNCATE);
+}
+
+HRESULT LastWin32Error() noexcept {
+  const DWORD error = ::GetLastError();
+  return error ? HRESULT_FROM_WIN32(error) : E_FAIL;
+}
+
+// The bootstrap reference and helper module intentionally live until process
+// exit. A TSF plugin must not tear down the host's process-wide runtime graph.
+INIT_ONCE g_bootstrapOnce = INIT_ONCE_STATIC_INIT;
+HRESULT g_bootstrapResult = E_PENDING;
+HMODULE g_helperModule = nullptr;
+HMODULE g_bootstrapModule = nullptr;
+int g_modulePinAnchor = 0;
+
+// B.2e v1: do not bootstrap into a process that already has package identity.
+// Route 1 preserves the existing unpackaged path; route 2 borrows only classes
+// that Windows can activate in the host's existing runtime environment.
+LONG g_runtimeRoute = 0;  // 0 unknown, 1 explicit bootstrap, 2 host runtime
+LONG g_runtimeFailureStage = 6;
+
+BOOL CALLBACK InitializeBootstrapOnce(PINIT_ONCE, PVOID, PVOID*) noexcept {
+  try {
+    if (!::GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                                  GET_MODULE_HANDLE_EX_FLAG_PIN,
+                              reinterpret_cast<LPCWSTR>(&g_modulePinAnchor),
+                              &g_helperModule)) {
+      g_bootstrapResult = LastWin32Error();
+      return TRUE;
+    }
+
+    UINT32 packageNameLength = 0;
+    const LONG identity =
+        ::GetCurrentPackageFullName(&packageNameLength, nullptr);
+    if (identity == ERROR_INSUFFICIENT_BUFFER && packageNameLength > 0) {
+      g_runtimeRoute = 2;
+      // Classification is NOT proof of Acrylic support. Attach probes the
+      // host's activation factories on its own initialized UI thread.
+      g_bootstrapResult = S_OK;
+      return TRUE;
+    }
+    if (identity != APPMODEL_ERROR_NO_PACKAGE) {
+      g_runtimeFailureStage = 7;
+      g_bootstrapResult = identity == ERROR_SUCCESS
+                              ? E_UNEXPECTED
+                              : HRESULT_FROM_WIN32(identity);
+      return TRUE;
+    }
+    g_runtimeRoute = 1;
+
+    // Resolve relative to this DLL, NEVER to WINWORD.EXE/the current directory.
+    WCHAR modulePath[32768] = {};
+    const DWORD length =
+        ::GetModuleFileNameW(g_helperModule, modulePath, _countof(modulePath));
+    if (!length || length >= _countof(modulePath)) {
+      g_bootstrapResult = HRESULT_FROM_WIN32(ERROR_BAD_PATHNAME);
+      return TRUE;
+    }
+    std::wstring path(modulePath, length);
+    const auto slash = path.find_last_of(L"\\/");
+    if (slash == std::wstring::npos) {
+      g_bootstrapResult = HRESULT_FROM_WIN32(ERROR_BAD_PATHNAME);
+      return TRUE;
+    }
+    path.resize(slash + 1);
+    path += L"Microsoft.WindowsAppRuntime.Bootstrap.dll";
+    g_bootstrapModule = ::LoadLibraryExW(
+        path.c_str(), nullptr,
+        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+    if (!g_bootstrapModule) {
+      g_bootstrapResult = LastWin32Error();
+      return TRUE;
+    }
+
+    using InitializeFn = HRESULT(WINAPI*)(UINT32, PCWSTR, PACKAGE_VERSION,
+                                          MddBootstrapInitializeOptions);
+    auto initialize = reinterpret_cast<InitializeFn>(
+        ::GetProcAddress(g_bootstrapModule, "MddBootstrapInitialize2"));
+    if (!initialize) {
+      g_bootstrapResult = HRESULT_FROM_WIN32(ERROR_PROC_NOT_FOUND);
+      return TRUE;
+    }
+    PACKAGE_VERSION minimum{};
+    minimum.Version = WINDOWSAPPSDK_RUNTIME_VERSION_UINT64;
+    // None: no fail-fast, debugger break, installation UI, or host restart.
+    // An incompatible unpackaged host may decline this optional effect.
+    g_bootstrapResult = initialize(WINDOWSAPPSDK_RELEASE_MAJORMINOR,
+                                   WINDOWSAPPSDK_RELEASE_VERSION_TAG_W, minimum,
+                                   MddBootstrapInitializeOptions_None);
+  } catch (...) {
+    g_bootstrapResult = E_UNEXPECTED;
+  }
+  return TRUE;
+}
+
+enum class TargetMode {
+  AppSdkAcrylic,
+  SystemComposition,
+};
+
+struct Target {
+  HWND hwnd = nullptr;
+  TargetMode mode = TargetMode::AppSdkAcrylic;
+  bool forcedSystemComposition = false;
+  bool rootClipTest = false;
+  bool rootClipTestFailed = false;
+  bool rootClipTestTimer = false;
+  weasel_acrylic::RootClipDiagnosticState rootClipTestState;
+  winrt::Windows::UI::Composition::SpriteVisual rootClipTestMarker{nullptr};
+  winrt::Windows::UI::Composition::Compositor compositor{nullptr};
+  winrt::Windows::UI::Composition::Desktop::DesktopWindowTarget desktop{
+      nullptr};
+  winrt::Windows::UI::Composition::ContainerVisual root{nullptr};
+  bool childClipTest = false;
+  bool edgeClipTest = false;
+  bool alignedClip = false;
+  bool childClipFailed = false;
+  bool childClipTimer = false;
+  bool childRegionRemoved = false;
+  winrt::Windows::UI::Composition::SpriteVisual childVisual{nullptr};
+  Microsoft::WRL::ComPtr<weasel_acrylic::ChildBackdropTarget> childTarget;
+
+  // Windows App SDK path.
+  winrt::Microsoft::UI::Composition::SystemBackdrops::
+      SystemBackdropConfiguration configuration{nullptr};
+  winrt::Microsoft::UI::Composition::SystemBackdrops::DesktopAcrylicController
+      acrylic{nullptr};
+
+  // System Windows.UI.Composition: SearchHost fallback or opt-in R22 route.
+  winrt::Windows::UI::Composition::CompositionBackdropBrush hostBackdrop{
+      nullptr};
+  winrt::Windows::UI::Composition::CompositionEffectFactory blurFactory{
+      nullptr};
+  winrt::Windows::UI::Composition::CompositionEffectBrush blurBrush{nullptr};
+  winrt::Windows::UI::Composition::CompositionColorBrush luminosityBrush{
+      nullptr};
+  winrt::Windows::UI::Composition::CompositionColorBrush tintBrush{nullptr};
+  winrt::Windows::UI::Composition::SpriteVisual blurVisual{nullptr};
+  winrt::Windows::UI::Composition::CompositionRoundedRectangleGeometry
+      clipGeometry{nullptr};
+  winrt::Windows::UI::Composition::CompositionGeometricClip roundedClip{
+      nullptr};
+
+  BOOL dark = FALSE;
+  bool pendingDetach = false;
+
+  bool IsActive() const noexcept {
+    if (childClipFailed)
+      return false;
+    if (mode == TargetMode::SystemComposition)
+      return desktop && root && blurVisual && blurBrush && hostBackdrop &&
+             clipGeometry && roundedClip;
+    if (!acrylic)
+      return false;
+    try {
+      return !acrylic.IsClosed();
+    } catch (...) {
+      return false;
+    }
+  }
+
+  void Reset() noexcept {
+    if (childClipTimer) {
+      ::KillTimer(hwnd, kChildClipTimer);
+      childClipTimer = false;
+    }
+    if (rootClipTestTimer) {
+      ::KillTimer(hwnd, kRootClipTestTimer);
+      rootClipTestTimer = false;
+    }
+    if (rootClipTestMarker && root) {
+      try {
+        root.Children().Remove(rootClipTestMarker);
+      } catch (...) {
+      }
+    }
+    rootClipTestMarker = nullptr;
+    if (hwnd) {
+      ::RemovePropW(hwnd, weasel_acrylic::kAlignedClipEnabled);
+      if (childClipTest) {
+        for (const auto name : kChildClipProperties)
+          ::RemovePropW(hwnd, name);
+      }
+      if (rootClipTest) {
+        for (const auto name : kRootClipTestProperties)
+          ::RemovePropW(hwnd, name);
+      }
+      ::RemovePropW(hwnd, kSystemCompositionActive);
+      ::RemovePropW(hwnd, kSystemCompositionStage);
+      ::RemovePropW(hwnd, kSystemCompositionHresult);
+      ::RemovePropW(hwnd, kSystemCompositionHostBrushHr);
+      ::RemovePropW(hwnd, kAppSdkRootClipActive);
+      ::RemovePropW(hwnd, kAppSdkRootClipWidth);
+      ::RemovePropW(hwnd, kAppSdkRootClipHeight);
+      ::RemovePropW(hwnd, kAppSdkRootClipRadius);
+      ::RemovePropW(hwnd, kAppSdkRootClipOffsetX);
+      ::RemovePropW(hwnd, kAppSdkRootClipOffsetY);
+      ::RemovePropW(hwnd, kForcedSystemCompositionActive);
+      ::RemovePropW(hwnd, kForcedSystemCompositionClipWidth);
+      ::RemovePropW(hwnd, kForcedSystemCompositionClipHeight);
+      ::RemovePropW(hwnd, kForcedSystemCompositionClipRadius);
+    }
+
+    // The child route has no HWND region. Keep its clip until the material
+    // publisher is closed and the native desktop root is disconnected.
+    if (root && !childClipTest) {
+      try {
+        root.Clip(nullptr);
+      } catch (...) {
+      }
+    }
+
+    if (acrylic) {
+      try {
+        acrylic.Close();
+      } catch (...) {
+      }
+    }
+    acrylic = nullptr;
+    configuration = nullptr;
+    if (childTarget)
+      childTarget->Stop();
+
+    if (desktop) {
+      try {
+        desktop.Root(nullptr);
+      } catch (...) {
+      }
+    }
+    childTarget.Reset();
+    childVisual = nullptr;
+    if (blurVisual) {
+      try {
+        blurVisual.Clip(nullptr);
+        blurVisual.Brush(nullptr);
+      } catch (...) {
+      }
+    }
+    roundedClip = nullptr;
+    clipGeometry = nullptr;
+    blurVisual = nullptr;
+    blurBrush = nullptr;
+    luminosityBrush = nullptr;
+    tintBrush = nullptr;
+    blurFactory = nullptr;
+    hostBackdrop = nullptr;
+    root = nullptr;
+
+    if (desktop) {
+      try {
+        desktop.Close();
+      } catch (...) {
+      }
+    }
+    desktop = nullptr;
+    compositor = nullptr;
+  }
+
+  ~Target() { Reset(); }
+};
+
+int DecodeEncodedIntProperty(HWND hwnd, const wchar_t* name) {
+  const ULONG_PTR stored = reinterpret_cast<ULONG_PTR>(::GetPropW(hwnd, name));
+  return stored ? static_cast<int>(stored - 1) : -1;
+}
+
+void SetEncodedIntProperty(HWND hwnd, const wchar_t* name, int value) {
+  ::SetPropW(hwnd, name,
+             reinterpret_cast<HANDLE>(
+                 static_cast<ULONG_PTR>(static_cast<unsigned>(value) + 1)));
+}
+
+void UpdateSystemCompositionClip(Target& target) {
+  if (target.mode != TargetMode::SystemComposition || !target.hwnd ||
+      !target.clipGeometry)
+    return;
+
+  RECT client{};
+  if (!::GetClientRect(target.hwnd, &client))
+    winrt::throw_hresult(LastWin32Error());
+
+  float width = static_cast<float>(client.right - client.left);
+  float height = static_cast<float>(client.bottom - client.top);
+  if (width < 0.0f)
+    width = 0.0f;
+  if (height < 0.0f)
+    height = 0.0f;
+
+  float radius = static_cast<float>(reinterpret_cast<ULONG_PTR>(
+      ::GetPropW(target.hwnd, kSystemCompositionCornerRadius)));
+  if (target.forcedSystemComposition) {
+    const int localWidth =
+        DecodeEncodedIntProperty(target.hwnd, kLocalClipWidth);
+    const int localHeight =
+        DecodeEncodedIntProperty(target.hwnd, kLocalClipHeight);
+    const int localRadius =
+        DecodeEncodedIntProperty(target.hwnd, kLocalClipRadius);
+    // Attach precedes the first geometry publication. Do not substitute the
+    // SearchHost radius or report stale geometry as a valid R22 sample.
+    if (width <= 0.0f || height <= 0.0f || localWidth != width ||
+        localHeight != height || localRadius < 0) {
+      target.clipGeometry.Size({0.0f, 0.0f});
+      target.clipGeometry.CornerRadius({0.0f, 0.0f});
+      ::RemovePropW(target.hwnd, kForcedSystemCompositionClipWidth);
+      ::RemovePropW(target.hwnd, kForcedSystemCompositionClipHeight);
+      ::RemovePropW(target.hwnd, kForcedSystemCompositionClipRadius);
+      return;
+    }
+    radius = static_cast<float>(localRadius);
+  }
+
+  const float radiusLimit = (width < height ? width : height) * 0.5f;
+  if (radius < 0.0f)
+    radius = 0.0f;
+  if (radius > radiusLimit)
+    radius = radiusLimit;
+
+  target.clipGeometry.Size({width, height});
+  target.clipGeometry.CornerRadius({radius, radius});
+
+  if (target.forcedSystemComposition) {
+    SetEncodedIntProperty(target.hwnd, kForcedSystemCompositionClipWidth,
+                          static_cast<int>(width));
+    SetEncodedIntProperty(target.hwnd, kForcedSystemCompositionClipHeight,
+                          static_cast<int>(height));
+    SetEncodedIntProperty(target.hwnd, kForcedSystemCompositionClipRadius,
+                          static_cast<int>(radius));
+  }
+}
+
+void FailRootClipTest(Target& target, HRESULT error) noexcept {
+  target.rootClipTestFailed = true;
+  target.rootClipTestState.half = false;
+  ::RemovePropW(target.hwnd, kRootClipTestReadback);
+  ::SetPropW(target.hwnd, kRootClipTestError,
+             reinterpret_cast<HANDLE>(
+                 static_cast<ULONG_PTR>(static_cast<DWORD>(error))));
+  // Keep the timer alive: it retries normal full-width restoration on the
+  // owning UI thread if a transient COM failure interrupted the last update.
+}
+
+int RootClipTestWidth(Target& target, int width, int height, int radius) {
+  if (target.rootClipTestFailed)
+    return width;
+  ::RemovePropW(target.hwnd, kRootClipTestReadback);
+  if (!target.rootClipTestTimer) {
+    if (!::SetTimer(target.hwnd, kRootClipTestTimer, 50, RootClipTestTimerProc))
+      winrt::throw_hresult(LastWin32Error());
+    target.rootClipTestTimer = true;
+  }
+  if (width < 96 || height < 96 || radius > width / 4)
+    winrt::throw_hresult(E_INVALIDARG);
+  if (!target.rootClipTestMarker) {
+    target.rootClipTestMarker = target.compositor.CreateSpriteVisual();
+    target.rootClipTestMarker.Size({4.0f, 4.0f});
+    target.rootClipTestMarker.Brush(
+        target.compositor.CreateColorBrush({255, 255, 0, 255}));
+    // Identical positive control in full/half/restored, outside the main ROI.
+    // Only the parent clip width changes. Screen pixels, not a property flag,
+    // must prove that this marker was actually clipped and restored.
+    target.root.Children().InsertAtTop(target.rootClipTestMarker);
+  }
+  const int markerX = width - 24;
+  const int markerY = height - max(24, radius + 4);
+  target.rootClipTestMarker.Offset(
+      {static_cast<float>(markerX), static_cast<float>(markerY), 0.0f});
+  SetEncodedIntProperty(target.hwnd, kRootClipTestMarkerX, markerX);
+  SetEncodedIntProperty(target.hwnd, kRootClipTestMarkerY, markerY);
+  ::SetPropW(target.hwnd, kRootClipTestEnabled,
+             reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(1)));
+  const ULONG_PTR request = reinterpret_cast<ULONG_PTR>(
+      ::GetPropW(target.hwnd, kRootClipTestRequest));
+  // Reject high pointer bits instead of truncating into a valid x86 command.
+  const auto command =
+      request <= 0x7fffffffU ? static_cast<unsigned int>(request) : 0xffffffffU;
+  return target.rootClipTestState.SelectWidth(
+      command, ::GetTickCount64(), width, height, radius,
+      ::IsWindowVisible(target.hwnd) != FALSE);
+}
+
+void ObserveRootClipTest(Target& target,
+                         int hostWidth,
+                         int clipWidth,
+                         int height,
+                         int radius) {
+  const auto sameObject = [](const auto& a, const auto& b) {
+    return a && b &&
+           a.template as<::IUnknown>().get() ==
+               b.template as<::IUnknown>().get();
+  };
+  const auto root = target.desktop.Root();
+  const auto clip = target.root.Clip();
+  const auto geometry = target.roundedClip.Geometry();
+  const auto size = target.clipGeometry.Size();
+  const auto corner = target.clipGeometry.CornerRadius();
+  const auto markerSize = target.rootClipTestMarker.Size();
+  const auto markerOffset = target.rootClipTestMarker.Offset();
+  const auto markerColor =
+      target.rootClipTestMarker.Brush()
+          .as<winrt::Windows::UI::Composition::CompositionColorBrush>()
+          .Color();
+  if (!sameObject(root, target.root) || !sameObject(clip, target.roundedClip) ||
+      !sameObject(geometry, target.clipGeometry) ||
+      !sameObject(target.rootClipTestMarker.Parent(), target.root) ||
+      size.x != clipWidth || size.y != height || corner.x != radius ||
+      corner.y != radius || markerSize.x != 4.0f || markerSize.y != 4.0f ||
+      markerOffset.x != hostWidth - 24 ||
+      markerOffset.y != height - max(24, radius + 4) ||
+      markerOffset.z != 0.0f || markerColor.A != 255 || markerColor.R != 255 ||
+      markerColor.G != 0 || markerColor.B != 255)
+    winrt::throw_hresult(E_UNEXPECTED);
+  SetEncodedIntProperty(target.hwnd, kRootClipTestReason,
+                        target.rootClipTestState.reason);
+  ::SetPropW(target.hwnd, kRootClipTestMode,
+             reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(
+                 target.rootClipTestState.half ? 2 : 1)));
+  ::SetPropW(target.hwnd, kRootClipTestAck,
+             reinterpret_cast<HANDLE>(
+                 static_cast<ULONG_PTR>(target.rootClipTestState.request)));
+}
+
+void ClearAppSdkRootClip(Target& target) {
+  if (target.childClipTest) {
+    target.childVisual.IsVisible(false);
+    ::RemovePropW(target.hwnd, kChildClipReady);
+    ::RemovePropW(target.hwnd, kEdgeClipApplied);
+    // Preserve the last clip while geometry is incomplete. Clearing it would
+    // expose a rectangular child on the region-free desktop target.
+  }
+  if (target.rootClipTest) {
+    target.rootClipTestState.SelectWidth(target.rootClipTestState.request,
+                                         ::GetTickCount64(), 0, 0, 0, false);
+    ::RemovePropW(target.hwnd, kRootClipTestReadback);
+  }
+  if (target.root && !target.childClipTest)
+    target.root.Clip(nullptr);
+  ::RemovePropW(target.hwnd, kAppSdkRootClipActive);
+  ::RemovePropW(target.hwnd, kAppSdkRootClipWidth);
+  ::RemovePropW(target.hwnd, kAppSdkRootClipHeight);
+  ::RemovePropW(target.hwnd, kAppSdkRootClipRadius);
+  ::RemovePropW(target.hwnd, kAppSdkRootClipOffsetX);
+  ::RemovePropW(target.hwnd, kAppSdkRootClipOffsetY);
+}
+
+void FailChildClip(Target& target, HRESULT hr) noexcept {
+  if (!target.childClipTest || target.childClipFailed || target.pendingDetach)
+    return;
+  target.childClipFailed = true;
+  ::SetPropW(target.hwnd, kChildClipFailed, reinterpret_cast<HANDLE>(1));
+  ::SetPropW(
+      target.hwnd, kChildClipHresult,
+      reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(static_cast<DWORD>(hr))));
+  ::RemovePropW(target.hwnd, kChildClipReady);
+  ::RemovePropW(target.hwnd, kEdgeClipApplied);
+  if (target.childClipTimer) {
+    ::KillTimer(target.hwnd, kChildClipTimer);
+    target.childClipTimer = false;
+  }
+  // Permanently fence new publications before disconnecting the visual tree.
+  // A native call already in progress clears again when it returns.
+  if (target.childTarget)
+    target.childTarget->Stop();
+  ::ShowWindow(target.hwnd, SW_HIDE);
+  try {
+    if (target.childVisual)
+      target.childVisual.IsVisible(false);
+  } catch (...) {
+  }
+  try {
+    if (target.desktop)
+      target.desktop.Root(nullptr);
+  } catch (...) {
+  }
+  try {
+    if (target.acrylic)
+      target.acrylic.Close();
+  } catch (...) {
+  }
+  const HWND candidate =
+      reinterpret_cast<HWND>(::GetPropW(target.hwnd, kChildClipCandidate));
+  DWORD processId = 0;
+  if (candidate &&
+      ::GetWindowThreadProcessId(candidate, &processId) ==
+          ::GetCurrentThreadId() &&
+      processId == ::GetCurrentProcessId())
+    ::PostMessageW(candidate, kChildClipFailedMessage,
+                   reinterpret_cast<WPARAM>(target.hwnd), 0);
+  // Do not put a saved brush back in the system slot. The host stops this
+  // optional background and repaints the configured foreground skin.
+}
+
+weasel_acrylic::EdgeClipGeometry ReadEdgeClipGeometry(Target& target,
+                                                      int width,
+                                                      int height,
+                                                      int radius) {
+  if (target.alignedClip) {
+    return weasel_acrylic::SelectAlignedAcrylicClip(
+        width, height, radius,
+        DecodeEncodedIntProperty(target.hwnd,
+                                 weasel_acrylic::kAlignedClipWidth),
+        DecodeEncodedIntProperty(target.hwnd,
+                                 weasel_acrylic::kAlignedClipHeight),
+        DecodeEncodedIntProperty(target.hwnd,
+                                 weasel_acrylic::kAlignedClipRadius));
+  }
+  return weasel_acrylic::SelectEdgeClipGeometry(
+      target.edgeClipTest,
+      ::GetPropW(target.hwnd, kEdgeClipSample) == reinterpret_cast<HANDLE>(1),
+      target.edgeClipTest ? static_cast<int>(::GetDpiForWindow(target.hwnd))
+                          : 0,
+      width, height, radius, !target.dark);
+}
+
+bool EdgeClipInputsStillMatch(
+    Target& target,
+    int width,
+    int height,
+    int radius,
+    const weasel_acrylic::EdgeClipGeometry& observed) {
+  const auto current = ReadEdgeClipGeometry(target, width, height, radius);
+  return weasel_acrylic::EdgeClipReadbackMatches(
+      current, static_cast<float>(observed.x), static_cast<float>(observed.y),
+      static_cast<float>(observed.width), static_cast<float>(observed.height),
+      static_cast<float>(observed.radius), static_cast<float>(observed.radius));
+}
+
+void ObserveChildClip(Target& target,
+                      int width,
+                      int height,
+                      int radius,
+                      const weasel_acrylic::EdgeClipGeometry& expected) {
+  const auto sameObject = [](const auto& a, const auto& b) {
+    return a && b &&
+           a.template as<::IUnknown>().get() ==
+               b.template as<::IUnknown>().get();
+  };
+  winrt::check_hresult(target.childTarget->Failure());
+  winrt::check_hresult(target.childTarget->VerifyNativeSlotEmpty());
+  target.childVisual.Size(
+      {static_cast<float>(width), static_cast<float>(height)});
+  const auto offset = target.clipGeometry.Offset();
+  const auto size = target.clipGeometry.Size();
+  const auto corner = target.clipGeometry.CornerRadius();
+  const auto childSize = target.childVisual.Size();
+  const auto childOffset = target.childVisual.Offset();
+  if (!sameObject(target.desktop.Root(), target.root) ||
+      !sameObject(target.desktop.Compositor(), target.compositor) ||
+      !sameObject(target.childVisual.Compositor(), target.compositor) ||
+      !sameObject(target.root.Clip(), target.roundedClip) ||
+      !sameObject(target.roundedClip.Geometry(), target.clipGeometry) ||
+      !sameObject(target.childVisual.Parent(), target.root) ||
+      !weasel_acrylic::EdgeClipReadbackMatches(
+          expected, offset.x, offset.y, size.x, size.y, corner.x, corner.y) ||
+      childSize.x != width || childSize.y != height || childOffset.x != 0 ||
+      childOffset.y != 0 || childOffset.z != 0)
+    winrt::throw_hresult(E_UNEXPECTED);
+
+  // Recheck HWND geometry after COM calls that can re-enter the UI thread.
+  RECT client{};
+  if (target.pendingDetach || !::GetClientRect(target.hwnd, &client) ||
+      client.right != width || client.bottom != height ||
+      DecodeEncodedIntProperty(target.hwnd, kLocalClipWidth) != width ||
+      DecodeEncodedIntProperty(target.hwnd, kLocalClipHeight) != height ||
+      DecodeEncodedIntProperty(target.hwnd, kLocalClipRadius) != radius ||
+      !EdgeClipInputsStillMatch(target, width, height, radius, expected))
+    winrt::throw_hresult(E_UNEXPECTED);
+  HRGN region = ::CreateRectRgn(0, 0, 0, 0);
+  if (!region)
+    winrt::throw_hresult(LastWin32Error());
+  struct RegionScope {
+    HRGN handle;
+    ~RegionScope() { ::DeleteObject(handle); }
+  } regionScope{region};
+  const int existingRegion = ::GetWindowRgn(target.hwnd, region);
+  if (!target.childRegionRemoved || existingRegion != ERROR) {
+    // GetWindowRgn's ERROR alone is not proof of removal. The first removal
+    // requires a successful SetWindowRgn(NULL); later reads detect replacement.
+    if (!::SetWindowRgn(target.hwnd, nullptr, TRUE))
+      winrt::throw_hresult(LastWin32Error());
+    target.childRegionRemoved = true;
+  }
+  if (target.pendingDetach || ::GetWindowRgn(target.hwnd, region) != ERROR ||
+      !::GetClientRect(target.hwnd, &client) || client.right != width ||
+      client.bottom != height ||
+      DecodeEncodedIntProperty(target.hwnd, kLocalClipWidth) != width ||
+      DecodeEncodedIntProperty(target.hwnd, kLocalClipHeight) != height ||
+      DecodeEncodedIntProperty(target.hwnd, kLocalClipRadius) != radius ||
+      !EdgeClipInputsStillMatch(target, width, height, radius, expected))
+    winrt::throw_hresult(E_UNEXPECTED);
+  target.childVisual.IsVisible(true);
+  // The final visibility setter is also a COM re-entry boundary. Do not
+  // publish Applied/Ready for inputs that changed while making it visible.
+  if (target.pendingDetach || !::GetClientRect(target.hwnd, &client) ||
+      client.right != width || client.bottom != height ||
+      DecodeEncodedIntProperty(target.hwnd, kLocalClipWidth) != width ||
+      DecodeEncodedIntProperty(target.hwnd, kLocalClipHeight) != height ||
+      DecodeEncodedIntProperty(target.hwnd, kLocalClipRadius) != radius ||
+      !EdgeClipInputsStillMatch(target, width, height, radius, expected))
+    winrt::throw_hresult(E_UNEXPECTED);
+  ::SetPropW(target.hwnd, kChildClipPublications,
+             reinterpret_cast<HANDLE>(
+                 static_cast<ULONG_PTR>(target.childTarget->Publications())));
+  ::SetPropW(target.hwnd, kChildClipSetterHr,
+             reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(
+                 static_cast<DWORD>(target.childTarget->LastSetter()))));
+  ::SetPropW(target.hwnd, kChildClipThread,
+             reinterpret_cast<HANDLE>(
+                 static_cast<ULONG_PTR>(target.childTarget->LastThread())));
+}
+
+void UpdateAppSdkRootClip(Target& target) {
+  if (target.mode != TargetMode::AppSdkAcrylic || !target.hwnd || !target.root)
+    return;
+
+  if (target.childClipTest) {
+    if (target.childClipFailed)
+      return;
+    winrt::check_hresult(target.childTarget->Failure());
+    if (!target.acrylic || target.acrylic.IsClosed())
+      winrt::throw_hresult(RO_E_CLOSED);
+    if (!::IsWindowVisible(target.hwnd)) {
+      target.childVisual.IsVisible(false);
+      ::RemovePropW(target.hwnd, kChildClipReady);
+      ::RemovePropW(target.hwnd, kEdgeClipApplied);
+      return;
+    }
+  }
+
+  RECT client{};
+  if (!::GetClientRect(target.hwnd, &client))
+    winrt::throw_hresult(LastWin32Error());
+
+  const int width = client.right - client.left;
+  const int height = client.bottom - client.top;
+  const int requestedWidth =
+      DecodeEncodedIntProperty(target.hwnd, kLocalClipWidth);
+  const int requestedHeight =
+      DecodeEncodedIntProperty(target.hwnd, kLocalClipHeight);
+  int radius = DecodeEncodedIntProperty(target.hwnd, kLocalClipRadius);
+
+  if (width <= 0 || height <= 0 || requestedWidth != width ||
+      requestedHeight != height || radius < 0) {
+    ClearAppSdkRootClip(target);
+    return;
+  }
+
+  radius = min(radius, min(width, height) / 2);
+  int clipWidth = width;
+  if (target.rootClipTest) {
+    try {
+      clipWidth = RootClipTestWidth(target, width, height, radius);
+    } catch (winrt::hresult_error const& error) {
+      FailRootClipTest(target, error.code());
+    } catch (...) {
+      FailRootClipTest(target, E_UNEXPECTED);
+    }
+  }
+  auto effectiveClip = ReadEdgeClipGeometry(target, width, height, radius);
+  if (!target.childClipTest)
+    effectiveClip.width = clipWidth;
+  if (!target.clipGeometry) {
+    target.clipGeometry = target.compositor.CreateRoundedRectangleGeometry();
+    target.roundedClip =
+        target.compositor.CreateGeometricClip(target.clipGeometry);
+  }
+
+  target.clipGeometry.Offset({static_cast<float>(effectiveClip.x),
+                              static_cast<float>(effectiveClip.y)});
+  target.clipGeometry.Size({static_cast<float>(effectiveClip.width),
+                            static_cast<float>(effectiveClip.height)});
+  target.clipGeometry.CornerRadius(
+      {static_cast<float>(radius), static_cast<float>(radius)});
+  target.root.Clip(target.roundedClip);
+
+  if (target.childClipTest)
+    ObserveChildClip(target, width, height, radius, effectiveClip);
+
+  if (target.rootClipTest && !target.rootClipTestFailed) {
+    try {
+      ObserveRootClipTest(target, width, clipWidth, height, radius);
+    } catch (winrt::hresult_error const& error) {
+      FailRootClipTest(target, error.code());
+    } catch (...) {
+      FailRootClipTest(target, E_UNEXPECTED);
+    }
+  }
+  if (target.rootClipTestFailed) {
+    clipWidth = width;
+    effectiveClip.width = width;
+    target.clipGeometry.Size(
+        {static_cast<float>(width), static_cast<float>(height)});
+    ::SetPropW(target.hwnd, kRootClipTestMode,
+               reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(1)));
+  }
+
+  ::SetPropW(target.hwnd, kAppSdkRootClipActive,
+             reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(1)));
+  ::SetPropW(target.hwnd, kAppSdkRootClipWidth,
+             reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(
+                 static_cast<unsigned>(effectiveClip.width) + 1)));
+  ::SetPropW(target.hwnd, kAppSdkRootClipHeight,
+             reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(
+                 static_cast<unsigned>(effectiveClip.height) + 1)));
+  ::SetPropW(target.hwnd, kAppSdkRootClipRadius,
+             reinterpret_cast<HANDLE>(
+                 static_cast<ULONG_PTR>(static_cast<unsigned>(radius) + 1)));
+  ::SetPropW(
+      target.hwnd, kAppSdkRootClipOffsetX,
+      reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(effectiveClip.x + 1)));
+  ::SetPropW(
+      target.hwnd, kAppSdkRootClipOffsetY,
+      reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(effectiveClip.y + 1)));
+  if (target.rootClipTest && !target.rootClipTestFailed) {
+    // Publish last, after effective dimensions. This is actual object/value
+    // readback only; the screen marker is the separate presentation gate.
+    ::SetPropW(target.hwnd, kRootClipTestReadback,
+               reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(1)));
+  }
+  if (target.childClipTest) {
+    if (effectiveClip.x == 1)
+      ::SetPropW(target.hwnd, kEdgeClipApplied, reinterpret_cast<HANDLE>(1));
+    else
+      ::RemovePropW(target.hwnd, kEdgeClipApplied);
+    ::SetPropW(target.hwnd, kChildClipReady, reinterpret_cast<HANDLE>(1));
+  }
+}
+
+struct ThreadState {
+  DWORD threadId = ::GetCurrentThreadId();
+  bool roOwned = false;
+  bool busy = false;
+  bool stopping = false;
+  bool shutdownRequested = false;
+  HWND lifetimeWindow = nullptr;
+  HWND legacyTarget = nullptr;
+  // Cache factory-probe failures on this UI thread, not COM objects. A missing
+  // host runtime must not be probed again on every candidate recreation.
+  LONG hostFactoryFailureStage = 0;
+  HRESULT hostFactoryFailure = S_OK;
+  winrt::Windows::System::DispatcherQueueController ownedQueue{nullptr};
+  winrt::Windows::Foundation::IAsyncAction shutdownAction{nullptr};
+  std::map<HWND, std::unique_ptr<Target>> targets;
+};
+
+// A small thread record is retained until process exit. Explicit UI teardown
+// releases its WinRT resources. Abrupt host-thread/process exit is NOT a place
+// to execute COM cleanup from TLS destructors/loader-lock callbacks.
+thread_local ThreadState* t_state = nullptr;
+
+HRESULT FinishShutdown(ThreadState& state) noexcept;
+HRESULT BeginShutdown(ThreadState& state) noexcept;
+
+LRESULT CALLBACK LifetimeWindowProc(HWND hwnd,
+                                    UINT message,
+                                    WPARAM wParam,
+                                    LPARAM lParam) {
+  if (message == WM_NCCREATE) {
+    auto create = reinterpret_cast<CREATESTRUCTW*>(lParam);
+    ::SetWindowLongPtrW(hwnd, GWLP_USERDATA,
+                        reinterpret_cast<LONG_PTR>(create->lpCreateParams));
+  }
+  auto state =
+      reinterpret_cast<ThreadState*>(::GetWindowLongPtrW(hwnd, GWLP_USERDATA));
+  if (message == WM_TIMER && wParam == kShutdownTimer && state) {
+    FinishShutdown(*state);
+    return 0;
+  }
+  if (message == WM_NCDESTROY) {
+    ::SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+    if (state && state->lifetimeWindow == hwnd)
+      state->lifetimeWindow = nullptr;
+  }
+  return ::DefWindowProcW(hwnd, message, wParam, lParam);
+}
+
+HRESULT EnsureLifetimeWindow(ThreadState& state) noexcept {
+  if (state.lifetimeWindow)
+    return S_OK;
+  WNDCLASSEXW wc{};
+  wc.cbSize = sizeof(wc);
+  wc.hInstance = g_helperModule;
+  wc.lpfnWndProc = LifetimeWindowProc;
+  wc.lpszClassName = kLifetimeWindowClass;
+  if (!::RegisterClassExW(&wc)) {
+    if (::GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+      return LastWin32Error();
+    WNDCLASSEXW existing{};
+    existing.cbSize = sizeof(existing);
+    if (!::GetClassInfoExW(g_helperModule, kLifetimeWindowClass, &existing) ||
+        existing.lpfnWndProc != LifetimeWindowProc)
+      return HRESULT_FROM_WIN32(ERROR_INVALID_DATA);
+  }
+  state.lifetimeWindow =
+      ::CreateWindowExW(0, kLifetimeWindowClass, L"", 0, 0, 0, 0, 0,
+                        HWND_MESSAGE, nullptr, g_helperModule, &state);
+  return state.lifetimeWindow ? S_OK : LastWin32Error();
+}
+
+HRESULT ValidateWindow(HWND hwnd) noexcept;
+
+bool IsSearchHostProcess() noexcept {
+  wchar_t family[256] = {};
+  UINT32 familyLength = _countof(family);
+  if (::GetCurrentPackageFamilyName(&familyLength, family) != ERROR_SUCCESS ||
+      wcscmp(family, L"MicrosoftWindows.Client.CBS_cw5n1h2txyewy") != 0) {
+    return false;
+  }
+
+  wchar_t image[32768] = {};
+  const DWORD length = ::GetModuleFileNameW(nullptr, image, _countof(image));
+  if (!length || length >= _countof(image))
+    return false;
+  const wchar_t* file = image;
+  for (DWORD i = 0; i < length; ++i) {
+    if (image[i] == L'\\' || image[i] == L'/')
+      file = image + i + 1;
+  }
+  return _wcsicmp(file, L"SearchHost.exe") == 0;
+}
+
+bool IsWeaselServerProcess() noexcept {
+  wchar_t image[32768] = {};
+  const DWORD length = ::GetModuleFileNameW(nullptr, image, _countof(image));
+  if (!length || length >= _countof(image))
+    return false;
+  const wchar_t* file = image;
+  for (DWORD i = 0; i < length; ++i) {
+    if (image[i] == L'\\' || image[i] == L'/')
+      file = image + i + 1;
+  }
+  return _wcsicmp(file, L"WeaselServer.exe") == 0;
+}
+
+bool AllowPackagedSystemCompositionFallback(HWND hwnd) noexcept {
+  return weasel_acrylic::AllowPackagedSystemCompositionFallback(
+      g_runtimeRoute, IsSearchHostProcess(),
+      ::GetPropW(hwnd, kPackagedSystemCompositionFallback) != nullptr);
+}
+
+bool ForceOrdinarySystemCompositionDiagnostic() noexcept {
+  // R22 is off by default. Only an exact process-environment value of "1"
+  // enables B at target creation; restart the test host without it for A.
+  // WeaselServer and packaged Settings/Store/Search keep their normal routes.
+  if (g_runtimeRoute != 1 || IsWeaselServerProcess())
+    return false;
+  wchar_t value[2] = {};
+  return ::GetEnvironmentVariableW(kForceSystemCompositionEnvironment, value,
+                                   _countof(value)) == 1 &&
+         value[0] == L'1';
+}
+
+bool EnableRootClipDiagnostic() noexcept {
+  // Explicit opt-in for an isolated unpackaged Word process only. Never mix
+  // this experiment with R22's forced backend, Settings/Search, or the server.
+  if (g_runtimeRoute != 1 || ForceOrdinarySystemCompositionDiagnostic())
+    return false;
+  wchar_t value[2] = {};
+  if (::GetEnvironmentVariableW(kRootClipTestEnvironment, value,
+                                _countof(value)) != 1 ||
+      value[0] != L'1')
+    return false;
+  wchar_t image[32768] = {};
+  const DWORD length = ::GetModuleFileNameW(nullptr, image, _countof(image));
+  if (!length || length >= _countof(image))
+    return false;
+  const wchar_t* file = wcsrchr(image, L'\\');
+  return _wcsicmp(file ? file + 1 : image, L"WINWORD.EXE") == 0;
+}
+
+bool EnableEdgeClipDiagnostic() noexcept {
+  wchar_t value[2] = {};
+  return ::GetEnvironmentVariableW(kEdgeClipEnvironment, value,
+                                   _countof(value)) == 1 &&
+         value[0] == L'1';
+}
+
+bool EnableChildClipDiagnostic() noexcept {
+  if (g_runtimeRoute != 1 || ForceOrdinarySystemCompositionDiagnostic() ||
+      EnableRootClipDiagnostic())
+    return false;
+  wchar_t value[2] = {};
+  if (::GetEnvironmentVariableW(kChildClipEnvironment, value,
+                                _countof(value)) != 1 ||
+      value[0] != L'1')
+    return false;
+  wchar_t image[32768] = {};
+  const DWORD length = ::GetModuleFileNameW(nullptr, image, _countof(image));
+  if (!length || length >= _countof(image))
+    return false;
+  const wchar_t* file = wcsrchr(image, L'\\');
+  return _wcsicmp(file ? file + 1 : image, L"WINWORD.EXE") == 0;
+}
+
+HRESULT EnsureSystemCompositionThread(ThreadState& state) noexcept {
+  if (!state.roOwned) {
+    const HRESULT hr = ::RoInitialize(RO_INIT_SINGLETHREADED);
+    if (FAILED(hr))
+      return hr;
+    state.roOwned = true;
+  }
+  if (!::InitOnceExecuteOnce(&g_bootstrapOnce, InitializeBootstrapOnce, nullptr,
+                             nullptr)) {
+    return LastWin32Error();
+  }
+  if (FAILED(g_bootstrapResult))
+    return g_bootstrapResult;
+  return EnsureLifetimeWindow(state);
+}
+
+BOOL TryAttachSystemComposition(ThreadState& state,
+                                HWND hwnd,
+                                BOOL darkMode,
+                                bool forced = false) noexcept {
+  try {
+    Diagnose(130);
+    const HRESULT prepared = EnsureSystemCompositionThread(state);
+    if (FAILED(prepared))
+      winrt::throw_hresult(prepared);
+
+    Diagnose(135);
+    auto queue = winrt::Windows::System::DispatcherQueue::GetForCurrentThread();
+    if (!queue) {
+      DispatcherQueueOptions options{sizeof(DispatcherQueueOptions),
+                                     DQTYPE_THREAD_CURRENT, DQTAT_COM_STA};
+      winrt::check_hresult(::CreateDispatcherQueueController(
+          options,
+          reinterpret_cast<ABI::Windows::System::IDispatcherQueueController**>(
+              winrt::put_abi(state.ownedQueue))));
+    }
+
+    BOOL hostBrush = TRUE;
+    const HRESULT hostBrushHr = ::DwmSetWindowAttribute(
+        hwnd, kDwmaUseHostBackdropBrush, &hostBrush, sizeof(hostBrush));
+    ::SetPropW(hwnd, kSystemCompositionHostBrushHr,
+               reinterpret_cast<HANDLE>(
+                   static_cast<ULONG_PTR>(static_cast<DWORD>(hostBrushHr))));
+
+    auto target = std::make_unique<Target>();
+    target->hwnd = hwnd;
+    target->mode = TargetMode::SystemComposition;
+    target->forcedSystemComposition = forced;
+    target->dark = darkMode;
+
+    Diagnose(140);
+    target->compositor = winrt::Windows::UI::Composition::Compositor();
+
+    Diagnose(150);
+    namespace abi = ABI::Windows::UI::Composition::Desktop;
+    auto interop = target->compositor.as<abi::ICompositorDesktopInterop>();
+    winrt::check_hresult(interop->CreateDesktopWindowTarget(
+        hwnd, true,
+        reinterpret_cast<abi::IDesktopWindowTarget**>(
+            winrt::put_abi(target->desktop))));
+
+    Diagnose(155);
+    target->root = target->compositor.CreateContainerVisual();
+    target->root.RelativeSizeAdjustment({1.0f, 1.0f});
+    target->desktop.Root(target->root);
+
+    Diagnose(160);
+    auto source =
+        winrt::Windows::UI::Composition::CompositionEffectSourceParameter(
+            L"source");
+    auto blur = winrt::make_self<weasel_acrylic::GaussianBlurEffect>();
+    blur->Source = source;
+    blur->BlurAmount = 18.0f;
+    blur->Optimization = D2D1_GAUSSIANBLUR_OPTIMIZATION_BALANCED;
+    blur->BorderMode = D2D1_BORDER_MODE_HARD;
+
+    // Complete the generic packaged fallback's material. Keep Search and the
+    // explicitly forced R22 comparison on their existing blur-only recipe.
+    const bool material = weasel_acrylic::UsePackagedAcrylicMaterial(
+        g_runtimeRoute, IsSearchHostProcess(), forced,
+        ::GetPropW(hwnd, kPackagedSystemCompositionFallback) != nullptr);
+    auto effect =
+        material
+            ? weasel_acrylic::BuildAcrylicMaterial(*blur)
+            : blur.as<winrt::Windows::Graphics::Effects::IGraphicsEffect>();
+    target->blurFactory = target->compositor.CreateEffectFactory(effect);
+    target->blurBrush = target->blurFactory.CreateBrush();
+    target->hostBackdrop = target->compositor.CreateHostBackdropBrush();
+    if (!target->hostBackdrop)
+      winrt::throw_hresult(E_NOINTERFACE);
+    target->blurBrush.SetSourceParameter(L"source", target->hostBackdrop);
+    if (material) {
+      target->luminosityBrush = target->compositor.CreateColorBrush();
+      target->tintBrush = target->compositor.CreateColorBrush();
+      weasel_acrylic::SetAcrylicMaterialColors(
+          target->luminosityBrush, target->tintBrush, darkMode != FALSE);
+      target->blurBrush.SetSourceParameter(L"luminosity",
+                                           target->luminosityBrush);
+      target->blurBrush.SetSourceParameter(L"tint", target->tintBrush);
+    }
+
+    Diagnose(170);
+    target->blurVisual = target->compositor.CreateSpriteVisual();
+    target->blurVisual.RelativeSizeAdjustment({1.0f, 1.0f});
+    target->blurVisual.Brush(target->blurBrush);
+    target->clipGeometry = target->compositor.CreateRoundedRectangleGeometry();
+    target->roundedClip =
+        target->compositor.CreateGeometricClip(target->clipGeometry);
+    target->blurVisual.Clip(target->roundedClip);
+    UpdateSystemCompositionClip(*target);
+    target->root.Children().InsertAtTop(target->blurVisual);
+
+    winrt::check_hresult(ValidateWindow(hwnd));
+    ::SetPropW(hwnd, kSystemCompositionActive,
+               reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(1)));
+    if (forced) {
+      ::SetPropW(hwnd, kForcedSystemCompositionActive,
+                 reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(1)));
+    }
+    ::SetPropW(hwnd, kSystemCompositionStage,
+               reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(180)));
+    ::SetPropW(hwnd, kSystemCompositionHresult, nullptr);
+    state.targets.emplace(hwnd, std::move(target));
+    Diagnose(180);
+    return TRUE;
+  } catch (winrt::hresult_error const& error) {
+    Diagnose(t_lastStage, error.code(), error.message().c_str());
+  } catch (...) {
+    Diagnose(t_lastStage, E_UNEXPECTED);
+  }
+
+  ::SetPropW(hwnd, kSystemCompositionStage,
+             reinterpret_cast<HANDLE>(
+                 static_cast<ULONG_PTR>(static_cast<DWORD>(t_lastStage))));
+  ::SetPropW(hwnd, kSystemCompositionHresult,
+             reinterpret_cast<HANDLE>(
+                 static_cast<ULONG_PTR>(static_cast<DWORD>(t_lastHresult))));
+  return FALSE;
+}
+
+// This is called by the host's NORMAL message pump (WM_TIMER). No nested
+// message pump is introduced during TSF Deactivate or candidate destruction.
+HRESULT FinishShutdown(ThreadState& state) noexcept {
+  if (!state.stopping || state.busy)
+    return S_FALSE;
+  state.busy = true;
+  HRESULT result = S_OK;
+  try {
+    if (state.shutdownAction) {
+      if (state.shutdownAction.Status() ==
+          winrt::Windows::Foundation::AsyncStatus::Started) {
+        state.busy = false;
+        return S_FALSE;
+      }
+      state.shutdownAction.GetResults();
+      state.shutdownAction = nullptr;
+    }
+    state.ownedQueue = nullptr;
+    if (state.roOwned) {
+      ::RoUninitialize();
+      state.roOwned = false;
+    }
+    state.stopping = false;
+    state.shutdownRequested = false;
+    Diagnose(120);
+  } catch (winrt::hresult_error const& error) {
+    result = error.code();
+    Diagnose(110, result, error.message().c_str());
+  } catch (...) {
+    result = E_UNEXPECTED;
+    Diagnose(110, result);
+  }
+  if (state.lifetimeWindow) {
+    ::KillTimer(state.lifetimeWindow, kShutdownTimer);
+    if (SUCCEEDED(result)) {
+      HWND window = state.lifetimeWindow;
+      state.lifetimeWindow = nullptr;
+      ::DestroyWindow(window);
+    }
+  }
+  // On failure, retain the queue/action/pinned module rather than unloading
+  // asynchronous code. Subsequent initialization will fall back.
+  state.busy = false;
+  return result;
+}
+
+HRESULT BeginShutdown(ThreadState& state) noexcept {
+  if (state.busy || !state.targets.empty())
+    return HRESULT_FROM_WIN32(ERROR_BUSY);
+  if (state.stopping)
+    return S_FALSE;
+  if (!state.roOwned)
+    return S_OK;
+  state.stopping = true;
+  Diagnose(110);
+  try {
+    if (state.ownedQueue)
+      state.shutdownAction = state.ownedQueue.ShutdownQueueAsync();
+    if (state.shutdownAction &&
+        state.shutdownAction.Status() ==
+            winrt::Windows::Foundation::AsyncStatus::Started) {
+      if (!::SetTimer(state.lifetimeWindow, kShutdownTimer, 25, nullptr))
+        return LastWin32Error();
+      return S_FALSE;
+    }
+    return FinishShutdown(state);
+  } catch (winrt::hresult_error const& error) {
+    Diagnose(110, error.code(), error.message().c_str());
+    return error.code();
+  } catch (...) {
+    Diagnose(110, E_UNEXPECTED);
+    return E_UNEXPECTED;
+  }
+}
+
+void FlushDetachedTargets(ThreadState& state) noexcept {
+  // Remove ownership BEFORE releasing COM objects, which may re-enter us.
+  for (;;) {
+    auto it = state.targets.begin();
+    while (it != state.targets.end() && !it->second->pendingDetach)
+      ++it;
+    if (it == state.targets.end())
+      break;
+    auto target = std::move(it->second);
+    state.targets.erase(it);
+    target.reset();
+  }
+}
+
+struct BusyScope {
+  ThreadState& state;
+  explicit BusyScope(ThreadState& s) : state(s) { state.busy = true; }
+  ~BusyScope() {
+    FlushDetachedTargets(state);
+    state.busy = false;
+    if (state.shutdownRequested && state.targets.empty())
+      BeginShutdown(state);
+  }
+};
+
+void CALLBACK RootClipTestTimerProc(HWND hwnd,
+                                    UINT,
+                                    UINT_PTR timer,
+                                    DWORD) noexcept {
+  if (timer != kRootClipTestTimer || !t_state || t_state->busy ||
+      t_state->stopping)
+    return;
+  auto it = t_state->targets.find(hwnd);
+  if (it == t_state->targets.end() || !it->second->rootClipTest ||
+      it->second->pendingDetach)
+    return;
+  BusyScope guard(*t_state);
+  try {
+    UpdateAppSdkRootClip(*it->second);
+  } catch (winrt::hresult_error const& error) {
+    FailRootClipTest(*it->second, error.code());
+  } catch (...) {
+    FailRootClipTest(*it->second, E_UNEXPECTED);
+  }
+}
+
+void CALLBACK ChildClipTimerProc(HWND hwnd,
+                                 UINT,
+                                 UINT_PTR timer,
+                                 DWORD) noexcept {
+  if (timer != kChildClipTimer || !t_state || t_state->busy ||
+      t_state->stopping)
+    return;
+  auto it = t_state->targets.find(hwnd);
+  if (it == t_state->targets.end() || !it->second->childClipTest ||
+      it->second->pendingDetach || it->second->childClipFailed)
+    return;
+  BusyScope guard(*t_state);
+  try {
+    UpdateAppSdkRootClip(*it->second);
+  } catch (winrt::hresult_error const& error) {
+    FailChildClip(*it->second, error.code());
+  } catch (...) {
+    FailChildClip(*it->second, E_UNEXPECTED);
+  }
+}
+
+// Keep host-owned factories local to Attach. No cross-thread/static factory
+// cache and no direct DllGetActivationFactory or system-package path loading.
+struct HostRuntimeFactories {
+  winrt::Windows::Foundation::IActivationFactory acrylic{nullptr};
+  winrt::Windows::Foundation::IActivationFactory configuration{nullptr};
+  winrt::Microsoft::UI::Composition::SystemBackdrops::
+      IDesktopAcrylicControllerStatics support{nullptr};
+};
+
+HRESULT ProbeHostFactories(ThreadState& state, HostRuntimeFactories& host) {
+  if (state.hostFactoryFailureStage) {
+    Diagnose(state.hostFactoryFailureStage, state.hostFactoryFailure,
+             L"Cached host factory failure; restart the host to retry.");
+    return state.hostFactoryFailure;
+  }
+  try {
+    Diagnose(8);
+    const winrt::hstring acrylicName{
+        L"Microsoft.UI.Composition.SystemBackdrops.DesktopAcrylicController"};
+    winrt::check_hresult(::RoGetActivationFactory(
+        reinterpret_cast<HSTRING>(winrt::get_abi(acrylicName)),
+        winrt::guid_of<winrt::Windows::Foundation::IActivationFactory>(),
+        winrt::put_abi(host.acrylic)));
+    if (!host.acrylic)
+      winrt::throw_hresult(E_NOINTERFACE);
+
+    Diagnose(9);
+    const winrt::hstring configurationName{
+        L"Microsoft.UI.Composition.SystemBackdrops."
+        L"SystemBackdropConfiguration"};
+    winrt::check_hresult(::RoGetActivationFactory(
+        reinterpret_cast<HSTRING>(winrt::get_abi(configurationName)),
+        winrt::guid_of<winrt::Windows::Foundation::IActivationFactory>(),
+        winrt::put_abi(host.configuration)));
+    if (!host.configuration)
+      winrt::throw_hresult(E_NOINTERFACE);
+
+    Diagnose(12);
+    host.support =
+        host.acrylic.as<winrt::Microsoft::UI::Composition::SystemBackdrops::
+                            IDesktopAcrylicControllerStatics>();
+    return S_OK;
+  } catch (winrt::hresult_error const& error) {
+    Diagnose(t_lastStage, error.code(), error.message().c_str());
+  } catch (...) {
+    Diagnose(t_lastStage, E_UNEXPECTED);
+  }
+  state.hostFactoryFailureStage = t_lastStage;
+  state.hostFactoryFailure = t_lastHresult;
+  return t_lastHresult;
+}
+
+HRESULT PrepareThread(ThreadState& state, HostRuntimeFactories& host) {
+  if (!state.roOwned) {
+    const HRESULT hr = ::RoInitialize(RO_INIT_SINGLETHREADED);
+    if (FAILED(hr))
+      return hr;  // Never change an MTA host's apartment to STA.
+    state.roOwned = true;
+  }
+  Diagnose(6);  // explicit bootstrap, not inside LoadLibrary/DllMain
+  if (!::InitOnceExecuteOnce(&g_bootstrapOnce, InitializeBootstrapOnce, nullptr,
+                             nullptr))
+    return LastWin32Error();
+  if (FAILED(g_bootstrapResult)) {
+    Diagnose(g_runtimeFailureStage, g_bootstrapResult);
+    return g_bootstrapResult;
+  }
+  if (g_runtimeRoute == 2) {
+    const HRESULT probe = ProbeHostFactories(state, host);
+    if (FAILED(probe))
+      return probe;
+    Diagnose(13);  // host factories passed; now prepare lifetime bookkeeping
+  }
+  return EnsureLifetimeWindow(state);
+}
+
+HRESULT ValidateWindow(HWND hwnd) noexcept {
+  DWORD process = 0;
+  const DWORD thread = ::GetWindowThreadProcessId(hwnd, &process);
+  if (!hwnd || !thread || process != ::GetCurrentProcessId())
+    return E_INVALIDARG;
+  return thread == ::GetCurrentThreadId() ? S_OK : RPC_E_WRONG_THREAD;
+}
+
+}  // namespace
+
+extern "C" __declspec(dllexport) LONG WINAPI
+WeaselAcrylicAppSdkGetLifetimePolicyVersion() {
+  return 3;
+}
+extern "C" __declspec(dllexport) LONG WINAPI WeaselAcrylicAppSdkGetLastStage() {
+  return t_lastStage;
+}
+extern "C" __declspec(dllexport) LONG WINAPI
+WeaselAcrylicAppSdkGetLastHresult() {
+  return static_cast<LONG>(t_lastHresult);
+}
+extern "C" __declspec(dllexport) LPCWSTR WINAPI
+WeaselAcrylicAppSdkGetLastMessage() {
+  return t_lastMessage;
+}
+
+extern "C" __declspec(dllexport) BOOL WINAPI
+WeaselAcrylicAppSdkAttach(HWND hwnd, BOOL darkMode) {
+  Diagnose(1);
+  const HRESULT valid = ValidateWindow(hwnd);
+  if (FAILED(valid)) {
+    Diagnose(1, valid);
+    return FALSE;
+  }
+  // Read-only observers can distinguish this helper from the CI #18 build.
+  ::SetPropW(hwnd, L"WeaselAcrylicHostProbeVersion",
+             reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(1)));
+  if (!t_state)
+    t_state = new (std::nothrow) ThreadState;
+  if (!t_state) {
+    Diagnose(1, E_OUTOFMEMORY);
+    return FALSE;
+  }
+  auto& state = *t_state;
+  if (state.stopping && !state.busy)
+    FinishShutdown(state);
+  if (state.busy || state.stopping) {
+    Diagnose(1, HRESULT_FROM_WIN32(ERROR_BUSY));
+    return FALSE;
+  }
+  state.shutdownRequested = false;
+  BusyScope guard(state);
+  try {
+    if (state.targets.find(hwnd) != state.targets.end()) {
+      Diagnose(100);
+      return TRUE;
+    }
+    Diagnose(5);
+    HostRuntimeFactories hostFactories;
+    const HRESULT prepared = PrepareThread(state, hostFactories);
+    ::SetPropW(
+        hwnd, L"WeaselAcrylicRuntimeRoute",
+        reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(g_runtimeRoute)));
+    if (FAILED(prepared)) {
+      const LONG appStage = t_lastStage;
+      Diagnose(appStage, prepared);
+      ::SetPropW(hwnd, kAppSdkFailureStage,
+                 reinterpret_cast<HANDLE>(
+                     static_cast<ULONG_PTR>(static_cast<DWORD>(appStage))));
+      ::SetPropW(hwnd, kAppSdkFailureHresult,
+                 reinterpret_cast<HANDLE>(
+                     static_cast<ULONG_PTR>(static_cast<DWORD>(prepared))));
+      if (AllowPackagedSystemCompositionFallback(hwnd))
+        return TryAttachSystemComposition(state, hwnd, darkMode);
+      return FALSE;
+    }
+
+    if (ForceOrdinarySystemCompositionDiagnostic()) {
+      if (TryAttachSystemComposition(state, hwnd, darkMode, true)) {
+        return TRUE;
+      }
+      ::RemovePropW(hwnd, kForcedSystemCompositionActive);
+      // Fail safe: continue into the existing AppSDK Desktop Acrylic route.
+    }
+
+    using namespace winrt::Microsoft::UI::Composition::SystemBackdrops;
+    Diagnose(10);
+    const bool supported = g_runtimeRoute == 2
+                               ? hostFactories.support.IsSupported()
+                               : DesktopAcrylicController::IsSupported();
+    if (!supported)
+      winrt::throw_hresult(HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED));
+    Diagnose(20);
+    BOOL enabled = TRUE;
+    winrt::check_hresult(::DwmSetWindowAttribute(
+        hwnd, kDwmaUseHostBackdropBrush, &enabled, sizeof(enabled)));
+
+    Diagnose(30);
+    auto queue = winrt::Windows::System::DispatcherQueue::GetForCurrentThread();
+    if (!queue) {
+      DispatcherQueueOptions options{sizeof(DispatcherQueueOptions),
+                                     DQTYPE_THREAD_CURRENT, DQTAT_COM_STA};
+      winrt::check_hresult(::CreateDispatcherQueueController(
+          options,
+          reinterpret_cast<ABI::Windows::System::IDispatcherQueueController**>(
+              winrt::put_abi(state.ownedQueue))));
+    }
+    auto target = std::make_unique<Target>();
+    target->hwnd = hwnd;
+    target->mode = TargetMode::AppSdkAcrylic;
+    target->rootClipTest = EnableRootClipDiagnostic();
+    target->childClipTest = EnableChildClipDiagnostic();
+    target->edgeClipTest = target->childClipTest && EnableEdgeClipDiagnostic();
+    target->alignedClip = weasel_acrylic::UseAlignedAcrylicClip(
+        g_runtimeRoute, IsWeaselServerProcess(),
+        target->rootClipTest || target->childClipTest ||
+            ForceOrdinarySystemCompositionDiagnostic());
+    target->childClipTest = target->childClipTest || target->alignedClip;
+    Diagnose(40);
+    target->compositor = winrt::Windows::UI::Composition::Compositor();
+    Diagnose(50);
+    namespace abi = ABI::Windows::UI::Composition::Desktop;
+    auto interop = target->compositor.as<abi::ICompositorDesktopInterop>();
+    winrt::check_hresult(interop->CreateDesktopWindowTarget(
+        hwnd, true,
+        reinterpret_cast<abi::IDesktopWindowTarget**>(
+            winrt::put_abi(target->desktop))));
+    Diagnose(60);
+    target->root = target->compositor.CreateContainerVisual();
+    target->root.RelativeSizeAdjustment({1.0f, 1.0f});
+    target->desktop.Root(target->root);
+    if (target->childClipTest) {
+      target->childVisual = target->compositor.CreateSpriteVisual();
+      target->childVisual.IsVisible(false);
+      target->root.Children().InsertAtBottom(target->childVisual);
+      winrt::check_hresult(Microsoft::WRL::MakeAndInitialize<
+                           weasel_acrylic::ChildBackdropTarget>(
+          &target->childTarget, target->desktop.as<::IUnknown>().get(),
+          target->childVisual.as<::IUnknown>().get()));
+      if (!::SetPropW(hwnd, kChildClipEnabled, reinterpret_cast<HANDLE>(1)))
+        winrt::throw_last_error();
+      if (target->alignedClip &&
+          !::SetPropW(hwnd, weasel_acrylic::kAlignedClipEnabled,
+                      reinterpret_cast<HANDLE>(1)))
+        winrt::throw_last_error();
+      if (target->edgeClipTest)
+        ::SetPropW(hwnd, kEdgeClipEnabled, reinterpret_cast<HANDLE>(1));
+    }
+    Diagnose(70);
+    target->configuration =
+        g_runtimeRoute == 2
+            ? hostFactories.configuration
+                  .ActivateInstance<SystemBackdropConfiguration>()
+            : SystemBackdropConfiguration();
+    // ActivateInstance<T> may return null when the default interface is absent.
+    if (!target->configuration)
+      winrt::throw_hresult(E_NOINTERFACE);
+    target->configuration.IsInputActive(true);
+    target->configuration.Theme(darkMode ? SystemBackdropTheme::Dark
+                                         : SystemBackdropTheme::Light);
+    target->dark = darkMode;
+    Diagnose(80);
+    target->acrylic =
+        g_runtimeRoute == 2
+            ? hostFactories.acrylic.ActivateInstance<DesktopAcrylicController>()
+            : DesktopAcrylicController();
+    if (!target->acrylic)
+      winrt::throw_hresult(E_NOINTERFACE);
+    target->acrylic.Kind(DesktopAcrylicKind::Base);
+    target->acrylic.SetSystemBackdropConfiguration(target->configuration);
+    Diagnose(90);
+    winrt::Windows::UI::Composition::CompositionTarget controllerTarget =
+        target->desktop;
+    if (target->childTarget) {
+      winrt::copy_from_abi(
+          controllerTarget,
+          static_cast<weasel_acrylic::child_abi::ICompositionTarget*>(
+              target->childTarget.Get()));
+    }
+    if (!target->acrylic.SetTarget(
+            winrt::Microsoft::UI::GetWindowIdFromWindow(hwnd),
+            controllerTarget))
+      winrt::throw_hresult(E_FAIL);
+    UpdateAppSdkRootClip(*target);
+    if (target->childClipTest) {
+      if (!::SetTimer(hwnd, kChildClipTimer, 50, ChildClipTimerProc))
+        winrt::throw_hresult(LastWin32Error());
+      target->childClipTimer = true;
+    }
+    winrt::check_hresult(ValidateWindow(hwnd));
+    state.targets.emplace(hwnd, std::move(target));
+    Diagnose(100);
+    return TRUE;
+  } catch (winrt::hresult_error const& error) {
+    Diagnose(t_lastStage, error.code(), error.message().c_str());
+  } catch (...) {
+    Diagnose(t_lastStage, E_UNEXPECTED);
+  }
+
+  const LONG appStage = t_lastStage;
+  const HRESULT appHr = t_lastHresult;
+  ::SetPropW(hwnd, kAppSdkFailureStage,
+             reinterpret_cast<HANDLE>(
+                 static_cast<ULONG_PTR>(static_cast<DWORD>(appStage))));
+  ::SetPropW(hwnd, kAppSdkFailureHresult,
+             reinterpret_cast<HANDLE>(
+                 static_cast<ULONG_PTR>(static_cast<DWORD>(appHr))));
+  if (AllowPackagedSystemCompositionFallback(hwnd))
+    return TryAttachSystemComposition(state, hwnd, darkMode);
+  return FALSE;
+}
+
+extern "C" __declspec(dllexport) BOOL WINAPI
+WeaselAcrylicAppSdkIsWindowActive(HWND hwnd) {
+  if (!t_state || t_state->stopping)
+    return FALSE;
+  auto it = t_state->targets.find(hwnd);
+  if (it == t_state->targets.end() || it->second->pendingDetach)
+    return FALSE;
+  return it->second->IsActive() ? TRUE : FALSE;
+}
+
+extern "C" __declspec(dllexport) void WINAPI
+WeaselAcrylicAppSdkSetWindowTheme(HWND hwnd, BOOL darkMode) {
+  if (!t_state || t_state->busy || t_state->stopping)
+    return;
+  BusyScope guard(*t_state);
+  auto it = t_state->targets.find(hwnd);
+  if (it == t_state->targets.end())
+    return;
+  if (it->second->childClipFailed)
+    return;
+  if (it->second->mode == TargetMode::SystemComposition) {
+    try {
+      UpdateSystemCompositionClip(*it->second);
+      if (it->second->luminosityBrush && it->second->dark != darkMode) {
+        weasel_acrylic::SetAcrylicMaterialColors(it->second->luminosityBrush,
+                                                 it->second->tintBrush,
+                                                 darkMode != FALSE);
+      }
+      it->second->dark = darkMode;
+    } catch (winrt::hresult_error const& error) {
+      Diagnose(75, error.code(), error.message().c_str());
+    } catch (...) {
+      Diagnose(75, E_UNEXPECTED);
+    }
+    return;
+  }
+  try {
+    UpdateAppSdkRootClip(*it->second);
+  } catch (winrt::hresult_error const& error) {
+    if (it->second->childClipTest) {
+      FailChildClip(*it->second, error.code());
+      return;
+    }
+    if (it->second->rootClipTest)
+      FailRootClipTest(*it->second, error.code());
+    Diagnose(76, error.code(), error.message().c_str());
+  } catch (...) {
+    if (it->second->childClipTest) {
+      FailChildClip(*it->second, E_UNEXPECTED);
+      return;
+    }
+    if (it->second->rootClipTest)
+      FailRootClipTest(*it->second, E_UNEXPECTED);
+    Diagnose(76, E_UNEXPECTED);
+  }
+  if (it->second->dark == darkMode)
+    return;
+  try {
+    using namespace winrt::Microsoft::UI::Composition::SystemBackdrops;
+    it->second->configuration.IsInputActive(true);
+    it->second->configuration.Theme(darkMode ? SystemBackdropTheme::Dark
+                                             : SystemBackdropTheme::Light);
+    it->second->dark = darkMode;
+  } catch (winrt::hresult_error const& error) {
+    if (it->second->childClipTest)
+      FailChildClip(*it->second, error.code());
+    Diagnose(70, error.code(), error.message().c_str());
+  } catch (...) {
+    if (it->second->childClipTest)
+      FailChildClip(*it->second, E_UNEXPECTED);
+    Diagnose(70, E_UNEXPECTED);
+  }
+}
+
+extern "C" __declspec(dllexport) void WINAPI
+WeaselAcrylicAppSdkDetach(HWND hwnd) {
+  if (!t_state)
+    return;
+  auto it = t_state->targets.find(hwnd);
+  if (it == t_state->targets.end())
+    return;
+  it->second->pendingDetach = true;
+  if (t_state->legacyTarget == hwnd)
+    t_state->legacyTarget = nullptr;
+  if (!t_state->busy) {
+    BusyScope guard(*t_state);
+  }
+}
+
+// TSF calls this only for full UI destruction, not for every Esc or commit.
+// Completion is driven by the host's normal message pump, entirely in this
+// pinned helper. No callback points into the potentially unloaded TSF DLL.
+extern "C" __declspec(dllexport) HRESULT WINAPI
+WeaselAcrylicAppSdkRequestThreadShutdown() {
+  if (!t_state || !t_state->roOwned)
+    return S_OK;
+  if (!t_state->targets.empty())
+    return HRESULT_FROM_WIN32(ERROR_BUSY);
+  t_state->shutdownRequested = true;
+  return t_state->busy ? S_FALSE : BeginShutdown(*t_state);
+}
+
+// Compatibility entry points for the existing isolated smoke script.
+extern "C" __declspec(dllexport) BOOL WINAPI
+WeaselAcrylicAppSdkInitialize(HWND hwnd, BOOL darkMode) {
+  const BOOL ok = WeaselAcrylicAppSdkAttach(hwnd, darkMode);
+  if (ok)
+    t_state->legacyTarget = hwnd;
+  return ok;
+}
+extern "C" __declspec(dllexport) BOOL WINAPI WeaselAcrylicAppSdkIsActive() {
+  return t_state ? WeaselAcrylicAppSdkIsWindowActive(t_state->legacyTarget)
+                 : FALSE;
+}
+extern "C" __declspec(dllexport) void WINAPI
+WeaselAcrylicAppSdkSetDarkMode(BOOL darkMode) {
+  if (t_state)
+    WeaselAcrylicAppSdkSetWindowTheme(t_state->legacyTarget, darkMode);
+}
+extern "C" __declspec(dllexport) void WINAPI WeaselAcrylicAppSdkShutdown() {
+  if (t_state)
+    WeaselAcrylicAppSdkDetach(t_state->legacyTarget);
+}
+
+// Server-only final drain. Clients use RequestThreadShutdown above, never a
+// nested message pump from inside TSF Deactivate/DllMain.
+extern "C" __declspec(dllexport) HRESULT WINAPI
+WeaselAcrylicAppSdkShutdownThread(DWORD timeoutMilliseconds) {
+  if (!t_state)
+    return S_OK;
+  auto& state = *t_state;
+  if (state.busy || !state.targets.empty())
+    return HRESULT_FROM_WIN32(ERROR_BUSY);
+  HRESULT hr = WeaselAcrylicAppSdkRequestThreadShutdown();
+  if (FAILED(hr))
+    return hr;
+  const ULONGLONG start = ::GetTickCount64();
+  bool sawQuit = false;
+  int quitCode = 0;
+  while (state.stopping) {
+    hr = FinishShutdown(state);
+    if (FAILED(hr) || !state.stopping)
+      break;
+    if (::GetTickCount64() - start >= timeoutMilliseconds) {
+      hr = HRESULT_FROM_WIN32(ERROR_TIMEOUT);
+      Diagnose(110, hr);
+      break;
+    }
+    MSG msg{};
+    for (int i = 0; i < 64 && ::PeekMessageW(&msg, nullptr, 0, 0, PM_REMOVE);
+         ++i) {
+      if (msg.message == WM_QUIT) {
+        sawQuit = true;
+        quitCode = static_cast<int>(msg.wParam);
+      } else {
+        ::TranslateMessage(&msg);
+        ::DispatchMessageW(&msg);
+      }
+    }
+    if (state.stopping)
+      ::MsgWaitForMultipleObjectsEx(0, nullptr, 10, QS_ALLINPUT,
+                                    MWMO_INPUTAVAILABLE);
+  }
+  if (sawQuit)
+    ::PostQuitMessage(quitCode);
+  return hr;
+}

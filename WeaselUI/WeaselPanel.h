@@ -1,6 +1,7 @@
 #pragma once
 #include <WeaselIPCData.h>
 #include <WeaselUI.h>
+#include <WeaselUserSettings.h>
 #include "StandardLayout.h"
 #include "Layout.h"
 #include "GdiplusBlur.h"
@@ -29,6 +30,7 @@ class WeaselPanel
   MESSAGE_HANDLER(WM_CREATE, OnCreate)
   MESSAGE_HANDLER(WM_DESTROY, OnDestroy)
   MESSAGE_HANDLER(WM_DPICHANGED, OnDpiChanged)
+  MESSAGE_HANDLER(weasel::UserSettingsChangedMessage(), OnUserSettingsChanged)
   MESSAGE_HANDLER(WM_MOUSEACTIVATE, OnMouseActivate)
   MESSAGE_HANDLER(WM_LBUTTONUP, OnLeftClickedUp)
   MESSAGE_HANDLER(WM_LBUTTONDOWN, OnLeftClickedDown)
@@ -41,6 +43,10 @@ class WeaselPanel
   LRESULT OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
   LRESULT OnDestroy(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
   LRESULT OnDpiChanged(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL& bHandled);
+  LRESULT OnUserSettingsChanged(UINT uMsg,
+                                WPARAM wParam,
+                                LPARAM lParam,
+                                BOOL& bHandled);
   LRESULT OnMouseActivate(UINT uMsg,
                           WPARAM wParam,
                           LPARAM lParam,
@@ -62,9 +68,23 @@ class WeaselPanel
 
   void MoveTo(RECT const& rc);
   void Refresh();
+  void ReloadUserSettings();
   void DoPaint(CDCHandle dc);
   bool GetIsReposition() { return m_istorepos; }
   void RedrawWindow();
+  void ShowAcrylicBackdrop();
+  void HideAcrylicBackdrop();
+  bool QueryAcrylicServer(DWORD& processId,
+                          DWORD& sessionId,
+                          DWORD& stage,
+                          DWORD& error) const {
+    processId = 0;
+    sessionId = 0;
+    stage = 11;  // No TSF pipe query callback installed.
+    error = ERROR_NOT_SUPPORTED;
+    return m_acrylicServerQuery &&
+           m_acrylicServerQuery(processId, sessionId, stage, error);
+  }
 
   static VOID CALLBACK OnTimer(_In_ HWND hwnd,
                                _In_ UINT uMsg,
@@ -85,6 +105,12 @@ class WeaselPanel
   void _CreateLayout();
   void _ResizeWindow();
   void _RepositionWindow(const bool& adj = false);
+  bool _UpdateAcrylicBackdropMode();
+  bool _CreateAcrylicBackdrop();
+  void _DestroyAcrylicBackdrop();
+  void _SyncAcrylicBackdrop();
+  void _UpdateAcrylicBackdropTheme();
+  bool _ShouldShowAcrylicBackdrop() const;
   bool _DrawPreedit(const Text& text, CDCHandle dc, const CRect& rc);
   bool _DrawPreeditBack(const Text& text, CDCHandle dc, const CRect& rc);
   bool _DrawCandidates(CDCHandle& dc, bool back = false);
@@ -111,6 +137,7 @@ class WeaselPanel
   weasel::UIStyle& m_style;
   weasel::UIStyle& m_ostyle;
   const bool& m_in_server;
+  const weasel::UI::AcrylicServerQuery& m_acrylicServerQuery;
 
   CRect m_inputPos;
   int m_offsetys[MAX_CANDIDATES_COUNT];  // offset y for candidates when
@@ -149,4 +176,7 @@ class WeaselPanel
   int m_hoverIndex = -1;
   HMONITOR m_hMonitor = NULL;
   bool m_redraw_by_monitor_change = false;
+  HWND m_acrylicBackdrop = NULL;
+  bool m_acrylicBackdropEnabled = false;
+  bool m_acrylicRequested = false;
 };

@@ -235,6 +235,9 @@ struct UIStyle {
   // custom icon settings
   std::wstring current_zhung_icon;
   std::wstring current_ascii_icon;
+  // Server-only. Keep this out of the Boost IPC archive so that an upgraded
+  // server remains compatible with TSF clients already loaded in applications.
+  std::wstring current_caps_icon;
   std::wstring current_half_icon;
   std::wstring current_full_icon;
   // label format and mark_text
@@ -311,6 +314,7 @@ struct UIStyle {
         preedit_type(COMPOSITION),
         current_zhung_icon(),
         current_ascii_icon(),
+        current_caps_icon(),
         current_half_icon(),
         current_full_icon(),
         label_text_format(L"%s."),
@@ -380,6 +384,7 @@ struct UIStyle {
         ascii_tip_follow_cursor != st.ascii_tip_follow_cursor ||
         current_zhung_icon != st.current_zhung_icon ||
         current_ascii_icon != st.current_ascii_icon ||
+        current_caps_icon != st.current_caps_icon ||
         current_half_icon != st.current_half_icon ||
         current_full_icon != st.current_full_icon ||
         enhanced_position != st.enhanced_position ||
