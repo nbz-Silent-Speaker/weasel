@@ -1,6 +1,36 @@
 ﻿【小狼毫】輸入法
 ================
 
+本仓库基于[原版小狼毫 Weasel](https://github.com/rime/weasel)和[中州韵 Rime 输入法引擎](https://github.com/rime/librime)开发，是增加图形化设置与万象拼音 Lite 的定制分支，**不是 Rime 官方发布版**。原版小狼毫的介绍、使用方法和致谢保留在下文。
+
+[![下载本版](https://img.shields.io/github/v/release/nbz-Silent-Speaker/weasel?label=%E4%B8%8B%E8%BD%BD%E6%9C%AC%E7%89%88)](https://github.com/nbz-Silent-Speaker/weasel/releases)
+[![本版构建状态](https://github.com/nbz-Silent-Speaker/weasel/actions/workflows/ci.yml/badge.svg)](https://github.com/nbz-Silent-Speaker/weasel/actions/workflows/ci.yml)
+
+## 本版功能
+
+| 功能 | 内容 |
+| --- | --- |
+| 集中设置 | 从任务栏图标右键菜单的「输入法设定」进入，管理输入方案与语法模型、候选框配色、候选框字体、任务栏图标；各页面的待应用更改会统一提示。 |
+| 万象拼音 Lite | 安装包内置可直接使用的 Lite 方案；设置页可选择方案、检查和安装更新。更新优先使用 CNB 国内源，保留用户词典、根目录的 `*.custom.yaml` 和其他方案目录。 |
+| 可选语法模型 | 万象简体 LTS 语法模型可单独下载、更新或移除。**语法模型不包含在安装包中**；不下载也能使用 Lite 方案。 |
+| 候选框外观 | 通过图形界面设置浅色、深色配色及不同文字类型的字体、字号，并预览候选框；支持亚克力磨砂效果。 |
+| 任务栏图标 | 分别设置中文、西文、大写锁定状态图标，选择全局或方案图标，预览浅色和深色任务栏；也可更换输入法标识图标，后者需要管理员授权。 |
+| 设置界面外观 | 设置窗口可跟随系统、始终浅色或始终深色。强调色可跟随 Windows、使用默认色 `#0A9DA1`，或通过取色器、颜色代码和 HEX/RGB/HSV/HSL/CMYK 数值自定义。 |
+
+## 下载与使用本版
+
+1. 从[本仓库发布页](https://github.com/nbz-Silent-Speaker/weasel/releases)下载安装包。当前本地发布包包含 x64、x86 组件，不含原生 ARM64 组件或语法模型。
+2. 初次安装时，在「安装选项」中选择输入语言。新用户首次部署默认启用万象拼音 Lite；已有用户的方案选择和自定义配置会保留。
+3. 在 Windows 输入法列表中选择小狼毫。右键单击任务栏中的小狼毫图标，打开「输入法设定」；修改输入法设置后点击「应用」。
+
+用户词典和配置文件默认位于 `%AppData%\Rime`；如果更改过用户目录，以设置窗口「用户文件夹」显示的路径为准。直接编辑配置文件后，仍须重新部署。方案选单快捷键以当前方案配置为准，通常可使用 <kbd>Ctrl+`</kbd> 或 <kbd>F4</kbd>。
+
+本分支新增功能的问题与建议，请到[本仓库 Issues](https://github.com/nbz-Silent-Speaker/weasel/issues)反馈；原版小狼毫和 Rime 的资料与反馈入口见下文。
+
+## 原版小狼毫介绍与致谢
+
+以下保留上游原版的介绍、安装和使用说明。原版发布链接与徽章指向 [rime/weasel](https://github.com/rime/weasel)；本定制分支的安装包请从上方的本仓库发布页下载。
+
 基於 中州韻輸入法引擎／Rime Input Method Engine 等開源技術
 
 式恕堂 版權所無
