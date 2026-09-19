@@ -3,8 +3,8 @@
 
 本仓库基于[原版小狼毫 Weasel](https://github.com/rime/weasel)和[中州韵 Rime 输入法引擎](https://github.com/rime/librime)开发，是增加图形化设置与万象拼音 Lite 的定制分支，**不是 Rime 官方发布版**。原版小狼毫的介绍、使用方法和致谢保留在下文。
 
-[![下载本版](https://img.shields.io/github/v/release/nbz-Silent-Speaker/weasel?label=%E4%B8%8B%E8%BD%BD%E6%9C%AC%E7%89%88)](https://github.com/nbz-Silent-Speaker/weasel/releases)
-[![本版构建状态](https://github.com/nbz-Silent-Speaker/weasel/actions/workflows/ci.yml/badge.svg)](https://github.com/nbz-Silent-Speaker/weasel/actions/workflows/ci.yml)
+[![下载本版](https://img.shields.io/github/v/release/nbzQing/weasel?label=%E4%B8%8B%E8%BD%BD%E6%9C%AC%E7%89%88)](https://github.com/nbzQing/weasel/releases)
+[![本版构建状态](https://github.com/nbzQing/weasel/actions/workflows/ci.yml/badge.svg)](https://github.com/nbzQing/weasel/actions/workflows/ci.yml)
 
 ## 本版功能
 
@@ -19,13 +19,13 @@
 
 ## 下载与使用本版
 
-1. 从[本仓库发布页](https://github.com/nbz-Silent-Speaker/weasel/releases)下载安装包。当前本地发布包包含 x64、x86 组件，不含原生 ARM64 组件或语法模型。
+1. 从[本仓库发布页](https://github.com/nbzQing/weasel/releases)下载安装包。当前本地发布包包含 x64、x86 组件，不含原生 ARM64 组件或语法模型。
 2. 初次安装时，在「安装选项」中选择输入语言。新用户首次部署默认启用万象拼音 Lite；已有用户的方案选择和自定义配置会保留。
 3. 在 Windows 输入法列表中选择小狼毫。右键单击任务栏中的小狼毫图标，打开「输入法设定」；修改输入法设置后点击「应用」。
 
 用户词典和配置文件默认位于 `%AppData%\Rime`；如果更改过用户目录，以设置窗口「用户文件夹」显示的路径为准。直接编辑配置文件后，仍须重新部署。方案选单快捷键以当前方案配置为准，通常可使用 <kbd>Ctrl+`</kbd> 或 <kbd>F4</kbd>。
 
-本分支新增功能的问题与建议，请到[本仓库 Issues](https://github.com/nbz-Silent-Speaker/weasel/issues)反馈；原版小狼毫和 Rime 的资料与反馈入口见下文。
+本分支新增功能的问题与建议，请到[本仓库 Issues](https://github.com/nbzQing/weasel/issues)反馈；原版小狼毫和 Rime 的资料与反馈入口见下文。
 
 ## 原版小狼毫介绍与致谢
 
